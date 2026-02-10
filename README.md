@@ -17,9 +17,23 @@ L'objectiu és demostrar la viabilitat d'executar aquests sistemes en **entorns 
 *   **Frameworks:** PyTorch (CUDA 12.1), Hugging Face Transformers
 *   **Inferencia Local:** `llama-cpp-python` (GGUF), `bitsandbytes`
 
-## 🚀 Instal·lació i Configuració
+## 🛠️ Manager Tool (v3.7) - CLI Interactive
+El projecte inclou una potent eina de gestió (`setup_env.py`) amb una **Interfície d'Usuari de Text (TUI)** avançada que facilita la configuració, le diagnòstic i el manteniment de l'entorn.
 
-Aquest projecte utilitza **uv** per a una gestió ràpida de dependències.
+**Funcionalitats Principals:**
+*   **🎮 Interfície Gràfica en Terminal:** Navegació intuïtiva, circular i sense parpadeigs (*Flicker-Free*), amb indicadors de desplaçament (*Scrolling Wrappers*).
+*   **🩺 Diagnòstic Profund:** Analitza l'estat de 16+ llibreries crítiques (incloent `bitsandbytes`, `scipy`, `cv2`) i la configuració de CUDA.
+*   **🛡️ Dependency Resolution:** Sistema de reparació que resol automàticament les dependències faltants durant la reinstal·lació.
+*   **📂 Gestió Granular de Llibreries:** Submenús desplegables que permeten seleccionar i reinstal·lar llibreries individuals.
+*   **🔄 Auto-Restart:** El sistema detecta canvis crítics (com Torch/CUDA) i es reinicia automàticament per aplicar-los netament.
+
+**Controls:**
+*   `⬆️` / `⬇️`: Navegar per les opcions (rotació intel·ligent per nivells).
+*   `ESPAI`: Entrar en Submenú / Marcar o desmarcar opcions.
+*   `ESC`: Tornar enrere (tancar submenú) o sortir.
+*   `ENTER`: **Confirmar i Executar** la selecció actual.
+
+## 🚀 Instal·lació i Configuració
 
 1.  **Clonar el repositori:**
     ```bash
@@ -27,28 +41,29 @@ Aquest projecte utilitza **uv** per a una gestió ràpida de dependències.
     cd TFG_VLM_Medical
     ```
 
-2.  **Crear l'entorn virtual:**
+2.  **Executar el Manager Tool:**
+    Simplement executa l'script d'inici. Aquest llançarà el Manager Tool per configurar tot l'entorn.
     ```bash
-    uv venv .venv --python 3.12
+    # Windows
+    .\setup.bat
+
+    # Linux / Mac
+    chmod +x setup.sh
+    ./setup.sh
+    ```
+
+3.  **Primer Ús:**
+    La primera vegada que s'executi, l'eina detectarà que no existeix un entorn virutal i l'instal·larà automàticament. Després, podràs accedir al menú principal per verificar la instal·lació usant l'opció **Run System Diagnostics**.
+
+4.  **Activar entorn:**
+    ```bash
     # Windows:
     .venv\Scripts\activate
     ```
 
-3.  **Instalar dependències (GPU NVIDIA):**
-    ```bash
-    # PyTorch amb CUDA 12.1
-    uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-    
-    # Dependències base
-    uv pip install transformers accelerate protobuf scipy requests tqdm opencv-python bitsandbytes
-    
-    # Llama-cpp amb acceleració GPU
-    $env:CMAKE_ARGS = "-DGGML_CUDA=on"
-    uv pip install llama-cpp-python
-    ```
-
 ## 📂 Estructura del Projecte
 *   `src/`: Codi font dels scripts de processament i inferència.
-*   `notebooks/`: proves i experiments (Jupyter).
+*   `notebooks/`: Proves i experiments (Jupyter).
+*   `setup_env.py`: Script principal de gestió de l'entorn (**No editar manualment**).
 *   `models/`: (Ignorat per git) Carpeta per desar els fitxers .gguf.
 *   `data/`: (Ignorat per git) Dataset d'imatges mèdiques.

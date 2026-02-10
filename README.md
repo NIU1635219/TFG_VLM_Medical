@@ -5,9 +5,11 @@
 **Curs:** 2025/2026
 
 ## 📋 Descripció
-Aquest projecte explora l'ús de **Models de Llenguatge Visual (VLMs)** d'arquitectura *Open Source* (com Qwen2.5-VL, MiniCPM, InternVL) per generar descripcions clíniques detallades (*Explainability*) d'imatges de colonoscòpia (pòlips).
+Aquest projecte explora l'ús de **Models de Llenguatge Visual (VLMs)** d'última generació (SOTA 2026) i arquitectura *Open Source* per generar descripcions clíniques detallades (*Explainability*) d'imatges de colonoscòpia (pòlips).
 
-L'objectiu és demostrar la viabilitat d'executar aquests sistemes en **entorns locals** (Edge AI) utilitzant maquinari de consum, garantint la privacitat de les dades mèdiques.
+S'analitzaran i compararan models com **Qwen3-VL**, **MiniCPM-o 4.5** i **InternVL 3.5**, centrant-se en l'ús de noves tecnologies d'encoder visual (**SigLIP 2**) i mecanismes de resolució dinàmica.
+
+L'objectiu és demostrar la viabilitat d'executar aquests sistemes en **entorns locals** (Edge AI) utilitzant maquinari de consum (RTX 4060 Ti), garantint la privacitat de les dades mèdiques.
 
 ## 🛠️ Stack Tecnològic
 *   **Llenguatge:** Python 3.12
@@ -21,8 +23,8 @@ Aquest projecte utilitza **uv** per a una gestió ràpida de dependències.
 
 1.  **Clonar el repositori:**
     ```bash
-    git clone <URL_DEL_TEU_REPO>
-    cd TFG_VLM
+    git clone https://github.com/NIU1635219/TFG_VLM_Medical.git
+    cd TFG_VLM_Medical
     ```
 
 2.  **Crear l'entorn virtual:**

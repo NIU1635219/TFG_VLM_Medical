@@ -1,0 +1,48 @@
+# --- Python & Entornos Virtuales ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+*.egg-info/
+
+# --- IDE & Sistema ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- MLOps: Modelos Pesados (CRÍTICO: No subir a GitHub) ---
+# Ignorar carpetas de modelos
+models/
+checkpoints/
+weights/
+
+# Ignorar extensiones de archivos grandes
+*.gguf
+*.bin
+*.pt
+*.pth
+*.safetensors
+*.onnx
+*.h5
+
+# --- PRIVACIDAD: Datos Médicos (CRÍTICO: GDPR) ---
+# Ignorar cualquier carpeta de datos
+data/
+dataset/
+datasets/
+raw_data/
+processed_data/
+
+# Ignorar formatos de imagen médica sueltos
+*.dcm
+*.tiff
+*.tif
+*.nii
+*.nii.gz
+
+# --- Configuración y Secretos ---
+.env
+keys.json

@@ -5,6 +5,43 @@ import platform
 import shutil
 import time
 
+# --- Configuration: Model Registry ---
+# Añade aquí nuevos modelos siguiendo el formato.
+MODELS_REGISTRY = {
+    "minicpm_v26_q8": {
+        "name": "MiniCPM-V-2_6-Q8_0.gguf",
+        "url": "https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/ggml-model-Q8_0.gguf?download=true",
+        "folder": "models/minicpm_v26",
+        "description": "MiniCPM-V 2.6 (8GB VRAM) - Versión Estable Compatible",
+        "mmproj": {
+             "name": "mmproj-model-f16.gguf",
+             "url": "https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf?download=true"
+        }
+    },
+    "minicpm_v45_q8": {
+        "name": "MiniCPM-V-4_5-Q8_0.gguf",
+        "url": "https://huggingface.co/openbmb/MiniCPM-V-4_5-gguf/resolve/main/MiniCPM-V-4_5-Q8_0.gguf?download=true",
+        "folder": "models/minicpm_v45",
+        "description": "MiniCPM-V 4.5 (Beta - Requiere mmproj específico)",
+        "mmproj": {
+             "name": "mmproj-model-f16.gguf",
+             "url": "https://huggingface.co/openbmb/MiniCPM-V-4_5-gguf/resolve/main/mmproj-model-f16.gguf?download=true"
+        }
+    },
+    "qwen3_vl_8b_q8": {
+        "name": "Qwen3VL-8B-Instruct-Q8_0.gguf",
+        "url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3VL-8B-Instruct-Q8_0.gguf?download=true",
+        "folder": "models",
+        "description": "Qwen3-VL 8B (SOTA Razonamiento 2026)"
+    },
+    "internvl3_5_8b_q8": {
+        "name": "InternVL3_5-8B.Q8_0.gguf",
+        "url": "https://huggingface.co/mradermacher/InternVL3_5-8B-GGUF/resolve/main/InternVL3_5-8B.Q8_0.gguf?download=true",
+        "folder": "models",
+        "description": "InternVL3.5 8B Q8 (Alta Precisión/VRAM)"
+    }
+}
+
 # Manejo de MSVCRT para inputs en Windows
 try:
     import msvcrt
@@ -16,6 +53,14 @@ try:
     import psutil  # type: ignore
 except ImportError:
     psutil = None
+
+# Intentar importar librerías de utilidad (requests, tqdm)
+try:
+    import requests
+    from tqdm import tqdm
+except ImportError:
+    requests = None
+    tqdm = None
 
 # Habilitar secuencias ANSI en Windows (Simple & Robust)
 if os.name == 'nt':
@@ -160,6 +205,249 @@ def get_sys_info():
     
     return info
 
+def download_file_with_progress(url, dest_path):
+    """Descarga un archivo con barra de progreso visual."""
+    global requests, tqdm
+    
+    if requests is None or tqdm is None:
+        log("Requests/Tqdm no detectados. Intentando instalación rápida...", "warning")
+        try:
+            subprocess.check_call(["uv", "pip", "install", "requests", "tqdm"])
+        except:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "requests", "tqdm"])
+        
+        # Re-importar tras instalar
+        import requests as req
+        from tqdm import tqdm as tq
+        requests = req
+        tqdm = tq
+
+    print(f"{Style.OKBLUE}Downloading: {url}{Style.ENDC}")
+    print(f"{Style.DIM}To: {dest_path}{Style.ENDC}")
+    
+    response = requests.get(url, stream=True)
+    total_size = int(response.headers.get('content-length', 0))
+    block_size = 1024 # 1 Kibibyte
+
+    try:
+        with open(dest_path, 'wb') as file, tqdm(
+            desc=os.path.basename(dest_path),
+            total=total_size,
+            unit='iB',
+            unit_scale=True,
+            unit_divisor=1024,
+            colour='green'
+        ) as bar:
+            for data in response.iter_content(block_size):
+                size = file.write(data)
+                bar.update(size)
+        return True
+    except Exception as e:
+        log(f"Download failed: {e}", "error")
+        if os.path.exists(dest_path):
+            os.remove(dest_path) # Clean up partial file
+        return False
+
+def download_model_from_registry(model_key):
+    """Descarga un modelo definido en el registro."""
+    if model_key not in MODELS_REGISTRY:
+        log(f"Model key '{model_key}' not found in registry.", "error")
+        return False
+    
+    entry = MODELS_REGISTRY[model_key]
+    dest_dir = entry.get("folder", "models")
+    model_name = entry["name"]
+    dest_path = os.path.join(dest_dir, model_name)
+    
+    os.makedirs(dest_dir, exist_ok=True)
+    
+    success = True
+    
+    # 1. Main Model
+    if os.path.exists(dest_path):
+        log(f"Model '{model_name}' already exists in {dest_dir}.", "success")
+    else:
+        log(f"Downloading {entry['description']}...", "step")
+        if not download_file_with_progress(entry["url"], dest_path):
+             success = False
+
+    # 2. Optional Projector (mmproj)
+    if "mmproj" in entry:
+         mm_conf = entry["mmproj"]
+         mm_path = os.path.join(dest_dir, mm_conf["name"])
+         if os.path.exists(mm_path):
+              log(f"Projector '{mm_conf['name']}' already exists.", "success")
+         else:
+              log(f"Downloading required projector: {mm_conf['name']}...", "step")
+              if not download_file_with_progress(mm_conf["url"], mm_path):
+                   success = False
+
+    return success
+
+def list_test_files():
+    """Escanea la carpeta tests/ y devuelve los archivos .py válidos."""
+    test_dir = "tests"
+    if not os.path.exists(test_dir):
+        return []
+    
+    files = [f for f in os.listdir(test_dir) if f.startswith("test_") and f.endswith(".py")]
+    return sorted(files)
+
+def manage_models_menu_ui():
+    """Menú dinámico para gestionar descargas de modelos."""
+    def header():
+        print_banner()
+        print(f"{Style.BOLD} MODEL DOWNLOAD MANAGER {Style.ENDC}")
+        print(" Select a model to download/verify:")
+
+    while True:
+        options = []
+        
+        for key, data in MODELS_REGISTRY.items():
+            path = os.path.join(data.get("folder", "models"), data["name"])
+            exists = os.path.exists(path)
+            
+            status_icon = "✔ INSTALLED" if exists else "☁ DOWNLOAD"
+            status_color = Style.OKGREEN if exists else Style.OKBLUE
+            
+            label = f" {data['name']:<30} | {status_color}{status_icon}{Style.ENDC}"
+            
+            # Action wrapper using closure for key capture
+            action = lambda k=key: (download_model_from_registry(k), input(f"\n{Style.DIM}Press Enter...{Style.ENDC}"))
+            
+            options.append(MenuItem(label, action, description=data["description"]))
+
+        options.append(MenuItem(" Back", lambda: "BACK"))
+    
+        choice = interactive_menu(options, header_func=header)
+        
+        if not choice:
+            break
+            
+        # choice es un objeto MenuItem, hay que ejecutar su acción
+        if hasattr(choice, 'action') and callable(choice.action):
+            clear_screen_ansi()
+            res = choice.action()
+            if res == "BACK":
+                break    
+
+def run_tests_menu():
+    """Menú para ejecutar tests (Unitarios y Smoke Tests)."""
+    
+    def run_all_unit_tests():
+        log("Running All Unit Tests...", "step")
+        run_cmd("uv run python -m pytest tests/")
+        input(f"\n{Style.DIM}Press Enter to return...{Style.ENDC}")
+
+    def run_specific_test():
+        files = list_test_files()
+        if not files:
+            log("No tests found in tests/ folder.", "warning")
+            time.sleep(1)
+            return
+
+        test_opts = [MenuItem(f) for f in files]
+        test_opts.append(MenuItem(" Cancel", lambda: None))
+
+        def t_header():
+             print_banner()
+             print(f"{Style.BOLD} SELECT TEST FILE {Style.ENDC}")
+
+        selection = interactive_menu(test_opts, header_func=t_header)
+        
+        if selection and selection.label != " Cancel":
+             # selected item
+             fname = selection.label
+             log(f"Running {fname}...", "step")
+             # Try running as pytest target first
+             run_cmd(f"uv run python -m pytest tests/{fname}")
+             input(f"\n{Style.DIM}Finished. Press Enter...{Style.ENDC}")
+
+    def run_smoke_test_wrapper():
+        # Ensure models directory exists
+        if not os.path.exists("models"):
+             os.makedirs("models")
+        
+        # List available models recursively
+        found_models = []
+        for root, dirs, files in os.walk("models"):
+            for f in files:
+                 if f.endswith(".gguf") and "mmproj" not in f:
+                      # Use relative path for cleaner display, but keep full path for execution
+                      full_path = os.path.join(root, f)
+                      found_models.append(full_path)
+        
+        if not found_models:
+            log("No models found in models/.", "warning")
+            if ask_user("Download default MiniCPM-V 2.6 model now?"):
+                if download_model_from_registry("minicpm_v26_q8"):
+                    # Re-scan
+                    found_models = []
+                    for root, dirs, files in os.walk("models"):
+                        for f in files:
+                             if f.endswith(".gguf") and "mmproj" not in f:
+                                  found_models.append(os.path.join(root, f))
+            
+            if not found_models:
+                log("Cannot run smoke test without a model.", "error")
+                input(f"\n{Style.DIM}Press Enter to return...{Style.ENDC}")
+                return
+
+        # Interactive Model Selection
+        # Create descriptive labels including folder name if inside subfolder
+        model_opts = []
+        for m in found_models:
+             rel = os.path.relpath(m, "models")
+             model_opts.append(MenuItem(rel))
+             
+        model_opts.append(MenuItem(" Cancel", lambda: None))
+
+        def m_header():
+             print_banner()
+             print(f"{Style.BOLD} SELECT INFERENCE MODEL {Style.ENDC}")
+
+        selection = interactive_menu(model_opts, header_func=m_header)
+        
+        if selection and selection.label.strip() != "Cancel":
+            # Reconstruct full path from relative label
+            model_rel = selection.label
+            model_path = os.path.join("models", model_rel)
+            
+            log(f"Launching Inference with {model_rel}...", "step")
+            try:
+                # Pass selected model path as argument to the script
+                subprocess.check_call(["uv", "run", "python", "src/scripts/test_inference.py", "--model_path", model_path])
+            except subprocess.CalledProcessError:
+                log("Smoke test failed (Exit Code 1). Check output above.", "error")
+            input(f"\n{Style.DIM}Press Enter to return...{Style.ENDC}")
+
+
+    def header():
+        print_banner()
+        print(f"{Style.BOLD} TEST & MODEL MANAGER {Style.ENDC}")
+
+    options = [
+        MenuItem(" Run All Unit Tests (pytest)", run_all_unit_tests),
+        MenuItem(" Run Specific Test File...", run_specific_test),
+        MenuItem(" Run Smoke Test (Inference Demo)", run_smoke_test_wrapper),
+        MenuItem(" Manage/Download Models...", manage_models_menu_ui),
+        MenuItem(" Return to Main Menu", lambda: "BACK")
+    ]
+
+    while True:
+        choice = interactive_menu(options, header_func=header, multi_select=False)
+        if choice == "BACK" or not choice:
+            break
+        
+        # Ensure choice is a single item, not a list
+        if isinstance(choice, list):
+            choice = choice[0] if len(choice) > 0 else None
+        
+        if choice and hasattr(choice, 'action') and callable(choice.action):
+            clear_screen_ansi()
+            res = choice.action()
+            if res == "BACK": break
+
 def print_banner():
     """Muestra el banner principal con el estado del sistema."""
     clear_screen()
@@ -167,7 +455,7 @@ def print_banner():
     
     print(f"{Style.HEADER}{Style.BOLD}")
     print("╔═════════════════════════════════════════════════════════════════╗")
-    print("║              🩺 TFG VLM Medical - Manager Tool v3.0             ║")
+    print("║              🩺 TFG VLM Medical - Manager Tool v4.0             ║")
     print("╠═════════════════════════════════════════════════════════════════╣")
     print(f"║ {Style.OKCYAN}OS     : {info['os']:<46}{Style.HEADER}         ║")
     print(f"║ {Style.OKCYAN}Python : {info['python']:<46}{Style.HEADER}         ║")
@@ -283,11 +571,33 @@ def fix_llama():
     """Reparación: Reinstala Llama-cpp-python (compilada para GPU si es posible)."""
     log("Re-installing Llama-cpp-python...", "step")
     use_gpu = detect_gpu()
-    if use_gpu:
-        # Eliminamos --no-deps para instalar dependencias como diskcache/numpy si faltan
-        run_cmd("uv pip install --force-reinstall llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121")
-    else:
+    
+    if not use_gpu:
         run_cmd("uv pip install --force-reinstall llama-cpp-python")
+        return
+
+    def install_fast():
+        # Opción 1 (Default)
+        run_cmd("uv pip install --force-reinstall llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121")
+
+    def install_slow():
+        log("Building from source (Requires Visual Studio C++ Compilers and CMAKE)...", "warning")
+        cmd = 'set CMAKE_ARGS=-DGGML_CUDA=on && set FORCE_CMAKE=1 && uv pip install llama-cpp-python --force-reinstall --no-binary llama-cpp-python'
+        run_cmd(cmd)
+
+    def header():
+        print(f"\n{Style.BOLD} GPU INSTALLATION MODE {Style.ENDC}")
+        print(" Choose installation method for llama-cpp-python:")
+
+    options = [
+        MenuItem(" Fast (Pre-built Wheels) - Recommended", install_fast, description="Stable, downloads binaries."),
+        MenuItem(" Slow (Build from Source) - Latest", install_slow, description="Compiles locally (Needs VS C++).")
+    ]
+    
+    choice = interactive_menu(options, header_func=header)
+    
+    if choice and callable(choice.action):
+        choice.action()
 
 # --- Diagnostic System ---
 
@@ -366,7 +676,10 @@ def perform_diagnostics():
         "yaml": "pyyaml",
         "regex": "regex",
         "packaging": "packaging",
-        "bitsandbytes": "bitsandbytes"
+        "bitsandbytes": "bitsandbytes",
+        "pytest": "pytest",
+        "pytest_mock": "pytest-mock",
+        "PIL": "pillow"
     }
     
     for import_name, pkg_name in core_map.items():
@@ -704,8 +1017,8 @@ def smart_fix_menu(issues, report=None):
         if restart_required:
             restart_program()
         
-        log("All fixes applied. Please re-run diagnostics.", "success")
-        input(f"{Style.DIM}Press Enter to continue...{Style.ENDC}")
+        log("All fixes applied. Refreshing diagnostics...", "success")
+        time.sleep(1.0)
         return True # Indicate rerun needed
     
     return False # Cancelled 
@@ -727,8 +1040,10 @@ def run_diagnostics_ui():
             time.sleep(1)
             # Pass report so menu can re-print it
             should_rerun = smart_fix_menu(issues, report)
-            if not should_rerun:
-                break # Return to main menu
+            if should_rerun:
+                continue # Re-run checks and refresh table
+            else:
+                break # Cancelled by user
         else:
             print(f"\n{Style.OKGREEN}System looks healthy!{Style.ENDC}")
             input(f"\n{Style.DIM}Press Enter to return...{Style.ENDC}")
@@ -744,7 +1059,7 @@ def reinstall_library_menu():
         print(" Select libraries to force re-install (clean install).")
 
     # Definición de librerías para el bloque core
-    libs_names = ["transformers", "accelerate", "protobuf", "scipy", "requests", "tqdm", "opencv-python", "psutil", "numpy", "tokenizers", "safetensors", "huggingface-hub", "pyyaml", "regex", "packaging", "bitsandbytes"]
+    libs_names = ["transformers", "accelerate", "protobuf", "scipy", "requests", "tqdm", "opencv-python", "psutil", "numpy", "tokenizers", "safetensors", "huggingface-hub", "pyyaml", "regex", "packaging", "bitsandbytes", "pytest", "pytest-mock", "pillow"]
     core_children = [MenuItem(lib) for lib in libs_names]
 
     # Opciones principales
@@ -847,7 +1162,7 @@ def perform_install(full_reinstall=False):
         run_cmd(f"uv pip install {force_flags} torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu")
 
     log("Installing ML Core Libraries...", "step")
-    run_cmd(f"uv pip install {force_flags} transformers accelerate protobuf scipy requests tqdm opencv-python bitsandbytes psutil")
+    run_cmd(f"uv pip install {force_flags} transformers accelerate protobuf scipy requests tqdm opencv-python bitsandbytes psutil sentencepiece py-cpuinfo colorama")
 
     log("Installing Llama-cpp-python...", "step")
     if use_gpu:
@@ -875,6 +1190,7 @@ def show_menu():
 
     options = [
         MenuItem(" Run System Diagnostics", action_diag),
+        MenuItem(" Tests & Models Manager", run_tests_menu), # New Menu
         MenuItem(" Manual Reinstall Menu", action_reinstall),
         MenuItem(" Regenerate Folders", action_regen),
         MenuItem(" Factory Reset", action_reset),

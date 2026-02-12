@@ -17,14 +17,14 @@ L'objectiu és demostrar la viabilitat d'executar aquests sistemes en **entorns 
 *   **Frameworks:** PyTorch (CUDA 12.1), Hugging Face Transformers
 *   **Inferencia Local:** `llama-cpp-python` (GGUF), `bitsandbytes`
 
-## 🛠️ Manager Tool (v3.7) - CLI Interactive
-El projecte inclou una potent eina de gestió (`setup_env.py`) amb una **Interfície d'Usuari de Text (TUI)** avançada que facilita la configuració, le diagnòstic i el manteniment de l'entorn.
+## 🛠️ Manager Tool (v4.0) - CLI Interactive
+El projecte inclou una potent eina de gestió (`setup_env.py`) amb una **Interfície d'Usuari de Text (TUI)** avançada que facilita la configuració, el diagnòstic i el manteniment de l'entorn.
 
 **Funcionalitats Principals:**
 *   **🎮 Interfície Gràfica en Terminal:** Navegació intuïtiva, circular i sense parpadeigs (*Flicker-Free*), amb indicadors de desplaçament (*Scrolling Wrappers*).
-*   **🩺 Diagnòstic Profund:** Analitza l'estat de 16+ llibreries crítiques (incloent `bitsandbytes`, `scipy`, `cv2`) i la configuració de CUDA.
-*   **🛡️ Dependency Resolution:** Sistema de reparació que resol automàticament les dependències faltants durant la reinstal·lació.
-*   **📂 Gestió Granular de Llibreries:** Submenús desplegables que permeten seleccionar i reinstal·lar llibreries individuals.
+*   **🩺 Diagnòstic Dinàmic:** Analitza l'estat de 16+ llibreries crítiques i la configuració de CUDA. La taula es refresca automàticament després de cada solució aplicada.
+*   **🤖 Gestió de Models VLM:** Sistema organitzat de models en subcarpetes per evitar conflictes entre proyector visuals (`mmproj`). Detecta i descarrega automàticament els fitxers necessaris segons la versió (MiniCPM-V 2.6, 4.5, etc.).
+*   **🧪 Smoke Test Interactiu:** Prova d'inferència completa amb selecció de model i càrrega dinàmica en VRAM (GPU/CPU).
 *   **🔄 Auto-Restart:** El sistema detecta canvis crítics (com Torch/CUDA) i es reinicia automàticament per aplicar-los netament.
 
 **Controls:**
@@ -61,9 +61,36 @@ El projecte inclou una potent eina de gestió (`setup_env.py`) amb una **Interf�
     .venv\Scripts\activate
     ```
 
-## 📂 Estructura del Projecte
-*   `src/`: Codi font dels scripts de processament i inferència.
-*   `notebooks/`: Proves i experiments (Jupyter).
-*   `setup_env.py`: Script principal de gestió de l'entorn (**No editar manualment**).
-*   `models/`: (Ignorat per git) Carpeta per desar els fitxers .gguf.
-*   `data/`: (Ignorat per git) Dataset d'imatges mèdiques.
+## � Compilació Avançada (Bleeding Edge)
+Per a usuaris que necessitin suport per a models molt recents (com **MiniCPM-V 4.5** o **Qwen2.5-VL**) o vulguin maximitzar el rendiment amb CUDA utilitzant les últimes millores del backend C++:
+
+El projecte inclou una eina especialitzada `setup_llama_cpp.py` que automatitza la compilació "Frankenstein" (Python wrapper estable + C++ backend `master`).
+
+**Execució:**
+```bash
+python setup_llama_cpp.py
+```
+
+**Funcionalitats de l'Eina:**
+1.  **🚀 Instal·lació Completa:** Descarrega `llama.cpp` (submòdul) directament de la branca `master`, el compila amb CUDA i instal·la el wrapper.
+2.  **🩹 Binding Repair:** Detecta i corregeix automàticament les incompatibilitats entre el wrapper de Python i les funcions C++ eliminades en versions recents d'upstream.
+3.  **📂 Detecció Intel·ligent:** Busca carpetes de codi font existents per evitar descàrregues innecessàries.
+4.  **🧹 Neteja:** Gestiona els conflictes de bloqueig d'arxius a Windows per assegurar una compilació neta.
+
+## �📂 Estructura del Projecte
+L'arquitectura del projecte està dissenyada per ser modular i suportar múltiples architectures VLM:
+*   `src/inference/`: Controladors d'inferència optimitzats per VLMs (GGUF + mmproj).
+*   `src/scripts/`: Utilitats de terminal (test d'inferència interactiva, etc).
+*   `models/`: (Ignorat per git) Models organitzats en subcarpetes (`minicpm_v26/`, `minicpm_v45/`) per evitar col·lisions de predictors visuals.
+*   `notebooks/`: Proves i experiments controlats (Jupyter).
+*   `setup_env.py`: Script de gestió v4.0 (TUI). No editar manualment.
+*   `data/`: Dataset mèdic segmentat en `raw/` i `processed/`.
+
+## 🤖 Models VLM Suportats
+Actualment, el sistema està optimitzat per a la família **MiniCPM-V** de OpenBMB:
+| Model | Configuració | Versió | Optimització |
+| :--- | :--- | :--- | :--- |
+| **MiniCPM-V 2.6** | Multi-crop / HD | 2.6 (GGUF) | 3.5GB-6GB VRAM |
+| **MiniCPM-o 4.5** | High Res / SOTA | 4.5 (GGUF) | 8GB+ VRAM |
+
+*Nota: El gestor detecta automàticament el fitxer `mmproj` corresponent dins de cada carpeta de model.*

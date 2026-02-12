@@ -7,90 +7,70 @@
 ## 📋 Descripció
 Aquest projecte explora l'ús de **Models de Llenguatge Visual (VLMs)** d'última generació (SOTA 2026) i arquitectura *Open Source* per generar descripcions clíniques detallades (*Explainability*) d'imatges de colonoscòpia (pòlips).
 
-S'analitzaran i compararan models com **Qwen3-VL**, **MiniCPM-o 4.5** i **InternVL 3.5**, centrant-se en l'ús de noves tecnologies d'encoder visual (**SigLIP 2**) i mecanismes de resolució dinàmica.
+S'analitzaran i compararan models com **Qwen3-VL**, **MiniCPM-V 4.5** i **InternVL 3.5**, centrant-se en l'ús de noves tecnologies d'encoder visual i mecanismes de resolució dinàmica.
 
-L'objectiu és demostrar la viabilitat d'executar aquests sistemes en **entorns locals** (Edge AI) utilitzant maquinari de consum (RTX 4060 Ti), garantint la privacitat de les dades mèdiques.
+L'objectiu és demostrar la viabilitat d'executar aquests sistemes en **entorns locals** (Edge AI) utilitzant maquinari de consum, garantint la privacitat de les dades mèdiques mitjançant el backend d'inferència **Ollama**.
 
 ## 🛠️ Stack Tecnològic
 *   **Llenguatge:** Python 3.12
 *   **Gestor de Paquets:** `uv` (Astral)
-*   **Frameworks:** PyTorch (CUDA 12.1), Hugging Face Transformers
-*   **Inferencia Local:** `llama-cpp-python` (GGUF), `bitsandbytes`
+*   **Backend d'Inferencia:** [Ollama](https://ollama.com/) (Local API)
+*   **Llibreries Clau:** `ollama-python`, `pillow`, `requests`, `tqdm`.
+*   **Entorn:** Lightweight (sense dependències pesades de PyTorch/Transformers en el llançador).
 
-## 🛠️ Manager Tool (v4.0) - CLI Interactive
-El projecte inclou una potent eina de gestió (`setup_env.py`) amb una **Interfície d'Usuari de Text (TUI)** avançada que facilita la configuració, el diagnòstic i el manteniment de l'entorn.
+## 🛠️ Manager Tool (v5.0) - CLI Interactive
+El projecte inclou una potent eina de gestió (`setup_env.py`) amb una **Interfície d'Usuari de Text (TUI)** avançada que facilita la configuració, el diagnòstic i el manteniment de l'entorn Ollama.
 
 **Funcionalitats Principals:**
-*   **🎮 Interfície Gràfica en Terminal:** Navegació intuïtiva, circular i sense parpadeigs (*Flicker-Free*), amb indicadors de desplaçament (*Scrolling Wrappers*).
-*   **🩺 Diagnòstic Dinàmic:** Analitza l'estat de 16+ llibreries crítiques i la configuració de CUDA. La taula es refresca automàticament després de cada solució aplicada.
-*   **🤖 Gestió de Models VLM:** Sistema organitzat de models en subcarpetes per evitar conflictes entre proyector visuals (`mmproj`). Detecta i descarrega automàticament els fitxers necessaris segons la versió (MiniCPM-V 2.6, 4.5, etc.).
-*   **🧪 Smoke Test Interactiu:** Prova d'inferència completa amb selecció de model i càrrega dinàmica en VRAM (GPU/CPU).
-*   **🔄 Auto-Restart:** El sistema detecta canvis crítics (com Torch/CUDA) i es reinicia automàticament per aplicar-los netament.
+*   **🎮 Interfície Gràfica en Terminal:** Navegació intuïtiva, circular i sense parpadeigs (*Flicker-Free*).
+*   **🩺 Diagnòstic Dinàmic:** Analitza l'estat de les llibreries crítiques i la connexió amb el servei Ollama.
+*   **🤖 Gestió de Models VLM:** Sistema integrat per descarregar (*pull*) models directament des del registre d'Ollama.
+*   **🧪 Smoke Test Interactiu:** Prova d'inferència completa amb selecció de model i validació en temps real.
+*   **🔄 Auto-Bootstrapping:** El sistema detecta automàticament si s'està executant fora de l'entorn virtual (`.venv`) i es reinicia dins d'ell per garantir la càrrega de llibreries.
 
 **Controls:**
-*   `⬆️` / `⬇️`: Navegar per les opcions (rotació intel·ligent per nivells).
+*   `⬆️` / `⬇️`: Navegar per les opcions.
 *   `ESPAI`: Entrar en Submenú / Marcar o desmarcar opcions.
-*   `ESC`: Tornar enrere (tancar submenú) o sortir.
+*   `ESC`: Tornar enrere o sortir.
 *   `ENTER`: **Confirmar i Executar** la selecció actual.
 
 ## 🚀 Instal·lació i Configuració
 
-1.  **Clonar el repositori:**
+1.  **Prerequisit: Instal·lar Ollama**
+    Descarrega i instal·la Ollama des de [ollama.com](https://ollama.com). Assegura't que el servei estigui actiu (`ollama serve`).
+
+2.  **Clonar el repositori:**
     ```bash
     git clone https://github.com/NIU1635219/TFG_VLM_Medical.git
     cd TFG_VLM_Medical
     ```
 
-2.  **Executar el Manager Tool:**
-    Simplement executa l'script d'inici. Aquest llançarà el Manager Tool per configurar tot l'entorn.
+3.  **Executar el Manager Tool:**
     ```bash
     # Windows
     .\setup.bat
-
-    # Linux / Mac
-    chmod +x setup.sh
-    ./setup.sh
     ```
+    L'script configurarà l'entorn virtual, instal·larà les dependències i obrirà el menú de gestió.
 
-3.  **Primer Ús:**
-    La primera vegada que s'executi, l'eina detectarà que no existeix un entorn virutal i l'instal·larà automàticament. Després, podràs accedir al menú principal per verificar la instal·lació usant l'opció **Run System Diagnostics**.
-
-4.  **Activar entorn:**
-    ```bash
-    # Windows:
-    .venv\Scripts\activate
-    ```
-
-## � Compilació Avançada (Bleeding Edge)
-Per a usuaris que necessitin suport per a models molt recents (com **MiniCPM-V 4.5** o **Qwen2.5-VL**) o vulguin maximitzar el rendiment amb CUDA utilitzant les últimes millores del backend C++:
-
-El projecte inclou una eina especialitzada `setup_llama_cpp.py` que automatitza la compilació "Frankenstein" (Python wrapper estable + C++ backend `master`).
-
-**Execució:**
-```bash
-python setup_llama_cpp.py
-```
-
-**Funcionalitats de l'Eina:**
-1.  **🚀 Instal·lació Completa:** Descarrega `llama.cpp` (submòdul) directament de la branca `master`, el compila amb CUDA i instal·la el wrapper.
-2.  **🩹 Binding Repair:** Detecta i corregeix automàticament les incompatibilitats entre el wrapper de Python i les funcions C++ eliminades en versions recents d'upstream.
-3.  **📂 Detecció Intel·ligent:** Busca carpetes de codi font existents per evitar descàrregues innecessàries.
-4.  **🧹 Neteja:** Gestiona els conflictes de bloqueig d'arxius a Windows per assegurar una compilació neta.
-
-## �📂 Estructura del Projecte
-L'arquitectura del projecte està dissenyada per ser modular i suportar múltiples architectures VLM:
-*   `src/inference/`: Controladors d'inferència optimitzats per VLMs (GGUF + mmproj).
+## 📂 Estructura del Projecte
+L'arquitectura del projecte està dissenyada per ser modular:
+*   `src/inference/`: Controladors d'inferència basats en l'API d'Ollama.
 *   `src/scripts/`: Utilitats de terminal (test d'inferència interactiva, etc).
-*   `models/`: (Ignorat per git) Models organitzats en subcarpetes (`minicpm_v26/`, `minicpm_v45/`) per evitar col·lisions de predictors visuals.
-*   `notebooks/`: Proves i experiments controlats (Jupyter).
-*   `setup_env.py`: Script de gestió v4.0 (TUI). No editar manualment.
-*   `data/`: Dataset mèdic segmentat en `raw/` i `processed/`.
+*   `tests/`: Tests unitaris i d'integració (Pytest).
+*   `data/`: dataset mèdic segmentat en `raw/` i `processed/`.
+*   `setup_env.py`: Script de gestió v5.0 (TUI).
 
 ## 🤖 Models VLM Suportats
-Actualment, el sistema està optimitzat per a la família **MiniCPM-V** de OpenBMB:
-| Model | Configuració | Versió | Optimització |
-| :--- | :--- | :--- | :--- |
-| **MiniCPM-V 2.6** | Multi-crop / HD | 2.6 (GGUF) | 3.5GB-6GB VRAM |
-| **MiniCPM-o 4.5** | High Res / SOTA | 4.5 (GGUF) | 8GB+ VRAM |
+Actualment, el sistema està optimitzat per als següents models en Ollama:
+| Model | Tag en Ollama | Descripció |
+| :--- | :--- | :--- |
+| **MiniCPM-V 4.5** | `openbmb/minicpm-v4.5:8b` | SOTA OpenBMB (8B) |
+| **MiniCPM-V 2.6** | `openbmb/minicpm-v2.6:8b` | Versió Estable (8B) |
+| **Qwen3-VL** | `qwen3-vl` | SOTA Razonamiento 2026 (8B) |
+| **InternVL 3.5** | `blaifa/InternVL3_5:8b` | InternVL High Performance (8B) |
 
-*Nota: El gestor detecta automàticament el fitxer `mmproj` corresponent dins de cada carpeta de model.*
+## 🧪 Testing
+Per executar els tests unitaris i verificar la integració amb Ollama:
+```bash
+uv run python -m pytest tests/
+```

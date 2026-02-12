@@ -1,82 +1,76 @@
 """
-Módulo para la carga e inferencia de modelos Vision-Language (VLM) usando llama-cpp-python.
-Diseñado específicamente para MiniCPM-V y otros modelos compatibles con formato GGUF.
+Módulo para la carga e inferencia de modelos Vision-Language (VLM) usando Ollama.
+Reemplaza la implementación anterior de llama-cpp-python.
 """
 
 from typing import Optional, Dict, Any, List
 import os
+import sys
 
 try:
-    from llama_cpp import Llama
-    from llama_cpp.llama_chat_format import MiniCPMv26ChatHandler
+    import ollama
 except ImportError:
-    # Graceful fallback for environments where llama-cpp-python isn't installed (e.g. CI without GPU)
-    Llama = None
-    MiniCPMv26ChatHandler = None
+    ollama = None
 
 class VLMLoader:
     """
-    Clase encargada de gestionar el ciclo de vida del modelo VLM:
-    configuración, carga en memoria (GPU/CPU) e inferencia.
+    Clase encargada de gestionar la interacción con Ollama para modelos VLM.
+    Mantiene la interfaz original para compatibilidad con scripts existentes.
     """
 
     def __init__(self, model_path: str, verbose: bool = False):
         """
-        Inicializa la configuración del cargador, pero NO carga el modelo todavía.
+        Inicializa la configuración del cargador.
 
         Args:
-            model_path (str): Ruta absoluta o relativa al archivo .gguf del modelo.
-            verbose (bool): Si es True, imprime logs detallados de llama.cpp.
-
-        Raises:
-            FileNotFoundError: Si el archivo model_path no existe.
+            model_path (str): Nombre del tag del modelo en Ollama (ej. 'minicpm-v:latest').
+                              Se mantiene el nombre 'model_path' por compatibilidad.
+            verbose (bool): Si es True, imprime logs detallados.
         """
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"VLM Model not found at: {model_path}")
-        
-        self.model_path = model_path
+        self.model_tag = model_path
         self.verbose = verbose
-        self.llm: Optional[Any] = None
+        
+        if ollama is None:
+            raise RuntimeError("La librería 'ollama' no está instalada. Ejecuta: uv pip install ollama")
 
     def load_model(self, n_ctx: int = 2048, n_gpu_layers: int = -1) -> None:
         """
-        Carga el modelo en memoria.
-
+        Verifica si el modelo está disponible en Ollama. 
+        En Ollama no se 'carga' explícitamente en una variable, el servidor lo gestiona.
+        
         Args:
-            n_ctx (int): Tamaño del contexto (tokens de texto + parches de imagen).
-            n_gpu_layers (int): Número de capas a mover a la GPU. -1 para todas.
-
-        Raises:
-            RuntimeError: Si falla la carga del modelo (ej. falta de memoria, formato inválido).
+            n_ctx (int): Ignorado en Ollama (configurado en el servidor/modelfile).
+            n_gpu_layers (int): Ignorado en Ollama (gestionado automáticamente).
         """
-        if Llama is None or MiniCPMv26ChatHandler is None:
-            raise RuntimeError("llama-cpp-python no está instalado correctamente.")
+        if self.verbose:
+            print(f"ℹ️ Verificando disponibilidad del modelo: {self.model_tag} en Ollama...")
 
         try:
-            # Autodetectar el proyector (mmproj) en la misma carpeta que el modelo
-            model_dir = os.path.dirname(self.model_path)
-            # Buscamos archivos que contengan 'mmproj' en la misma carpeta
-            mmproj_files = [f for f in os.listdir(model_dir) if "mmproj" in f and f.endswith(".gguf")]
+            # Listar modelos disponibles
+            models_response = ollama.list()
+            # models_response['models'] es una lista de objetos, cada uno tiene attr 'model'
+            available_tags = [m.model for m in models_response.models]
             
-            if mmproj_files:
-                mmproj_path = os.path.join(model_dir, mmproj_files[0])
-                print(f"ℹ️ Cargando proyector de visión detectado: {mmproj_path}")
+            # Verificar si nuestro tag está (o si es substring, por temas de :latest)
+            # Ollama tags suelen ser 'model:tag'
+            if self.model_tag not in available_tags:
+                print(f"⚠️ El modelo {self.model_tag} no aparece en 'ollama list'. Intentando pull automático...")
+                print(f"⏳ Pulling {self.model_tag} (esto puede tardar)...")
+                # Stream pull progress
+                current_digest = None
+                for progress in ollama.pull(self.model_tag, stream=True):
+                    # Simple visual feedback
+                    if progress.get('status') and self.verbose:
+                        print(f"\r Status: {progress['status']}", end="", flush=True)
+                print("\n✅ Pull completado.")
             else:
-                print(f"⚠️ Advertencia: No se encontró un archivo mmproj en {model_dir}, usando el modelo principal como fallback.")
-                mmproj_path = self.model_path
+                if self.verbose:
+                    print(f"✅ Modelo {self.model_tag} detectado y listo.")
 
-            # Nota: MiniCPMv26ChatHandler es compatible con la arquitectura de la v4.5 en llama-cpp-python
-            chat_handler = MiniCPMv26ChatHandler(clip_model_path=mmproj_path, verbose=self.verbose)
-            
-            self.llm = Llama(
-                model_path=self.model_path,
-                chat_handler=chat_handler,
-                n_ctx=n_ctx,
-                n_gpu_layers=n_gpu_layers,
-                verbose=self.verbose,
-            )
         except Exception as e:
-            raise RuntimeError(f"Error cargando el modelo: {str(e)}")
+            # Si falla la conexión, es probable que Ollama no esté corriendo
+            raise RuntimeError(f"Error conectando con Ollama: {str(e)}. Asegúrate de que 'ollama serve' está ejecutándose.")
+
 
     def inference(self, image_path: str, prompt: str, temperature: float = 0.7) -> str:
         """
@@ -84,50 +78,46 @@ class VLMLoader:
 
         Args:
             image_path (str): Ruta al archivo de imagen.
-            prompt (str): Instrucción para el modelo (ej. "Describe esta imagen").
-            temperature (float): Creatividad del modelo (0.0 - 1.0).
+            prompt (str): Instrucción para el modelo.
+            temperature (float): Creatividad del modelo.
 
         Returns:
             str: Respuesta generada por el modelo.
-
-        Raises:
-            RuntimeError: Si el modelo no ha sido cargado previamente.
-            FileNotFoundError: Si la imagen no existe.
         """
-        if self.llm is None:
-            raise RuntimeError("Modelo no cargado. Ejecuta load_model() primero.")
-
         if not os.path.exists(image_path):
             raise FileNotFoundError(f"Imagen no encontrada en: {image_path}")
 
-        # Construir el mensaje formato OpenAI Vision API para llama-cpp
-        # Nota: Usamos file:// URL normalizado
-        import pathlib
-        abs_image_path = os.path.abspath(image_path)
-        # Convertir a URI compatible con file:/// (maneja backslashes y espacios)
-        file_uri = pathlib.Path(abs_image_path).as_uri()
-        
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": file_uri}}
-                ]
-            }
-        ]
+        if self.verbose:
+            print(f"🚀 Enviando petición a Ollama [{self.model_tag}]...")
 
         try:
-            response = self.llm.create_chat_completion(
-                messages=messages,
-                temperature=temperature,
-                max_tokens=1024 # Límite razonable para descripciones médicas
+            # Ollama python lib espera path de imagen como string o bytes
+            # Automáticamente maneja base64 si se le pasa el path
+            
+            response = ollama.chat(
+                model=self.model_tag,
+                messages=[
+                    {
+                        'role': 'system', 
+                        'content': 'Responde siempre en español.'
+                    },
+                    {
+                        'role': 'user',
+                        'content': prompt,
+                        'images': [image_path]
+                    }
+                ],
+                options={
+                    'temperature': temperature
+                }
             )
             
-            # Extraer contenido de la respuesta
-            if response and "choices" in response and len(response["choices"]) > 0:
-                return response["choices"][0]["message"]["content"]
+            # La respuesta viene en response['message']['content']
+            if 'message' in response and 'content' in response['message']:
+                return response['message']['content']
             else:
                 return ""
+
         except Exception as e:
-            raise RuntimeError(f"Error durante la inferencia: {str(e)}")
+            raise RuntimeError(f"Error durante la inferencia con Ollama: {str(e)}")
+

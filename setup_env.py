@@ -8,37 +8,21 @@ import time
 # --- Configuration: Model Registry ---
 # Añade aquí nuevos modelos siguiendo el formato.
 MODELS_REGISTRY = {
-    "minicpm_v26_q8": {
-        "name": "MiniCPM-V-2_6-Q8_0.gguf",
-        "url": "https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/ggml-model-Q8_0.gguf?download=true",
-        "folder": "models/minicpm_v26",
-        "description": "MiniCPM-V 2.6 (8GB VRAM) - Versión Estable Compatible",
-        "mmproj": {
-             "name": "mmproj-model-f16.gguf",
-             "url": "https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf/resolve/main/mmproj-model-f16.gguf?download=true"
-        }
+    "minicpm_v_2_6_8b": {
+        "name": "openbmb/minicpm-v2.6:8b",
+        "description": "MiniCPM-V 2.6 (8B) - Versión Estable Compatible",
     },
-    "minicpm_v45_q8": {
-        "name": "MiniCPM-V-4_5-Q8_0.gguf",
-        "url": "https://huggingface.co/openbmb/MiniCPM-V-4_5-gguf/resolve/main/MiniCPM-V-4_5-Q8_0.gguf?download=true",
-        "folder": "models/minicpm_v45",
-        "description": "MiniCPM-V 4.5 (Beta - Requiere mmproj específico)",
-        "mmproj": {
-             "name": "mmproj-model-f16.gguf",
-             "url": "https://huggingface.co/openbmb/MiniCPM-V-4_5-gguf/resolve/main/mmproj-model-f16.gguf?download=true"
-        }
+    "minicpm_v_4_5_8b": {
+        "name": "openbmb/minicpm-v4.5:8b", 
+        "description": "MiniCPM-V 4.5 (8B) - SOTA OpenBMB",
     },
-    "qwen3_vl_8b_q8": {
-        "name": "Qwen3VL-8B-Instruct-Q8_0.gguf",
-        "url": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF/resolve/main/Qwen3VL-8B-Instruct-Q8_0.gguf?download=true",
-        "folder": "models",
+    "qwen3_vl_8b": {
+        "name": "qwen3-vl", 
         "description": "Qwen3-VL 8B (SOTA Razonamiento 2026)"
     },
-    "internvl3_5_8b_q8": {
-        "name": "InternVL3_5-8B.Q8_0.gguf",
-        "url": "https://huggingface.co/mradermacher/InternVL3_5-8B-GGUF/resolve/main/InternVL3_5-8B.Q8_0.gguf?download=true",
-        "folder": "models",
-        "description": "InternVL3.5 8B Q8 (Alta Precisión/VRAM)"
+    "internvl3_5_8b": {
+        "name": "blaifa/InternVL3_5:8b",
+        "description": "InternVL 3.5 (8B) - Blaifa"
     }
 }
 
@@ -101,6 +85,29 @@ class MenuItem:
         self.description = description
         self.children = children or []
         self.is_selected = False
+
+
+# --- Configuration: Dependencies ---
+# Single source of truth for required python libraries
+REQUIRED_LIBS = [
+    "ollama",
+    "requests",
+    "tqdm",
+    "pillow",   # Import name: PIL
+    "psutil",
+    "colorama",
+    "pytest",
+    "pytest-mock"
+]
+
+# Mapping for import checks (Library Name -> Import Name)
+# Only needed when import name differs from package name
+LIB_IMPORT_MAP = {
+    "pillow": "PIL",
+    "opencv-python": "cv2",
+    "pyyaml": "yaml",
+    "pytest-mock": "pytest_mock"
+}
 
 # --- Helper Functions ---
 
@@ -205,84 +212,40 @@ def get_sys_info():
     
     return info
 
-def download_file_with_progress(url, dest_path):
-    """Descarga un archivo con barra de progreso visual."""
-    global requests, tqdm
-    
-    if requests is None or tqdm is None:
-        log("Requests/Tqdm no detectados. Intentando instalación rápida...", "warning")
-        try:
-            subprocess.check_call(["uv", "pip", "install", "requests", "tqdm"])
-        except:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "requests", "tqdm"])
-        
-        # Re-importar tras instalar
-        import requests as req
-        from tqdm import tqdm as tq
-        requests = req
-        tqdm = tq
-
-    print(f"{Style.OKBLUE}Downloading: {url}{Style.ENDC}")
-    print(f"{Style.DIM}To: {dest_path}{Style.ENDC}")
-    
-    response = requests.get(url, stream=True)
-    total_size = int(response.headers.get('content-length', 0))
-    block_size = 1024 # 1 Kibibyte
-
+def check_ollama():
+    """Verifica si 'ollama' está instalado y el servicio corriendo."""
     try:
-        with open(dest_path, 'wb') as file, tqdm(
-            desc=os.path.basename(dest_path),
-            total=total_size,
-            unit='iB',
-            unit_scale=True,
-            unit_divisor=1024,
-            colour='green'
-        ) as bar:
-            for data in response.iter_content(block_size):
-                size = file.write(data)
-                bar.update(size)
+        subprocess.check_call("ollama --version", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
-    except Exception as e:
-        log(f"Download failed: {e}", "error")
-        if os.path.exists(dest_path):
-            os.remove(dest_path) # Clean up partial file
+    except:
         return False
 
-def download_model_from_registry(model_key):
-    """Descarga un modelo definido en el registro."""
+def pull_ollama_model(model_key):
+    """Descarga (pull) un modelo de Ollama."""
     if model_key not in MODELS_REGISTRY:
         log(f"Model key '{model_key}' not found in registry.", "error")
         return False
     
     entry = MODELS_REGISTRY[model_key]
-    dest_dir = entry.get("folder", "models")
-    model_name = entry["name"]
-    dest_path = os.path.join(dest_dir, model_name)
+    model_tag = entry["name"]
     
-    os.makedirs(dest_dir, exist_ok=True)
+    log(f"Pulling {model_tag} ({entry['description']})...", "step")
     
-    success = True
-    
-    # 1. Main Model
-    if os.path.exists(dest_path):
-        log(f"Model '{model_name}' already exists in {dest_dir}.", "success")
-    else:
-        log(f"Downloading {entry['description']}...", "step")
-        if not download_file_with_progress(entry["url"], dest_path):
-             success = False
+    # Check if ollama is running first (simple check)
+    if not check_ollama():
+        log("Ollama binary not found or not in PATH.", "error")
+        log("Please install Ollama from https://ollama.com/", "warning")
+        return False
 
-    # 2. Optional Projector (mmproj)
-    if "mmproj" in entry:
-         mm_conf = entry["mmproj"]
-         mm_path = os.path.join(dest_dir, mm_conf["name"])
-         if os.path.exists(mm_path):
-              log(f"Projector '{mm_conf['name']}' already exists.", "success")
-         else:
-              log(f"Downloading required projector: {mm_conf['name']}...", "step")
-              if not download_file_with_progress(mm_conf["url"], mm_path):
-                   success = False
-
-    return success
+    try:
+        # Use subprocess to stream output properly if possible, or just wait
+        # "ollama pull" writes to stderr usually for progress bars
+        subprocess.check_call(f"ollama pull {model_tag}", shell=True)
+        log(f"Successfully pulled {model_tag}", "success")
+        return True
+    except subprocess.CalledProcessError:
+        log(f"Failed to pull {model_tag}. Is Ollama server running?", "error")
+        return False
 
 def list_test_files():
     """Escanea la carpeta tests/ y devuelve los archivos .py válidos."""
@@ -294,26 +257,39 @@ def list_test_files():
     return sorted(files)
 
 def manage_models_menu_ui():
-    """Menú dinámico para gestionar descargas de modelos."""
+    """Menú dinámico para gestionar descargas de modelos OLLAMA."""
     def header():
         print_banner()
-        print(f"{Style.BOLD} MODEL DOWNLOAD MANAGER {Style.ENDC}")
-        print(" Select a model to download/verify:")
+        print(f"{Style.BOLD} OLLAMA MODEL MANAGER {Style.ENDC}")
+        print(" Select a model to pull:")
 
     while True:
         options = []
         
+        # Check if ollama is running
+        ollama_status = "RUNNING" if check_ollama() else "NOT FOUND/STOPPED"
+        ollama_color = Style.OKGREEN if ollama_status == "RUNNING" else Style.FAIL
+        
+        # Try to get list of installed models
+        installed_models = []
+        if check_ollama():
+            try:
+                res = subprocess.check_output("ollama list", shell=True).decode()
+                installed_models = res
+            except:
+                pass
+
         for key, data in MODELS_REGISTRY.items():
-            path = os.path.join(data.get("folder", "models"), data["name"])
-            exists = os.path.exists(path)
+            model_tag = data["name"]
+            is_installed = model_tag in installed_models
             
-            status_icon = "✔ INSTALLED" if exists else "☁ DOWNLOAD"
-            status_color = Style.OKGREEN if exists else Style.OKBLUE
+            status_icon = "✔ PULLED" if is_installed else "☁ PULL"
+            status_color = Style.OKGREEN if is_installed else Style.OKBLUE
             
             label = f" {data['name']:<30} | {status_color}{status_icon}{Style.ENDC}"
             
             # Action wrapper using closure for key capture
-            action = lambda k=key: (download_model_from_registry(k), input(f"\n{Style.DIM}Press Enter...{Style.ENDC}"))
+            action = lambda k=key: (pull_ollama_model(k), input(f"\n{Style.DIM}Press Enter...{Style.ENDC}"))
             
             options.append(MenuItem(label, action, description=data["description"]))
 
@@ -363,43 +339,14 @@ def run_tests_menu():
              run_cmd(f"uv run python -m pytest tests/{fname}")
              input(f"\n{Style.DIM}Finished. Press Enter...{Style.ENDC}")
 
-    def run_smoke_test_wrapper():
-        # Ensure models directory exists
-        if not os.path.exists("models"):
-             os.makedirs("models")
-        
-        # List available models recursively
-        found_models = []
-        for root, dirs, files in os.walk("models"):
-            for f in files:
-                 if f.endswith(".gguf") and "mmproj" not in f:
-                      # Use relative path for cleaner display, but keep full path for execution
-                      full_path = os.path.join(root, f)
-                      found_models.append(full_path)
-        
-        if not found_models:
-            log("No models found in models/.", "warning")
-            if ask_user("Download default MiniCPM-V 2.6 model now?"):
-                if download_model_from_registry("minicpm_v26_q8"):
-                    # Re-scan
-                    found_models = []
-                    for root, dirs, files in os.walk("models"):
-                        for f in files:
-                             if f.endswith(".gguf") and "mmproj" not in f:
-                                  found_models.append(os.path.join(root, f))
-            
-            if not found_models:
-                log("Cannot run smoke test without a model.", "error")
-                input(f"\n{Style.DIM}Press Enter to return...{Style.ENDC}")
-                return
-
         # Interactive Model Selection
-        # Create descriptive labels including folder name if inside subfolder
+        # Create descriptive labels 
         model_opts = []
-        for m in found_models:
-             rel = os.path.relpath(m, "models")
-             model_opts.append(MenuItem(rel))
-             
+        
+        # Add registry models
+        for key, val in MODELS_REGISTRY.items():
+             model_opts.append(MenuItem(val["name"]))
+
         model_opts.append(MenuItem(" Cancel", lambda: None))
 
         def m_header():
@@ -409,14 +356,39 @@ def run_tests_menu():
         selection = interactive_menu(model_opts, header_func=m_header)
         
         if selection and selection.label.strip() != "Cancel":
-            # Reconstruct full path from relative label
-            model_rel = selection.label
-            model_path = os.path.join("models", model_rel)
+            model_tag = selection.label
             
-            log(f"Launching Inference with {model_rel}...", "step")
+            log(f"Launching Inference with {model_tag}...", "step")
             try:
-                # Pass selected model path as argument to the script
-                subprocess.check_call(["uv", "run", "python", "src/scripts/test_inference.py", "--model_path", model_path])
+                # Pass selected model tag as argument to the script
+                subprocess.check_call(["uv", "run", "python", "src/scripts/test_inference.py", "--model_path", model_tag])
+            except subprocess.CalledProcessError:
+                log("Smoke test failed (Exit Code 1). Check output above.", "error")
+            input(f"\n{Style.DIM}Press Enter to return...{Style.ENDC}")
+
+    def run_smoke_test_wrapper():
+        """Wrapper para lanzar el smoke test interactivo."""
+        # Reutilizamos la lógica de selección de modelo definida dentro de run_specific_test
+        # O mejor, la movemos a una función helper.
+        # Por simplicidad y evitar refactor mayor ahora, copiamos la lógica o llamamos a una shared.
+        
+        # Simplificación: copiamos lógica de selección de modelo aquí.
+        model_opts = []
+        for key, val in MODELS_REGISTRY.items():
+             model_opts.append(MenuItem(val["name"]))
+        model_opts.append(MenuItem(" Cancel", lambda: None))
+
+        def m_header():
+             print_banner()
+             print(f"{Style.BOLD} SELECT INFERENCE MODEL {Style.ENDC}")
+
+        selection = interactive_menu(model_opts, header_func=m_header)
+        
+        if selection and selection.label.strip() != "Cancel":
+            model_tag = selection.label
+            log(f"Launching Inference with {model_tag}...", "step")
+            try:
+                subprocess.check_call(["uv", "run", "python", "src/scripts/test_inference.py", "--model_path", model_tag])
             except subprocess.CalledProcessError:
                 log("Smoke test failed (Exit Code 1). Check output above.", "error")
             input(f"\n{Style.DIM}Press Enter to return...{Style.ENDC}")
@@ -430,7 +402,7 @@ def run_tests_menu():
         MenuItem(" Run All Unit Tests (pytest)", run_all_unit_tests),
         MenuItem(" Run Specific Test File...", run_specific_test),
         MenuItem(" Run Smoke Test (Inference Demo)", run_smoke_test_wrapper),
-        MenuItem(" Manage/Download Models...", manage_models_menu_ui),
+        MenuItem(" Manage/Pull Ollama Models...", manage_models_menu_ui),
         MenuItem(" Return to Main Menu", lambda: "BACK")
     ]
 
@@ -555,8 +527,8 @@ def fix_torch():
 def fix_libs(libs_to_install=None):
     """Reparación: Reinstala una lista de librerías en modo Soft (sin romper dependencias)."""
     if libs_to_install is None:
-        # Lista por defecto si se llama sin argumentos
-        libs_to_install = ["transformers", "accelerate", "protobuf", "scipy", "requests", "tqdm", "opencv-python", "psutil", "numpy", "tokenizers", "safetensors", "huggingface-hub", "pyyaml", "regex", "packaging", "bitsandbytes"]
+        # Usar la lista maestra si no se especifican libs
+        libs_to_install = REQUIRED_LIBS
     
     # Aseguramos que sea lista
     if isinstance(libs_to_install, str):
@@ -567,37 +539,7 @@ def fix_libs(libs_to_install=None):
     # Eliminamos --no-deps para asegurar que se instalen las dependencias faltantes (ej: requests)
     run_cmd(f"uv pip install --force-reinstall {libs_str}")
 
-def fix_llama():
-    """Reparación: Reinstala Llama-cpp-python (compilada para GPU si es posible)."""
-    log("Re-installing Llama-cpp-python...", "step")
-    use_gpu = detect_gpu()
-    
-    if not use_gpu:
-        run_cmd("uv pip install --force-reinstall llama-cpp-python")
-        return
 
-    def install_fast():
-        # Opción 1 (Default)
-        run_cmd("uv pip install --force-reinstall llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121")
-
-    def install_slow():
-        log("Building from source (Requires Visual Studio C++ Compilers and CMAKE)...", "warning")
-        cmd = 'set CMAKE_ARGS=-DGGML_CUDA=on && set FORCE_CMAKE=1 && uv pip install llama-cpp-python --force-reinstall --no-binary llama-cpp-python'
-        run_cmd(cmd)
-
-    def header():
-        print(f"\n{Style.BOLD} GPU INSTALLATION MODE {Style.ENDC}")
-        print(" Choose installation method for llama-cpp-python:")
-
-    options = [
-        MenuItem(" Fast (Pre-built Wheels) - Recommended", install_fast, description="Stable, downloads binaries."),
-        MenuItem(" Slow (Build from Source) - Latest", install_slow, description="Compiles locally (Needs VS C++).")
-    ]
-    
-    choice = interactive_menu(options, header_func=header)
-    
-    if choice and callable(choice.action):
-        choice.action()
 
 # --- Diagnostic System ---
 
@@ -631,78 +573,41 @@ def perform_diagnostics():
         report.append(("Tool: uv", "MISSING", "FAIL"))
         issues.append(DiagnosticIssue("Missing uv", fix_uv, "Install uv"))
 
-    # 3. Torch CUDA
-    try:
-        import torch  # type: ignore
-        report.append(("Torch Version", torch.__version__, "OK"))
-        
-        gpu_detected = detect_gpu()
-        cuda_available = torch.cuda.is_available()
 
-        if cuda_available:
-            device_name = torch.cuda.get_device_name(0)
-            report.append(("CUDA Device", device_name, "OK"))
-            vram = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            report.append(("VRAM", f"{vram:.1f} GB", "OK"))
-        else:
-            if gpu_detected:
-                # Aviso específico solicitado: detectamos GPU pero Torch está en CPU
-                report.append(("CUDA State", "Mismatch (GPU Found)", "WARN"))
-                issues.append(DiagnosticIssue("Torch supports CPU only but GPU found", fix_torch, "Switch Torch to CUDA"))
-            else:
-                report.append(("CUDA State", "Not Available (CPU Correct)", "OK"))
-
-    except ImportError:
-        report.append(("Torch", "Not Installed", "FAIL"))
-        issues.append(DiagnosticIssue("Torch Missing/Broken", fix_torch, "Install Torch"))
-    except Exception as e:
-        report.append(("Torch Error", str(e), "FAIL"))
-        issues.append(DiagnosticIssue("Torch Error", fix_torch, "Reinstall Torch"))
 
     # 4. Key Libraries
     # Verificamos importación de librerías clave una por una
-    core_map = {
-        "transformers": "transformers",
-        "cv2": "opencv-python",
-        "accelerate": "accelerate",
-        "scipy": "scipy",
-        "requests": "requests",
-        "tqdm": "tqdm",
-        "psutil": "psutil",
-        "numpy": "numpy",
-        "tokenizers": "tokenizers",
-        "safetensors": "safetensors",
-        "huggingface_hub": "huggingface-hub",
-        "yaml": "pyyaml",
-        "regex": "regex",
-        "packaging": "packaging",
-        "bitsandbytes": "bitsandbytes",
-        "pytest": "pytest",
-        "pytest_mock": "pytest-mock",
-        "PIL": "pillow"
-    }
-    
-    for import_name, pkg_name in core_map.items():
+    for pkg_name in REQUIRED_LIBS:
+        # Determine import name
+        import_name = LIB_IMPORT_MAP.get(pkg_name, pkg_name)
+        
         try:
             mod = __import__(import_name)
             version = getattr(mod, "__version__", "Unknown")
-            report.append((f"Lib: {import_name}", version, "OK"))
+            report.append((f"Lib: {pkg_name}", version, "OK"))
         except ImportError:
-            report.append((f"Lib: {import_name}", "MISSING", "FAIL"))
+            report.append((f"Lib: {pkg_name}", "MISSING", "FAIL"))
             fix_lambda = lambda p=[pkg_name]: fix_libs(p)
             issues.append(DiagnosticIssue(f"Missing {pkg_name}", fix_lambda, f"Install {pkg_name}"))
         except Exception as e:
-            report.append((f"Lib: {import_name}", "ERROR", "FAIL"))
+            report.append((f"Lib: {pkg_name}", "ERROR", "FAIL"))
             fix_lambda = lambda p=[pkg_name]: fix_libs(p)
             issues.append(DiagnosticIssue(f"Error {pkg_name}", fix_lambda, f"Reinstall {pkg_name}"))
 
-    # Llama CPP (Caso especial por ser rueda precompilada)
+    # Ollama Service Check
+    if check_ollama():
+        report.append(("Service: Ollama", "Running", "OK"))
+    else:
+        report.append(("Service: Ollama", "NOT DETECTED", "FAIL"))
+        issues.append(DiagnosticIssue("Ollama not finding", lambda: log("Install Ollama from https://ollama.com", "warning"), "Install Ollama"))
+
+    # Ollama Python Lib
     try:
-        import llama_cpp  # type: ignore
-        report.append(("Lib: llama_cpp", llama_cpp.__version__, "OK"))
+        import ollama
+        report.append(("Lib: ollama", "Installed", "OK"))
     except ImportError:
-        report.append(("Lib: llama_cpp", "MISSING", "FAIL"))
-        issues.append(DiagnosticIssue("Missing Llama-CPP", fix_llama, "Install Llama-CPP"))
+        report.append(("Lib: ollama", "MISSING", "FAIL"))
+        issues.append(DiagnosticIssue("Missing ollama lib", lambda: fix_libs("ollama"), "Install olama lib"))
 
     # 5. Storage
     free_gb = shutil.disk_usage(".").free / (1024**3)
@@ -1058,15 +963,14 @@ def reinstall_library_menu():
         print(f"{Style.BOLD} REINSTALL LIBRARIES {Style.ENDC}")
         print(" Select libraries to force re-install (clean install).")
 
-    # Definición de librerías para el bloque core
-    libs_names = ["transformers", "accelerate", "protobuf", "scipy", "requests", "tqdm", "opencv-python", "psutil", "numpy", "tokenizers", "safetensors", "huggingface-hub", "pyyaml", "regex", "packaging", "bitsandbytes", "pytest", "pytest-mock", "pillow"]
-    core_children = [MenuItem(lib) for lib in libs_names]
+    # Definición de librerías para el bloque core (Lightweight)
+    # Definición de librerías para el bloque core (Lightweight)
+    core_children = [MenuItem(lib) for lib in REQUIRED_LIBS]
 
     # Opciones principales
     opts = [
-        MenuItem("Torch (CUDA 12.1) - Core", lambda: run_cmd("uv pip install --force-reinstall --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")),
-        MenuItem("Transformers & Core (Soft)", children=core_children),
-        MenuItem("Llama-cpp (GPU) (Soft)", lambda: fix_llama())
+        MenuItem("Reinstall Core Dependencies", children=core_children),
+        MenuItem("Reinstall 'uv' Tool", lambda: fix_uv())
     ]
     
     selected = interactive_menu(opts, header_func=header, multi_select=True)
@@ -1091,9 +995,7 @@ def reinstall_library_menu():
         # Si se instalaron librerías core, recomendamos reinicio
         if selected_core_libs:
             restart_needed = True
-        # Si se tocó Torch (verificando label)
-        if any("Torch" in t.label for t in other_tasks):
-            restart_needed = True
+
 
         if restart_needed:
             restart_program()
@@ -1155,21 +1057,11 @@ def perform_install(full_reinstall=False):
         log(".venv exists.", "info")
 
     # 5. Libraries
-    log("Installing PyTorch...", "step")
-    if use_gpu:
-        run_cmd(f"uv pip install {force_flags} torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
-    else:
-        run_cmd(f"uv pip install {force_flags} torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu")
-
-    log("Installing ML Core Libraries...", "step")
-    run_cmd(f"uv pip install {force_flags} transformers accelerate protobuf scipy requests tqdm opencv-python bitsandbytes psutil sentencepiece py-cpuinfo colorama")
-
-    log("Installing Llama-cpp-python...", "step")
-    if use_gpu:
-        log("Using pre-compiled CUDA 12.1 wheels...", "info")
-        run_cmd(f"uv pip install {force_flags} llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu121")
-    else:
-        run_cmd(f"uv pip install {force_flags} llama-cpp-python")
+    log("Installing dependencies...", "step")
+    # Only light dependencies for Ollama workflow + Testing
+    # Removed: torch torchvision torchaudio transformers accelerate protobuf scipy opencv-python bitsandbytes sentencepiece
+    light_libs = " ".join(REQUIRED_LIBS)
+    run_cmd(f"uv pip install {force_flags} {light_libs}")
 
 def show_menu():
     """Bucle principal del menú."""
@@ -1218,13 +1110,46 @@ def show_menu():
             sys.exit(0)
 
 def main():
-    if not os.path.exists(".venv") and not os.path.isdir(".venv"):
+    venv_dir = ".venv"
+    venv_python = os.path.join(venv_dir, "Scripts", "python.exe") if os.name == 'nt' else os.path.join(venv_dir, "bin", "python")
+    
+    # Check if we are running inside the venv
+    # We compare the current executable path with the expected venv python path
+    running_in_venv = False
+    try:
+        if os.path.exists(venv_python) and os.path.samefile(sys.executable, venv_python):
+            running_in_venv = True
+    except:
+        pass # Handle potential errors in path comparison
+
+    if not running_in_venv:
+        # If venv exists, switch to it immediately
+        if os.path.exists(venv_python):
+            # print(f"🔄 Switching to virtual environment: {venv_python}")
+            try:
+                subprocess.check_call([venv_python] + sys.argv)
+                sys.exit(0)
+            except Exception as e:
+                print(f"❌ Failed to switch to venv: {e}")
+                sys.exit(1)
+        
+        # If venv does NOT exist (First Run)
         print_banner()
         log("First run detected. Starting setup...", "info")
         perform_install()
-        show_menu()
-    else:
-        show_menu()
+        
+        # After install, we MUST restart to load the new venv
+        if os.path.exists(venv_python):
+            log("Restarting in new environment...", "success")
+            time.sleep(1)
+            subprocess.check_call([venv_python] + sys.argv)
+            sys.exit(0)
+        else:
+            log("Error: .venv was not created properly.", "error")
+            sys.exit(1)
+
+    # If we are here, we are running INSIDE the venv (or failed to switch)
+    show_menu()
 
 if __name__ == "__main__":
     main()

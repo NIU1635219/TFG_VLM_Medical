@@ -1,58 +1,62 @@
 """
-Script de 'Smoke Test' (Prueba de Humo) para validar la inferencia VLM.
-Tarea 4: Cargar modelo pequeño, pasar imagen, verificar texto y VRAM.
+Script de 'Smoke Test' (Prueba de Humo) para validar la inferencia VLM con Ollama.
+Tarea 4: Verificar modelo (pull si necesario), pasar imagen, verificar texto.
 """
 
 import os
 import sys
 import time
+import subprocess
 
 # Add project root to sys.path to allow importing src
-# archivo en src/scripts/ -> subir 2 niveles para llegar a root
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
 from src.inference.vlm_runner import VLMLoader
 
 # Configuración
-DEFAULT_MODEL_PATH = "models/MiniCPM-V-2_6-Q8_0.gguf"
-IMAGE_PATH = "data/raw/test_image.jpg" # Imagen de prueba (generada o existente)
+DEFAULT_MODEL_TAG = "openbmb/minicpm-v4.5:8b"
+IMAGE_PATH = "data/raw/test_image.jpg" # Imagen de prueba
 PROMPT = "Describe detalladamente esta imagen (o lo que veas)."
 
+def get_installed_models():
+    """Obtiene la lista de modelos instalados en Ollama."""
+    try:
+        # Usamos subprocess para no depender de que la lib 'ollama' esté en este script (aunque vlm_runner la usa)
+        res = subprocess.check_output("ollama list", shell=True).decode()
+        lines = res.strip().split('\n')[1:] # Skip header
+        models = [line.split()[0] for line in lines if line.strip()]
+        return models
+    except:
+        return []
+
 def select_model():
-    """Permite al usuario seleccionar un modelo de la carpeta models/ (recursivo)."""
-    models_dir = "models"
-    if not os.path.exists(models_dir):
-        print(f"❌ La carpeta '{models_dir}' no existe.")
-        return None
+    """Permite al usuario seleccionar un modelo de Ollama."""
+    models = get_installed_models()
     
-    # Listar archivos .gguf recursivamente, excluyendo los proyectores (mmproj)
-    found_models = []
-    for root, dirs, files in os.walk(models_dir):
-        for f in files:
-            if f.endswith(".gguf") and "mmproj" not in f:
-                full_path = os.path.join(root, f)
-                found_models.append(full_path)
+    if not models:
+        print("❌ No se detectaron modelos en 'ollama list'. Asegúrate de que Ollama está corriendo.")
+        manual = input(f"Introduce el tag del modelo manualmente (default: {DEFAULT_MODEL_TAG}): ").strip()
+        return manual if manual else DEFAULT_MODEL_TAG
     
-    if not found_models:
-        print(f"❌ No se encontraron modelos .gguf en '{models_dir}' (ni subcarpetas).")
-        return None
-    
-    print("\n=== SELECCIÓN DE MODELO ===")
+    print("\n=== SELECCIÓN DE MODELO OLLAMA ===")
     print("Modelos disponibles:")
-    for i, m in enumerate(found_models):
-        # Mostrar path relativo para claridad
-        rel_path = os.path.relpath(m, start=os.getcwd())
-        print(f"  {i+1}. {rel_path}")
+    for i, m in enumerate(models):
+        print(f"  {i+1}. {m}")
     
+    print(f"  0. Introducir manualmente")
+
     while True:
         try:
-            selection = input(f"\nSelecciona el número del modelo a probar (1-{len(found_models)}): ")
-            if not selection.strip():
+            selection = input(f"\nSelecciona una opción (1-{len(models)}): ").strip()
+            if not selection:
                 continue
-                
+            
+            if selection == '0':
+                 return input("Introduce el tag del modelo: ").strip()
+
             idx = int(selection) - 1
-            if 0 <= idx < len(found_models):
-                selected_model = found_models[idx]
+            if 0 <= idx < len(models):
+                selected_model = models[idx]
                 print(f"👉 Seleccionado: {selected_model}")
                 return selected_model
             print("❌ Selección inválida.")
@@ -60,7 +64,7 @@ def select_model():
             print("❌ Por favor ingresa un número válido.")
 
 def ensure_test_image():
-    """Crea una imagen de prueba dummy si no existe, solo para validar el pipeline."""
+    """Crea una imagen de prueba dummy si no existe."""
     if not os.path.exists(IMAGE_PATH):
         print(f"⚠️ Imagen {IMAGE_PATH} no encontrada. Generando imagen de prueba dummy...")
         os.makedirs(os.path.dirname(IMAGE_PATH), exist_ok=True)
@@ -68,25 +72,28 @@ def ensure_test_image():
             from PIL import Image, ImageDraw
             img = Image.new('RGB', (512, 512), color = (73, 109, 137))
             d = ImageDraw.Draw(img)
-            d.text((10,10), "Hola VLM", fill=(255,255,0))
+            d.text((10,10), "Hola VLM (Ollama)", fill=(255,255,0))
             img.save(IMAGE_PATH)
             print("✅ Imagen de prueba generada.")
         except ImportError:
-            print("❌ No se pudo generar la imagen (falta Pillow). Por favor coloca una imagen jpg en data/raw/test_image.jpg")
-            sys.exit(1)
+            # Fallback si no hay PIL, copia manual requerida o error
+            print("❌ No se pudo generar la imagen (falta Pillow).") 
+            # Intentamos crear un archivo vacío solo para que no pete el loader check inicial
+            # pero el loader fallará al leerlo si no es imagen válida.
+            pass
 
 def main(model_path=None):
-    print("=== TAREA 4: SMOKE TEST VLM ===")
+    print("=== TAREA 4: SMOKE TEST VLM (OLLAMA) ===")
     
-    # 1. Seleccionar Modelo (CLI arg o Interactivo)
+    # 1. Seleccionar Modelo
+    # Nota: model_path aquí viene del argumento --model_path, que reusamos como model_tag
     if not model_path:
-        if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
-            model_path = sys.argv[1]
-            print(f"👉 Usando modelo pre-seleccionado: {model_path}")
-        else:
-            model_path = select_model()
+        model_tag = select_model()
+    else:
+        model_tag = model_path
+        print(f"👉 Usando modelo pre-seleccionado: {model_tag}")
 
-    if not model_path:
+    if not model_tag:
         print("Cancelando test.")
         sys.exit(1)
     
@@ -95,16 +102,14 @@ def main(model_path=None):
 
     try:
         # 3. Inicializar Loader
-        print(f"\n1. Inicializando VLMLoader con modelo: {model_path}...")
-        loader = VLMLoader(model_path=model_path, verbose=True)
+        print(f"\n1. Inicializando VLMLoader con modelo: {model_tag}...")
+        loader = VLMLoader(model_path=model_tag, verbose=True)
 
-        # 4. Cargar Modelo (Watcher de VRAM aquí)
-        print("2. Cargando modelo en memoria (Mira tu VRAM ahora!)...")
+        # 4. "Cargar" Modelo (Verificar disponibilidad)
+        print("2. Verificando modelo en Ollama...")
         start_time = time.time()
-        # n_gpu_layers=-1 para mover todo a la GPU (RTX 4060 Ti tiene 16GB, Q8 ocupa ~8-10GB + KV Cache)
-        print("   (Usando aceleración GPU total)")
-        loader.load_model(n_ctx=2048, n_gpu_layers=-1) 
-        print(f"✅ Modelo cargado en {time.time() - start_time:.2f} segundos.")
+        loader.load_model() 
+        print(f"✅ Modelo verificado en {time.time() - start_time:.2f} segundos.")
 
         # 5. Inferencia
         print(f"3. Ejecutando inferencia sobre {IMAGE_PATH}...")
@@ -125,7 +130,7 @@ def main(model_path=None):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Smoke Test for VLM Inference")
-    parser.add_argument("--model_path", type=str, help="Path to the GGUF model file", default=None)
+    parser = argparse.ArgumentParser(description="Smoke Test for VLM Inference with Ollama")
+    parser.add_argument("--model_path", type=str, help="Ollama Model Tag (e.g. minicpm-v:latest)", default=None)
     args = parser.parse_args()
     main(model_path=args.model_path)

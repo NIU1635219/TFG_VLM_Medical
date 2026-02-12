@@ -1,92 +1,82 @@
 import pytest
-import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, ANY
 from src.inference.vlm_runner import VLMLoader
 
-# Mockear paths para tests
-FAKE_MODEL_PATH = "models/fake_model.gguf"
+# Constants
+FAKE_MODEL_TAG = "fake-model:latest"
 FAKE_IMAGE_PATH = "data/raw/fake_image.jpg"
 
 @pytest.fixture
-def mock_exists():
-    with patch("os.path.exists") as mock:
+def mock_ollama():
+    with patch("src.inference.vlm_runner.ollama") as mock:
         yield mock
 
-def test_init_raises_error_if_model_not_found(mock_exists):
-    """Debe lanzar FileNotFoundError si el modelo no existe."""
-    mock_exists.return_value = False
-    with pytest.raises(FileNotFoundError):
-        VLMLoader(model_path="non_existent.gguf")
+@pytest.fixture
+def loader(mock_ollama):
+    # Setup default behavior for ollama module if needed
+    return VLMLoader(model_path=FAKE_MODEL_TAG, verbose=True)
 
-def test_init_success(mock_exists):
-    """Debe inicializarse correctamente si el modelo existe."""
-    mock_exists.return_value = True
-    loader = VLMLoader(model_path=FAKE_MODEL_PATH)
-    assert loader.model_path == FAKE_MODEL_PATH
+def test_init_sets_attributes():
+    loader = VLMLoader(model_path=FAKE_MODEL_TAG)
+    assert loader.model_tag == FAKE_MODEL_TAG
+    assert loader.verbose is False
 
-def test_inference_raises_error_if_model_not_loaded(mock_exists):
-    """Debe lanzar RuntimeError si se llama a inference antes de load_model."""
-    mock_exists.return_value = True
-    loader = VLMLoader(model_path=FAKE_MODEL_PATH)
+def test_load_model_checks_list(loader, mock_ollama):
+    # Mock list response
+    # Ollama list returns an object with 'models' attribute which is a list of objects with 'model' attribute
+    mock_model = MagicMock()
+    mock_model.model = FAKE_MODEL_TAG
     
-    with patch("os.path.exists", return_value=True): # Image exists
-        with pytest.raises(RuntimeError) as excinfo:
-            loader.inference(FAKE_IMAGE_PATH, "Prompt")
-    assert "Modelo no cargado" in str(excinfo.value)
+    mock_response = MagicMock()
+    mock_response.models = [mock_model]
+    
+    mock_ollama.list.return_value = mock_response
 
-def test_inference_raises_error_if_image_not_found(mock_exists):
-    """Debe lanzar FileNotFoundError si la imagen no existe."""
-    mock_exists.side_effect = lambda path: path == FAKE_MODEL_PATH # Model exists, image doesn't
-    
-    loader = VLMLoader(model_path=FAKE_MODEL_PATH)
-    # Mocking internal loaded state specifically for this test logic if we executed partial code
-    # But since strict TDD fails first, we expect implementation to check image before checking model loaded state or vice-versa.
-    # We will simulate model is loaded to test image check.
-    loader.llm = MagicMock() 
-
-    with pytest.raises(FileNotFoundError):
-        loader.inference("ghost_image.jpg", "Prompt")
-
-@patch("src.inference.vlm_runner.MiniCPMv26ChatHandler")
-@patch("src.inference.vlm_runner.Llama") # Patch de la clase externa
-def test_load_model_calls_llama(mock_llama_class, mock_chat_handler, mock_exists):
-    """Verifica que load_model instancie 'Llama' con los parámetros correctos."""
-    mock_exists.return_value = True
-    loader = VLMLoader(model_path=FAKE_MODEL_PATH)
-    
-    loader.load_model(n_ctx=4096, n_gpu_layers=33)
-    
-    mock_llama_class.assert_called_once()
-    mock_chat_handler.assert_called_once()
-    _, kwargs = mock_llama_class.call_args
-    assert kwargs["model_path"] == FAKE_MODEL_PATH
-    assert kwargs["n_ctx"] == 4096
-    assert kwargs["n_gpu_layers"] == 33
-
-@patch("src.inference.vlm_runner.MiniCPMv26ChatHandler")
-@patch("src.inference.vlm_runner.Llama")
-def test_inference_flow(mock_llama_class, mock_chat_handler, mock_exists):
-    """Verifica que inference llame a create_chat_completion correctamente."""
-    mock_exists.return_value = True
-    
-    # Setup del mock
-    mock_instance = mock_llama_class.return_value
-    mock_instance.create_chat_completion.return_value = {
-        "choices": [{"message": {"content": "Es un pólipo."}}]
-    }
-    
-    loader = VLMLoader(model_path=FAKE_MODEL_PATH)
     loader.load_model()
     
-    response = loader.inference(FAKE_IMAGE_PATH, "Describe")
+    # Verify list called
+    mock_ollama.list.assert_called_once()
+    # Verify pull NOT called because model exists
+    mock_ollama.pull.assert_not_called()
+
+def test_load_model_pulls_if_missing(loader, mock_ollama):
+    # Mock list response checks (empty or different model)
+    mock_model = MagicMock()
+    mock_model.model = "other-model:latest"
     
-    assert response == "Es un pólipo."
-    mock_instance.create_chat_completion.assert_called_once()
+    mock_response = MagicMock()
+    mock_response.models = [mock_model]
     
-    # Verificar estructura del mensaje (simplificada para MiniCPM-V que usa chat handler interno o standard)
-    call_args = mock_instance.create_chat_completion.call_args
+    mock_ollama.list.return_value = mock_response
+
+    loader.load_model()
+    
+    # Verify pull called
+    mock_ollama.pull.assert_called_once_with(FAKE_MODEL_TAG, stream=True)
+
+def test_inference_calls_chat(loader, mock_ollama):
+    # Setup mock chat response
+    mock_ollama.chat.return_value = {
+        'message': {'content': 'Descripción de prueba'}
+    }
+    
+    with patch("os.path.exists", return_value=True):
+        result = loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba")
+    
+    assert result == "Descripción de prueba"
+    
+    # Verify chat call arguments
+    mock_ollama.chat.assert_called_once()
+    call_args = mock_ollama.chat.call_args
+    assert call_args.kwargs['model'] == FAKE_MODEL_TAG
     messages = call_args.kwargs['messages']
-    assert messages[0]['role'] == 'user'
-    # Validar que contiene texto e imagen
-    content = messages[0]['content']
-    assert isinstance(content, list)
+    assert len(messages) == 2 # System + User
+    assert messages[0]['role'] == 'system'
+    assert messages[1]['role'] == 'user'
+    assert messages[1]['content'] == "Prompt de prueba"
+    assert messages[1]['images'] == [FAKE_IMAGE_PATH]
+
+def test_inference_raises_file_not_found(loader):
+    with patch("os.path.exists", return_value=False):
+        with pytest.raises(FileNotFoundError):
+            loader.inference("ghost.jpg", "Prompt")

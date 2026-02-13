@@ -23,9 +23,11 @@ El projecte inclou una potent eina de gestió (`setup_env.py`) amb una **Interf�
 
 **Funcionalitats Principals:**
 *   **🎮 Interfície Gràfica en Terminal:** Navegació intuïtiva, circular i sense parpadeigs (*Flicker-Free*).
+*   **🧭 Descripció contextual d'opcions:** Mostra una descripció curta de l'opció seleccionada en tots els menús.
 *   **🩺 Diagnòstic Dinàmic:** Analitza l'estat de les llibreries crítiques i la connexió amb el servei Ollama.
 *   **🤖 Gestió de Models VLM:** Sistema integrat per descarregar (*pull*) models directament des del registre d'Ollama.
-*   **🧪 Smoke Test Interactiu:** Prova d'inferència completa amb selecció de model i validació en temps real.
+*   **🧪 Smoke Test (Auto + Interactiu):** Prova d'inferència amb múltiples imatges neutres, descàrrega automàtica i validació per paraules clau.
+*   **🛡️ Factory Reset segur:** La confirmació de `Factory Reset` ve per defecte en **No** per evitar reinicis accidentals d'entorn.
 *   **🔄 Auto-Bootstrapping:** El sistema detecta automàticament si s'està executant fora de l'entorn virtual (`.venv`) i es reinicia dins d'ell per garantir la càrrega de llibreries.
 
 **Controls:**
@@ -60,13 +62,15 @@ L'arquitectura del projecte està dissenyada per ser modular:
 *   `data/`: dataset mèdic segmentat en `raw/` i `processed/`.
 *   `setup_env.py`: Script de gestió v5.0 (TUI).
 
-## 🤖 Models VLM Suportats
-Actualment, el sistema està optimitzat per als següents models en Ollama:
+## 🤖 Models VLM
+L'execució d'inferència i els tests **detecten dinàmicament** els models disponibles via `ollama list`.
+
+La llista següent es manté com a **registre de models recomanats per descarregar** des del manager (`setup_env.py`), no com a llista fixa d'execució:
 | Model | Tag en Ollama | Descripció |
 | :--- | :--- | :--- |
 | **MiniCPM-V 4.5** | `openbmb/minicpm-v4.5:8b` | SOTA OpenBMB (8B) |
 | **MiniCPM-V 2.6** | `openbmb/minicpm-v2.6:8b` | Versió Estable (8B) |
-| **Qwen3-VL** | `qwen3-vl` | SOTA Razonamiento 2026 (8B) |
+| **Qwen3-VL** | `qwen3-vl:8b` | SOTA Razonamiento 2026 (8B) |
 | **InternVL 3.5** | `blaifa/InternVL3_5:8b` | InternVL High Performance (8B) |
 
 ## 🧪 Testing
@@ -74,3 +78,22 @@ Per executar els tests unitaris i verificar la integració amb Ollama:
 ```bash
 uv run python -m pytest tests/
 ```
+
+Smoke test automàtic (no interactiu):
+```bash
+uv run python src/scripts/test_inference.py
+```
+
+Smoke test interactiu (selector de model):
+```bash
+uv run python src/scripts/test_inference.py --interactive
+```
+
+Notes del smoke test:
+* Usa 4 imatges amb noms neutres (`sample_01.jpg` ... `sample_04.jpg`) a `data/raw/smoke_test/`.
+* Si no existeixen, les descarrega automàticament des de múltiples URLs fallback i les normalitza.
+* Precàrrega el model una sola vegada abans del bucle de casos i l'allibera en acabar (reduint latència per cas).
+* Valida automàticament que la resposta del model inclogui paraules clau esperades per cada imatge.
+
+Notes del selector al Manager Tool:
+* A `Tests & Models Manager > Run Smoke Test`, només es mostren models detectats via `ollama list` (sense entrada manual de tag en aquest menú).

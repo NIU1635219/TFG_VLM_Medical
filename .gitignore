@@ -1,11 +1,13 @@
 # --- Python & Entornos Virtuales ---
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *$py.class
 .venv/
 env/
 venv/
 *.egg-info/
+llama-*
 
 # --- IDE & Sistema ---
 .vscode/

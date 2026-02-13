@@ -96,13 +96,13 @@ class MenuItem:
 # Single source of truth for required python libraries
 REQUIRED_LIBS = [
     "ollama",
-    "requests",
-    "tqdm",
     "pillow",   # Import name: PIL
-    "psutil",
-    "colorama",
+    "opencv-python",
+    "pandas",
+    "matplotlib",
+    "jupyter",
     "pytest",
-    "pytest-mock"
+    "tqdm"
 ]
 
 # Mapping for import checks (Library Name -> Import Name)
@@ -715,7 +715,7 @@ def print_banner():
 
 def restart_program():
     """Reinicia el script actual de forma limpia."""
-    print(f"\n{Style.BOLD}{Style.WARNING}🔴 CRITICAL UPDATE DETECTED (TORCH/CORE) 🔴{Style.ENDC}")
+    print(f"\n{Style.BOLD}{Style.WARNING}🔴 CRITICAL ENVIRONMENT UPDATE DETECTED 🔴{Style.ENDC}")
     print(f"{Style.WARNING}The application must restart to load the new libraries correctly.{Style.ENDC}")
     print(f"{Style.WARNING}Restarting in 2 seconds...{Style.ENDC}")
     time.sleep(2)
@@ -792,19 +792,15 @@ def fix_uv():
     log("Installing 'uv' package manager...", "step")
     run_cmd("pip install uv")
 
-def fix_torch():
-    """Reparación: Reinstala PyTorch detectando CUDA 12.1 o CPU."""
-    log("Re-installing PyTorch (Auto-detecting GPU)...", "step")
-    use_gpu = detect_gpu()
-    if use_gpu:
-        run_cmd("uv pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
-    else:
-        run_cmd("uv pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu")
-
 def fix_libs(libs_to_install=None):
     """Reparación: Reinstala una lista de librerías en modo Soft (sin romper dependencias)."""
     if libs_to_install is None:
-        # Usar la lista maestra si no se especifican libs
+        if os.path.exists("pyproject.toml"):
+            log("Syncing dependencies from pyproject.toml/uv.lock...", "step")
+            run_cmd("uv sync")
+            return
+
+        # Fallback si no existe pyproject
         libs_to_install = REQUIRED_LIBS
     
     # Aseguramos que sea lista
@@ -1209,28 +1205,11 @@ def smart_fix_menu(issues, report=None):
         # Asegurar que iteramos sobre una lista (compatibilidad linter)
         fixes_list = selected_fixes if isinstance(selected_fixes, list) else [selected_fixes]
         
-        # Sort Fixes: Standard fixes first, Torch/Llama/Heavy fixes LAST to prevent downgrades
-        def sort_key(fix_item):
-            name = fix_item.fix_func.__name__
-            if "fix_torch" in name: return 2
-            if "fix_llama" in name: return 2
-            return 1 # Standard fixes (libs, uv, folders)
-
-        fixes_list.sort(key=sort_key)
-
-        # Verificar si necesitamos reiniciar (si se toca Torch)
-        restart_required = False
+        # Orden estable para aplicar fixes en el orden seleccionado
+        fixes_list = list(fixes_list)
 
         for fix in fixes_list:
-            # fix es un objeto DiagnosticIssue
-            # Check for restart trigger before running
-            if fix.fix_func and "fix_torch" in fix.fix_func.__name__:
-                restart_required = True
-            
             fix.action() 
-        
-        if restart_required:
-            restart_program()
         
         log("All fixes applied. Refreshing diagnostics...", "success")
         time.sleep(1.0)
@@ -1367,11 +1346,14 @@ def perform_install(full_reinstall=False):
         log(".venv exists.", "info")
 
     # 5. Libraries
-    log("Installing dependencies...", "step")
-    # Only light dependencies for Ollama workflow + Testing
-    # Removed: torch torchvision torchaudio transformers accelerate protobuf scipy opencv-python bitsandbytes sentencepiece
-    light_libs = " ".join(REQUIRED_LIBS)
-    run_cmd(f"uv pip install {force_flags} {light_libs}")
+    if os.path.exists("pyproject.toml"):
+        log("Syncing dependencies from pyproject.toml/uv.lock...", "step")
+        sync_flag = " --reinstall" if full_reinstall else ""
+        run_cmd(f"uv sync{sync_flag}")
+    else:
+        log("Installing fallback dependencies (no pyproject.toml found)...", "step")
+        light_libs = " ".join(REQUIRED_LIBS)
+        run_cmd(f"uv pip install {force_flags} {light_libs}")
 
 def show_menu():
     """Bucle principal del menú."""

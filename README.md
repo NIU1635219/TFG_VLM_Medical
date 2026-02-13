@@ -54,6 +54,28 @@ El projecte inclou una potent eina de gestió (`setup_env.py`) amb una **Interf�
     ```
     L'script configurarà l'entorn virtual, instal·larà les dependències i obrirà el menú de gestió.
 
+## 🔁 Reproductibilitat amb `uv`
+Aquest projecte fixa l'entorn Python amb els fitxers:
+*   `.python-version`: versió de Python recomanada pel projecte.
+*   `pyproject.toml`: dependències declarades del projecte.
+*   `uv.lock`: versions exactes resoltes (entorn congelat).
+
+Per reproduir l'entorn en qualsevol màquina:
+```bash
+uv sync
+```
+
+Verificació ràpida:
+```bash
+uv run pytest
+```
+
+Quan afegeixis noves llibreries:
+```bash
+uv add <paquet>
+```
+Després, fes commit de `pyproject.toml` i `uv.lock` per mantenir la reproductibilitat entre equips.
+
 ## 📂 Estructura del Projecte
 L'arquitectura del projecte està dissenyada per ser modular:
 *   `src/inference/`: Controladors d'inferència basats en l'API d'Ollama.

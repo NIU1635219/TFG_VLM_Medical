@@ -6,10 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "jupyter>=1.1.1",
+    "lmstudio>=1.4.0",
     "matplotlib>=3.10.8",
-    "ollama>=0.6.1",
     "opencv-python>=4.13.0.92",
     "pandas>=3.0.0",
+    "pydantic>=2.11.9",
     "pillow>=12.1.1",
     "pytest>=9.0.2",
     "tqdm>=4.67.3",

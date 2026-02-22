@@ -1,9 +1,7 @@
-"""
-Script de 'Smoke Test' para validar inferencia VLM con Ollama usando 2 imágenes
-(gato/perro) y verificación automática por palabras clave.
-"""
+"""Smoke test VLM con LM Studio usando SDK oficial lmstudio."""
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -12,6 +10,11 @@ import unicodedata
 import urllib.request
 import urllib.error
 from typing import Dict, List, Tuple
+
+try:
+    import lmstudio as lms
+except ImportError:
+    lms = None
 
 try:
     import msvcrt
@@ -26,7 +29,7 @@ except ImportError:
 # Add project root to sys.path to allow importing src
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from src.inference.vlm_runner import VLMLoader
+from src.inference.vlm_runner import VLMLoader, VLMStructuredResponse
 
 PROMPT = (
     "Identifica el animal principal de la imagen y responde en español. "
@@ -75,41 +78,131 @@ TEST_CASES = [
             "https://images.dog.ceo/breeds/labrador/n02099712_7428.jpg",
         ],
     },
+    {
+        "id": "sample_05",
+        "label": "none",
+        "path": os.path.join(TEST_IMAGES_DIR, "sample_05.jpg"),
+        "urls": [
+            "https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg",
+            "https://upload.wikimedia.org/wikipedia/commons/8/84/Example.jpg",
+            "https://picsum.photos/640/480",
+        ],
+    },
 ]
 
 KEYWORDS_BY_LABEL = {
     "cat": ["gato", "gata", "gatito", "gatita", "cat", "kitty", "feline", "felino"],
     "dog": ["perro", "perra", "perrito", "perrita", "dog", "canine", "canino", "cachorro"],
+    "none": [],
 }
 
 
-def parse_ollama_list_output(raw_output: str) -> List[str]:
+def parse_lms_ls_output(raw_output: str) -> List[str]:
     lines = [line.strip() for line in raw_output.splitlines() if line.strip()]
     if not lines:
         return []
 
-    models = []
-    for line in lines[1:]:
+    models: List[str] = []
+    for line in lines:
+        upper = line.upper()
+        if "MODEL" in upper and "SIZE" in upper:
+            continue
+
         parts = line.split()
         if not parts:
             continue
-        tag = parts[0].strip()
-        if tag and tag.upper() != "NAME":
-            models.append(tag)
+
+        candidate = parts[0].strip()
+        if candidate and candidate.lower() not in {"id", "model", "name"}:
+            models.append(candidate)
+
     return models
 
 
-def get_installed_models() -> List[str]:
-    """Obtiene la lista de modelos instalados mediante `ollama list`."""
+def _extract_model_key(item) -> str | None:
+    if item is None:
+        return None
+    if isinstance(item, str):
+        text = item.strip()
+        return text or None
+    if isinstance(item, dict):
+        for key_name in ("key", "id", "model"):
+            value = item.get(key_name)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+    for attr_name in ("key", "id", "model"):
+        value = getattr(item, attr_name, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _get_models_from_sdk() -> List[str]:
+    if lms is None:
+        return []
+
     try:
-        result = subprocess.check_output(["ollama", "list"], text=True, stderr=subprocess.STDOUT)
-        return parse_ollama_list_output(result)
+        list_fn = getattr(lms, "list_loaded_models", None)
+        if not callable(list_fn):
+            return []
+
+        response = list_fn()
+        keys: List[str] = []
+
+        def collect(items):
+            if items is None:
+                return
+            if isinstance(items, (list, tuple)):
+                for entry in items:
+                    key = _extract_model_key(entry)
+                    if key:
+                        keys.append(key)
+                return
+            if isinstance(items, dict):
+                if "data" in items:
+                    collect(items.get("data"))
+                    return
+                if "models" in items:
+                    collect(items.get("models"))
+                    return
+                key = _extract_model_key(items)
+                if key:
+                    keys.append(key)
+                return
+
+            key = _extract_model_key(items)
+            if key:
+                keys.append(key)
+
+            data_attr = getattr(items, "data", None)
+            if data_attr is not None:
+                collect(data_attr)
+            models_attr = getattr(items, "models", None)
+            if models_attr is not None:
+                collect(models_attr)
+
+        collect(response)
+        return list(dict.fromkeys(keys))
+    except Exception:
+        return []
+
+
+def get_installed_models() -> List[str]:
+    """Obtiene modelos disponibles en LM Studio (SDK primero, CLI como fallback)."""
+    sdk_models = _get_models_from_sdk()
+    if sdk_models:
+        return sdk_models
+
+    try:
+        result = subprocess.check_output(["lms", "ls"], text=True, stderr=subprocess.STDOUT)
+        return parse_lms_ls_output(result)
     except Exception:
         return []
 
 
 def select_model_interactive(installed_models: List[str]) -> str:
-    print("\n=== SELECCIÓN DE MODELO OLLAMA ===")
+    print("\n=== SELECCIÓN DE MODELO LM STUDIO ===")
 
     if installed_models:
         options = installed_models + ["Introducir tag manualmente"]
@@ -118,7 +211,7 @@ def select_model_interactive(installed_models: List[str]) -> str:
             selected_idx = 0
             while True:
                 os.system("cls")
-                print("=== SELECCIÓN DE MODELO OLLAMA ===")
+                print("=== SELECCIÓN DE MODELO LM STUDIO ===")
                 print("Modelos instalados (flechas + ENTER, ESC para cancelar):\n")
 
                 for idx, option in enumerate(options):
@@ -145,7 +238,7 @@ def select_model_interactive(installed_models: List[str]) -> str:
                     return ""
 
         # Fallback no-Windows o terminal sin msvcrt
-        print("Modelos instalados (detectados con `ollama list`):")
+        print("Modelos instalados (detectados con API local o `lms ls`):")
         for idx, model_name in enumerate(installed_models, start=1):
             print(f"  {idx}. {model_name}")
         print("  0. Introducir tag manualmente")
@@ -166,7 +259,7 @@ def select_model_interactive(installed_models: List[str]) -> str:
             except ValueError:
                 print("❌ Introduce un número válido.")
 
-    manual_tag = input("Introduce el tag del modelo de Ollama: ").strip()
+    manual_tag = input("Introduce el id/tag del modelo cargado en LM Studio: ").strip()
     return manual_tag
 
 
@@ -260,18 +353,56 @@ def contains_any_keyword(response_text: str, keywords: List[str]) -> bool:
     return any(normalize_text(keyword) in normalized_response for keyword in keywords)
 
 
-def validate_response(label: str, response_text: str) -> Tuple[bool, str]:
-    if not response_text or not response_text.strip():
+def parse_structured_response(response_payload: str | Dict[str, object] | VLMStructuredResponse) -> Dict[str, object]:
+    if isinstance(response_payload, VLMStructuredResponse):
+        parsed = response_payload.model_dump()
+    elif isinstance(response_payload, dict):
+        parsed = response_payload
+    else:
+        parsed = json.loads(response_payload)
+
+    if not isinstance(parsed, dict):
+        raise ValueError("La salida estructurada no es un objeto JSON")
+
+    required_keys = {"polyp_detected", "confidence_score", "justification"}
+    missing = required_keys - set(parsed.keys())
+    if missing:
+        raise ValueError(f"Faltan campos obligatorios en JSON: {', '.join(sorted(missing))}")
+
+    return parsed
+
+
+def validate_response(label: str, response_payload: str | Dict[str, object] | VLMStructuredResponse) -> Tuple[bool, str]:
+    if isinstance(response_payload, str) and (not response_payload or not response_payload.strip()):
         return False, (
             f"❌ Validación FALLIDA para {label}: respuesta vacía del modelo. "
             "Posibles causas: modelo sin capacidad VLM, timeout interno, "
             "o formato de entrada no aceptado por ese modelo/tag."
         )
 
-    expected_keywords = KEYWORDS_BY_LABEL[label]
-    is_valid = contains_any_keyword(response_text, expected_keywords)
+    try:
+        payload = parse_structured_response(response_payload)
+    except Exception as error:
+        return False, f"❌ Validación FALLIDA para {label}: salida JSON inválida ({error})."
+
+    justification = str(payload.get("justification", ""))
+
+    # Si la etiqueta es neutral o no tiene keywords esperadas, consideramos
+    # válida la salida cuando NO aparece ninguna keyword de gato/perro.
+    expected_keywords = KEYWORDS_BY_LABEL.get(label, [])
+    if not expected_keywords:
+        # comprobar ausencia de keywords de gato/perro
+        combined = KEYWORDS_BY_LABEL.get("cat", []) + KEYWORDS_BY_LABEL.get("dog", [])
+        if contains_any_keyword(justification, combined):
+            return False, (
+                f"❌ Validación FALLIDA para {label}: se detectaron menciones de animales "
+                "(gato/perro) en la justificación, pero se esperaba ausencia."
+            )
+        return True, f"✅ Validación OK para {label}: salida válida y no se mencionan gato/perro."
+
+    is_valid = contains_any_keyword(justification, expected_keywords)
     if is_valid:
-        return True, f"✅ Validación OK para {label}: se detectó keyword esperada."
+        return True, f"✅ Validación OK para {label}: JSON válido y justificación alineada con keywords esperadas."
 
     joined_keywords = ", ".join(expected_keywords)
     return False, (
@@ -281,13 +412,13 @@ def validate_response(label: str, response_text: str) -> Tuple[bool, str]:
 
 
 def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
-    print("\n=== TAREA 4: SMOKE TEST VLM (OLLAMA) ===")
+    print("\n=== TAREA 4: SMOKE TEST VLM (LM STUDIO) ===")
     print(f"👉 Modelo objetivo: {model_tag}")
 
     print("\n1. Inicializando VLMLoader...")
     loader = VLMLoader(model_path=model_tag, verbose=True)
 
-    print("2. Precargando modelo en Ollama...")
+    print("2. Validando modelo en LM Studio...")
     start_time = time.time()
     loader.preload_model()
     print(f"✅ Modelo precargado en {time.time() - start_time:.2f} s")
@@ -304,8 +435,11 @@ def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
             print(f"\n--- Caso: {case_id.upper()} ({label.upper()}) ---")
             print(f"Imagen: {image_path}")
             response = loader.inference(image_path, PROMPT)
-            print("Respuesta del modelo:")
-            print(response)
+            print("Respuesta estructurada del modelo:")
+            if isinstance(response, VLMStructuredResponse):
+                print(response.model_dump_json(indent=2, ensure_ascii=False))
+            else:
+                print(response)
 
             valid, message = validate_response(label, response)
             print(message)
@@ -339,8 +473,8 @@ def resolve_model(model_arg: str | None, interactive: bool) -> str:
 
     if not installed_models:
         raise RuntimeError(
-            "No se detectaron modelos instalados con `ollama list`. "
-            "Instala uno o usa --interactive/--model_path."
+            "No se detectaron modelos disponibles en LM Studio. "
+            "Carga uno en LM Studio o usa --interactive/--model_path."
         )
 
     selected_model = installed_models[0]
@@ -362,12 +496,12 @@ def main(model_path: str | None = None, interactive: bool = False) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Smoke Test VLM (2 imágenes + validación automática)")
+    parser = argparse.ArgumentParser(description="Smoke Test VLM LM Studio (4 imágenes + validación automática)")
     parser.add_argument(
         "--model_path",
         type=str,
         default=None,
-        help="Tag del modelo en Ollama (compatibilidad con scripts existentes)",
+        help="ID/tag del modelo disponible en LM Studio (compatibilidad con scripts existentes)",
     )
     parser.add_argument(
         "--interactive",

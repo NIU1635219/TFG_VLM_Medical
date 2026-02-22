@@ -1,124 +1,183 @@
 import pytest
-from unittest.mock import MagicMock, patch, ANY
-from src.inference.vlm_runner import VLMLoader
+from unittest.mock import MagicMock, mock_open, patch
+from src.inference.vlm_runner import VLMLoader, VLMStructuredResponse
 
 # Constants
 FAKE_MODEL_TAG = "fake-model:latest"
 FAKE_IMAGE_PATH = "data/raw/fake_image.jpg"
 
 @pytest.fixture
-def mock_ollama():
-    with patch("src.inference.vlm_runner.ollama") as mock:
-        yield mock
+def mock_lms_sdk():
+    with patch("src.inference.vlm_runner.lms") as mock_lms:
+        mock_model = MagicMock()
+        mock_client = MagicMock()
+        mock_client.llm.model.return_value = mock_model
+        mock_lms.Client.return_value = mock_client
+        mock_lms.llm.return_value = mock_model
+
+        loaded_model = MagicMock()
+        loaded_model.key = FAKE_MODEL_TAG
+        mock_lms.list_loaded_models.return_value = [loaded_model]
+
+        yield mock_lms, mock_model
 
 @pytest.fixture
-def loader(mock_ollama):
-    # Setup default behavior for ollama module if needed
+def loader(mock_lms_sdk):
+    _mock_lms, _mock_model = mock_lms_sdk
     return VLMLoader(model_path=FAKE_MODEL_TAG, verbose=True)
 
 def test_init_sets_attributes():
-    loader = VLMLoader(model_path=FAKE_MODEL_TAG)
-    assert loader.model_tag == FAKE_MODEL_TAG
-    assert loader.verbose is False
+    with patch("src.inference.vlm_runner.lms"):
+        instance = VLMLoader(model_path=FAKE_MODEL_TAG)
+        assert instance.model_tag == FAKE_MODEL_TAG
+        assert instance.verbose is False
 
-def test_load_model_checks_list(loader, mock_ollama):
-    # Mock list response
-    # Ollama list returns an object with 'models' attribute which is a list of objects with 'model' attribute
-    mock_model = MagicMock()
-    mock_model.model = FAKE_MODEL_TAG
-    
-    mock_response = MagicMock()
-    mock_response.models = [mock_model]
-    
-    mock_ollama.list.return_value = mock_response
 
+def test_init_accepts_optional_host_and_token():
+    with patch("src.inference.vlm_runner.lms"):
+        instance = VLMLoader(
+            model_path=FAKE_MODEL_TAG,
+            server_api_host="localhost:1234",
+            api_token="secret-token",
+        )
+        assert instance.server_api_host == "localhost:1234"
+        assert instance.api_token == "secret-token"
+
+def test_load_model_creates_lms_model_handle(loader, mock_lms_sdk):
+    mock_lms, _mock_model = mock_lms_sdk
     loader.load_model()
-    
-    # Verify list called
-    mock_ollama.list.assert_called_once()
-    # Verify pull NOT called because model exists
-    mock_ollama.pull.assert_not_called()
+    mock_lms.Client.assert_called_once()
+    mock_lms.Client.return_value.llm.model.assert_called_once_with(FAKE_MODEL_TAG)
 
-def test_load_model_pulls_if_missing(loader, mock_ollama):
-    # Mock list response checks (empty or different model)
-    mock_model = MagicMock()
-    mock_model.model = "other-model:latest"
-    
+
+def test_load_model_raises_if_sdk_fails(loader, mock_lms_sdk):
+    mock_lms, _mock_model = mock_lms_sdk
+    mock_lms.Client.side_effect = RuntimeError("client-boom")
+    mock_lms.llm.side_effect = RuntimeError("boom")
+    mock_lms.llm.load.side_effect = RuntimeError("boom-fallback")
+    with pytest.raises(RuntimeError):
+        loader.load_model()
+
+
+def test_inference_returns_typed_structured_response(loader, mock_lms_sdk):
+    _mock_lms, mock_model = mock_lms_sdk
+    mock_model.respond.return_value = '{"polyp_detected": false, "confidence_score": 91, "justification": "No se observan pólipos."}'
+
+    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
+        result = loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba")
+
+    assert isinstance(result, VLMStructuredResponse)
+    assert result.polyp_detected is False
+    assert result.confidence_score == 91
+
+
+def test_inference_uses_parsed_when_available(loader, mock_lms_sdk):
+    _mock_lms, mock_model = mock_lms_sdk
     mock_response = MagicMock()
-    mock_response.models = [mock_model]
-    
-    mock_ollama.list.return_value = mock_response
-
-    loader.load_model()
-    
-    # Verify pull called
-    mock_ollama.pull.assert_called_once_with(FAKE_MODEL_TAG, stream=True)
-
-def test_inference_calls_chat(loader, mock_ollama):
-    # Setup mock chat response
-    mock_ollama.chat.return_value = {
-        'message': {'content': 'Descripción de prueba'}
+    mock_response.parsed = {
+        "polyp_detected": False,
+        "confidence_score": 92,
+        "justification": "Sin pólipos.",
     }
-    
-    with patch("os.path.exists", return_value=True):
-        result = loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba")
-    
-    assert result == "Descripción de prueba"
-    
-    # Verify chat call arguments
-    mock_ollama.chat.assert_called_once()
-    call_args = mock_ollama.chat.call_args
-    assert call_args.kwargs['model'] == FAKE_MODEL_TAG
-    messages = call_args.kwargs['messages']
-    assert len(messages) == 2 # System + User
-    assert messages[0]['role'] == 'system'
-    assert messages[1]['role'] == 'user'
-    assert messages[1]['content'] == "Prompt de prueba"
-    assert messages[1]['images'] == [FAKE_IMAGE_PATH]
+    mock_model.respond.return_value = mock_response
 
-
-def test_inference_supports_object_response(loader, mock_ollama):
-    mock_message = MagicMock()
-    mock_message.content = "Respuesta objeto"
-
-    mock_response = MagicMock()
-    mock_response.message = mock_message
-
-    mock_ollama.chat.return_value = mock_response
-
-    with patch("os.path.exists", return_value=True):
+    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
         result = loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba")
 
-    assert result == "Respuesta objeto"
+    assert isinstance(result, VLMStructuredResponse)
+    assert result.confidence_score == 92
+
+
+def test_inference_uses_chat_history_with_images(loader, mock_lms_sdk):
+    mock_lms, mock_model = mock_lms_sdk
+    mock_model.respond.return_value = '{"polyp_detected": false, "confidence_score": 75, "justification": "Sin pólipos."}'
+
+    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
+        loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba", temperature=0.5)
+
+    first_call_kwargs = mock_model.respond.call_args_list[0].kwargs
+    first_call_args = mock_model.respond.call_args_list[0].args
+
+    assert len(first_call_args) == 1
+    chat_payload = first_call_args[0]
+    assert chat_payload is mock_lms.Chat.return_value
+    mock_lms.Chat.assert_called_once()
+    mock_lms.Chat.return_value.add_user_message.assert_called_once()
+    add_args = mock_lms.Chat.return_value.add_user_message.call_args
+    assert add_args.args[0]
+    assert add_args.kwargs.get("images")
+    assert first_call_kwargs.get("config") == {"temperature": 0.5}
+    assert first_call_kwargs.get("response_format") is VLMStructuredResponse
+
+
+def test_inference_retries_with_temperature_when_config_not_supported(loader, mock_lms_sdk):
+    _mock_lms, mock_model = mock_lms_sdk
+
+    def fake_respond(*args, **kwargs):
+        if "config" in kwargs:
+            raise TypeError("LLM.respond() got an unexpected keyword argument 'config'")
+        if "temperature" in kwargs:
+            return '{"polyp_detected": false, "confidence_score": 80, "justification": "Sin hallazgos."}'
+        return '{"polyp_detected": false, "confidence_score": 80, "justification": "Sin hallazgos."}'
+
+    mock_model.respond.side_effect = fake_respond
+
+    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
+        result = loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba", temperature=0.3)
+
+    assert isinstance(result, VLMStructuredResponse)
+    assert mock_model.respond.call_count == 2
+    assert mock_model.respond.call_args_list[0].kwargs.get("config") == {"temperature": 0.3}
+    assert mock_model.respond.call_args_list[1].kwargs.get("temperature") == 0.3
+    assert mock_model.respond.call_args_list[1].kwargs.get("response_format") is VLMStructuredResponse
+
+
+def test_inference_retries_without_temperature_when_not_supported(loader, mock_lms_sdk):
+    _mock_lms, mock_model = mock_lms_sdk
+
+    def fake_respond(*args, **kwargs):
+        if "config" in kwargs:
+            raise TypeError("LLM.respond() got an unexpected keyword argument 'config'")
+        if "temperature" in kwargs:
+            raise TypeError("LLM.respond() got an unexpected keyword argument 'temperature'")
+        return '{"polyp_detected": false, "confidence_score": 80, "justification": "Sin hallazgos."}'
+
+    mock_model.respond.side_effect = fake_respond
+
+    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
+        result = loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba", temperature=0.3)
+
+    assert isinstance(result, VLMStructuredResponse)
+    assert mock_model.respond.call_count == 3
+    assert mock_model.respond.call_args_list[0].kwargs.get("config") == {"temperature": 0.3}
+    assert mock_model.respond.call_args_list[1].kwargs.get("temperature") == 0.3
+    assert mock_model.respond.call_args_list[2].kwargs.get("response_format") is VLMStructuredResponse
 
 def test_inference_raises_file_not_found(loader):
-    with patch("os.path.exists", return_value=False):
+    with patch("os.path.isfile", return_value=False):
         with pytest.raises(FileNotFoundError):
             loader.inference("ghost.jpg", "Prompt")
 
 
-def test_preload_model_warms_with_keep_alive(loader, mock_ollama):
-    mock_model = MagicMock()
-    mock_model.model = FAKE_MODEL_TAG
-    mock_response = MagicMock()
-    mock_response.models = [mock_model]
-    mock_ollama.list.return_value = mock_response
-    mock_ollama.chat.return_value = {'message': {'content': 'ok'}}
+def test_preload_model_warms_up(loader, mock_lms_sdk):
+    _mock_lms, mock_model = mock_lms_sdk
+    mock_model.respond.return_value = "ok"
 
     loader.preload_model(keep_alive="10m")
 
-    assert mock_ollama.chat.call_count == 1
-    chat_kwargs = mock_ollama.chat.call_args.kwargs
-    assert chat_kwargs["model"] == FAKE_MODEL_TAG
-    assert chat_kwargs["keep_alive"] == "10m"
+    assert mock_model.respond.call_count >= 1
 
 
-def test_unload_model_requests_keep_alive_zero(loader, mock_ollama):
-    mock_ollama.chat.return_value = {'message': {'content': 'ok'}}
-
+def test_unload_model_noop(loader):
+    loader.load_model()
     loader.unload_model()
+    assert loader._loaded_model is None
 
-    mock_ollama.chat.assert_called_once()
-    chat_kwargs = mock_ollama.chat.call_args.kwargs
-    assert chat_kwargs["model"] == FAKE_MODEL_TAG
-    assert chat_kwargs["keep_alive"] == 0
+
+def test_inference_raises_when_json_is_invalid(loader, mock_lms_sdk):
+    _mock_lms, mock_model = mock_lms_sdk
+    mock_model.respond.return_value = "texto no json"
+
+    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
+        with pytest.raises(RuntimeError):
+            loader.inference(FAKE_IMAGE_PATH, "Prompt")

@@ -5,21 +5,12 @@ import setup_env
 
 def test_is_model_installed_does_not_mix_8b_and_latest():
     installed = ["qwen3-vl:latest"]
-    assert setup_env.is_model_installed("qwen3-vl:8b", installed) is False
+    assert setup_env.lms_menu_helpers.is_model_installed("qwen3-vl:8b", installed) is False
 
 
 def test_is_model_installed_accepts_latest_alias_without_tag():
     installed = ["qwen3-vl:latest"]
-    assert setup_env.is_model_installed("qwen3-vl", installed) is True
-
-
-def test_get_manageable_models_keeps_distinct_tags():
-    installed = ["qwen3-vl:latest", "qwen3-vl:8b"]
-    entries = setup_env.get_manageable_models(installed)
-    tags = [entry["model_tag"] for entry in entries]
-
-    assert "qwen3-vl:8b" in tags
-    assert "qwen3-vl:latest" in tags
+    assert setup_env.lms_menu_helpers.is_model_installed("qwen3-vl", installed) is True
 
 
 def test_wait_for_any_key_windows_uses_getch(monkeypatch):
@@ -127,3 +118,49 @@ def test_interactive_menu_hides_description_when_missing(monkeypatch, capsys):
     output = capsys.readouterr().out
 
     assert "Descripción:" not in output
+
+
+def test_stop_lms_server_if_owned_only_stops_when_started(monkeypatch):
+    calls = {"stop": 0}
+
+    def fake_stop_server():
+        calls["stop"] += 1
+        return True
+
+    monkeypatch.setattr(setup_env.lms_models, "stop_server", fake_stop_server)
+    monkeypatch.setattr(setup_env, "log", lambda *args, **kwargs: None)
+
+    setup_env.LMS_SERVER_STARTED_BY_THIS_SESSION = False
+    setup_env.stop_lms_server_if_owned()
+    assert calls["stop"] == 0
+
+    setup_env.LMS_SERVER_STARTED_BY_THIS_SESSION = True
+    setup_env.stop_lms_server_if_owned()
+    assert calls["stop"] == 1
+
+
+def test_main_wraps_show_menu_with_server_lifecycle(monkeypatch):
+    calls = {"start": 0, "show": 0, "stop": 0}
+
+    monkeypatch.setattr(setup_env.os.path, "exists", lambda *_: True)
+    monkeypatch.setattr(setup_env.os.path, "samefile", lambda *_: True)
+
+    def fake_start():
+        calls["start"] += 1
+        return True
+
+    def fake_show():
+        calls["show"] += 1
+
+    def fake_stop():
+        calls["stop"] += 1
+
+    monkeypatch.setattr(setup_env, "ensure_lms_server_running", fake_start)
+    monkeypatch.setattr(setup_env, "show_menu", fake_show)
+    monkeypatch.setattr(setup_env, "stop_lms_server_if_owned", fake_stop)
+
+    setup_env.main()
+
+    assert calls["start"] == 1
+    assert calls["show"] == 1
+    assert calls["stop"] == 1

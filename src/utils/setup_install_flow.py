@@ -10,7 +10,16 @@ from typing import Any
 
 
 def perform_install(*, ctx: dict[str, Any], full_reinstall: bool = False) -> None:
-    """Flujo de instalación inicial o reseteo de fábrica."""
+    """
+    Ejecuta el flujo de instalación inicial o reinstalación completa del entorno.
+    
+    Gestiona la creación de `.venv`, la instalación de `uv`, y la sincronización 
+    de dependencias base y de GPU/CPU según detección.
+    
+    Args:
+        ctx (dict): Contexto de ejecución con herramientas inyectadas.
+        full_reinstall (bool, optional): Si True, elimina el entorno virtual existente antes.
+    """
     log = ctx["log"]
     create_project_structure = ctx["create_project_structure"]
     check_uv = ctx["check_uv"]
@@ -73,7 +82,15 @@ def perform_install(*, ctx: dict[str, Any], full_reinstall: bool = False) -> Non
 
 
 def show_menu(*, ctx: dict[str, Any]) -> None:
-    """Bucle principal del menú."""
+    """
+    Despliega el menú principal interactivo de la herramienta de setup.
+    
+    Ofrece opciones para diagnóstico, gestión de modelos/tests, reinstalación 
+    y regeneración de estructura.
+    
+    Args:
+        ctx (dict): Contexto de aplicación.
+    """
     MenuItem = ctx["MenuItem"]
     Style = ctx["Style"]
     print_banner = ctx["print_banner"]
@@ -134,7 +151,19 @@ def show_menu(*, ctx: dict[str, Any]) -> None:
 
 
 def main(*, ctx: dict[str, Any]) -> None:
-    """Entrypoint principal con bootstrap de venv y lifecycle de server LMS."""
+    """
+    Punto de entrada principal del script de configuración.
+    
+    Se encarga de:
+    1. Detectar si corre dentro del entorno virtual `.venv`.
+    2. Si no, intenta crearlo, instalar dependencias y relanzarse dentro de él.
+    3. Una vez en `.venv`, asegura que el servidor LM Studio esté corriendo.
+    4. Muestra el menú principal.
+    5. Limpia procesos (servidor LMS) al salir.
+    
+    Args:
+        ctx (dict): Contexto global de dependencias.
+    """
     os_module = ctx["os"]
     sys_module = ctx["sys"]
     subprocess_module = ctx["subprocess"]

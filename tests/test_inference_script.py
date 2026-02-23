@@ -15,9 +15,10 @@ from src.scripts.test_inference import (
 
 
 def test_parse_lms_ls_output_extracts_model_tags():
+    """Verifica la extracción correcta de tags de modelos desde la salida tabular de `lms ls`."""
     raw = (
         "MODEL                                SIZE      MODIFIED\n"
-        "openbmb/minicpm-v4.5:8b              4.8 GB    2 hours ago\n"
+        "openbmb/minicpm-v4.5:8b              4.8 GB    2 hours ago\n" 
         "qwen3-vl:latest                      5.1 GB    1 day ago\n"
     )
     models = parse_lms_ls_output(raw)
@@ -25,15 +26,18 @@ def test_parse_lms_ls_output_extracts_model_tags():
 
 
 def test_normalize_text_removes_accents_and_lowercases():
+    """Valida que la normalización elimine acentos y convierta a minúsculas."""
     assert normalize_text("GatÓ PERRÓ") == "gato perro"
 
 
 def test_contains_any_keyword_with_variants():
+    """Prueba que se detecten palabras clave dentro de un texto, con normalización."""
     response = "En la imagen aparece claramente un felino doméstico."
     assert contains_any_keyword(response, ["gato", "felino"]) is True
 
 
 def test_validate_response_by_label_success_and_fail():
+    """Confirma que `validate_response` distinga aciertos y fallos basándose en keywords."""
     ok, _ = validate_response(
         "cat",
         '{"polyp_detected": false, "confidence_score": 74, "justification": "La imagen muestra un gato sobre una silla."}',
@@ -49,17 +53,20 @@ def test_validate_response_by_label_success_and_fail():
 
 
 def test_validate_response_empty_output_has_clear_message():
+    """Asegura que una respuesta vacía del modelo genere un mensaje de error claro."""
     fail, message = validate_response("cat", "")
     assert fail is False
     assert "respuesta vacía" in message
 
 
 def test_parse_structured_response_requires_fields():
+    """Verifica que se lance ValueError si faltan campos obligatorios en el JSON."""
     with pytest.raises(ValueError):
         parse_structured_response('{"polyp_detected": false}')
 
 
 def test_parse_structured_response_accepts_typed_payload():
+    """Comprueba que `parse_structured_response` acepte directamente objetos Pydantic/dataclass."""
     payload = VLMStructuredResponse(
         polyp_detected=False,
         confidence_score=90,
@@ -71,17 +78,20 @@ def test_parse_structured_response_accepts_typed_payload():
 
 
 def test_resolve_model_non_interactive_uses_first_detected(monkeypatch):
+    """Prueba que, en modo no interactivo, se seleccione el primer modelo disponible."""
     monkeypatch.setattr("src.scripts.test_inference.get_installed_models", lambda: ["model-a", "model-b"])
     assert resolve_model(model_arg=None, interactive=False) == "model-a"
 
 
 def test_resolve_model_non_interactive_fails_without_models(monkeypatch):
+    """Valida que se lance error si no hay modelos y no se permite interacción."""
     monkeypatch.setattr("src.scripts.test_inference.get_installed_models", lambda: [])
     with pytest.raises(RuntimeError):
         resolve_model(model_arg=None, interactive=False)
 
 
 def test_test_cases_has_multiple_images_and_neutral_names():
+    """Verifica la integridad y variedad de los casos de prueba (smoke tests)."""
     assert len(TEST_CASES) >= 4
 
     labels = [case["label"] for case in TEST_CASES]
@@ -95,6 +105,7 @@ def test_test_cases_has_multiple_images_and_neutral_names():
 
 
 def test_run_smoke_test_preloads_once_and_unloads_once(monkeypatch):
+    """Confirma que el ciclo de vida del modelo (cargar -> inferencias -> descargar) sea correcto."""
     calls = {"preload": 0, "inference": 0, "unload": 0}
 
     class FakeLoader:
@@ -127,6 +138,7 @@ def test_run_smoke_test_preloads_once_and_unloads_once(monkeypatch):
 
 
 def test_run_smoke_test_unloads_even_if_inference_fails(monkeypatch):
+    """Asegura que el modelo se descargue (unload) incluso si ocurre una excepción durante la inferencia."""
     calls = {"preload": 0, "unload": 0}
 
     class FakeLoader:
@@ -152,6 +164,7 @@ def test_run_smoke_test_unloads_even_if_inference_fails(monkeypatch):
 
 
 def test_run_smoke_test_executes_model_load_unload_cycle(monkeypatch):
+    """Verifica nuevamente el ciclo de carga/descarga en un escenario simple."""
     calls = {"load": 0, "unload": 0, "inference": 0}
 
     class FakeLoader:

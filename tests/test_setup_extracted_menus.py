@@ -12,6 +12,7 @@ class _DummyStyle:
 
 
 def test_setup_env_wrappers_delegate_to_extracted_modules(monkeypatch):
+    """Verifica que los wrappers en `setup_env` deleguen correctamente a los módulos extraídos."""
     calls = {"tests": 0, "reinstall": 0}
 
     def fake_tests(*, ctx):
@@ -35,6 +36,7 @@ def test_setup_env_wrappers_delegate_to_extracted_modules(monkeypatch):
 
 
 def test_setup_tests_ui_run_all_executes_pytest_command():
+    """Valida que la opción 'Run All Unit Tests' ejecute el comando `pytest tests/`."""
     run_cmd_calls = []
     waits = {"count": 0}
     screens = {"count": 0}
@@ -71,19 +73,20 @@ def test_setup_tests_ui_run_all_executes_pytest_command():
 
 
 def test_setup_reinstall_ui_core_selection_installs_and_restarts():
+    """Confirma que seleccionar librerías core desencadene instalación y reinicio del programa."""
     fix_libs_calls = []
     fix_uv_calls = {"count": 0}
     restart_calls = {"count": 0}
     waits = {"count": 0}
-
-    def fix_uv():
-        fix_uv_calls["count"] += 1
 
     def interactive_menu(options, **kwargs):
         assert kwargs.get("menu_id") == "reinstall_menu"
         core_child = options[0].children[0]
         uv_option = options[1]
         return [core_child, uv_option]
+
+    def fix_uv():
+        fix_uv_calls["count"] += 1
 
     ctx = {
         "Style": _DummyStyle,
@@ -108,6 +111,7 @@ def test_setup_reinstall_ui_core_selection_installs_and_restarts():
 
 
 def test_setup_reinstall_ui_no_selection_does_nothing():
+    """Asegura que si no se selecciona nada en el menú de reinstalación, no se ejecuten acciones."""
     calls = {"fix_libs": 0, "fix_uv": 0, "restart": 0, "wait": 0}
 
     ctx = {
@@ -130,6 +134,7 @@ def test_setup_reinstall_ui_no_selection_does_nothing():
 
 
 def test_setup_tests_ui_run_specific_cancel_returns_without_command():
+    """Valida que cancelar la selección de un test específico no ejecute ningún comando."""
     run_cmd_calls = []
     menu_calls = {"tests": 0, "specific": 0}
 
@@ -167,6 +172,7 @@ def test_setup_tests_ui_run_specific_cancel_returns_without_command():
 
 
 def test_setup_tests_ui_run_specific_executes_selected_file():
+    """Comprueba que seleccionar un archivo de test específico lance el comando `pytest` correcto."""
     run_cmd_calls = []
     waits = {"count": 0}
     menu_calls = {"tests": 0, "specific": 0}
@@ -207,6 +213,7 @@ def test_setup_tests_ui_run_specific_executes_selected_file():
 
 
 def test_setup_tests_ui_smoke_without_models_warns_and_returns():
+    """Asegura que el smoke test avise si no hay modelos instalados y no intente ejecutarse."""
     warns = []
     waits = {"count": 0}
     menu_calls = {"tests": 0}
@@ -245,6 +252,7 @@ def test_setup_tests_ui_smoke_without_models_warns_and_returns():
 
 
 def test_setup_reinstall_ui_uv_only_does_not_restart_or_install_core():
+    """Valida que reinstalar solo 'uv' no requiera reinstalar librerías core ni reiniciar."""
     calls = {"fix_libs": 0, "fix_uv": 0, "restart": 0, "wait": 0}
 
     def interactive_menu(options, **kwargs):
@@ -275,6 +283,7 @@ def test_setup_reinstall_ui_uv_only_does_not_restart_or_install_core():
 
 
 def test_setup_tests_ui_smoke_import_error_logs_and_recovers(monkeypatch):
+    """Comprueba que errores de importación en el script de smoke test sean manejados suavemente."""
     errors = []
     waits = {"count": 0}
     menu_calls = {"tests": 0, "smoke_model": 0}
@@ -323,6 +332,7 @@ def test_setup_tests_ui_smoke_import_error_logs_and_recovers(monkeypatch):
 
 
 def test_setup_reinstall_ui_multiple_core_libs_grouped_once_and_restart():
+    """Confirma que múltiples librerías core se agrupen en una sola llamada de instalación."""
     fix_libs_calls = []
     restart_calls = {"count": 0}
 
@@ -352,6 +362,7 @@ def test_setup_reinstall_ui_multiple_core_libs_grouped_once_and_restart():
 
 
 def test_setup_tests_ui_main_menu_back_exits_immediately():
+    """Valida la salida inmediata del menú de tests al seleccionar 'BACK'."""
     calls = {"count": 0}
 
     def interactive_menu(options, **kwargs):
@@ -379,6 +390,7 @@ def test_setup_tests_ui_main_menu_back_exits_immediately():
 
 
 def test_setup_tests_ui_empty_list_choice_is_safe_and_exits_next_loop():
+    """Prueba que una selección vacía (lista vacía) no rompa el bucle del menú."""
     menu_calls = {"count": 0}
 
     def interactive_menu(options, **kwargs):
@@ -409,6 +421,7 @@ def test_setup_tests_ui_empty_list_choice_is_safe_and_exits_next_loop():
 
 
 def test_setup_tests_ui_non_action_choice_does_not_crash():
+    """Asegura que seleccionar un item sin acción definida no provoque errores."""
     menu_calls = {"count": 0}
 
     def interactive_menu(options, **kwargs):
@@ -439,6 +452,7 @@ def test_setup_tests_ui_non_action_choice_does_not_crash():
 
 
 def test_setup_tests_ui_run_specific_without_files_warns_and_returns():
+    """Valida que si no hay archivos de tests para ejecución específica, se avise al usuario."""
     warns = []
     sleeps = {"count": 0}
     menu_calls = {"tests": 0}
@@ -476,6 +490,7 @@ def test_setup_tests_ui_run_specific_without_files_warns_and_returns():
 
 
 def test_setup_tests_ui_smoke_model_selector_cancel_returns_cleanly():
+    """Verifica que cancelar el selector de modelo para el smoke test retorne limpiamente."""
     waits = {"count": 0}
     menu_calls = {"tests": 0, "smoke": 0}
 
@@ -512,6 +527,7 @@ def test_setup_tests_ui_smoke_model_selector_cancel_returns_cleanly():
 
 
 def test_setup_tests_ui_smoke_empty_model_tag_then_cancel():
+    """Valida el manejo de una selección de modelo vacía o inválida en el smoke test."""
     warns = []
     waits = {"count": 0}
     menu_calls = {"tests": 0, "smoke": 0}
@@ -555,6 +571,7 @@ def test_setup_tests_ui_smoke_empty_model_tag_then_cancel():
 
 
 def test_setup_reinstall_ui_empty_selection_list_behaves_like_cancel():
+    """Comprueba que una lista de selección vacía en reinstalación se comporte como cancelar."""
     calls = {"fix_libs": 0, "fix_uv": 0, "restart": 0, "wait": 0}
 
     ctx = {

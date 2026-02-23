@@ -6,7 +6,15 @@ from typing import Any
 
 
 def reinstall_library_menu(*, ctx: dict[str, Any]) -> None:
-    """Menú manual para forzar reinstalaciones limpias."""
+    """
+    Despliega el menú para la reinstalación manual de librerías y herramientas.
+    
+    Permite seleccionar dependencias individuales para forzar su reinstalación limpia
+    mediante `uv`.
+    
+    Args:
+        ctx (dict): Contexto de aplicación.
+    """
     Style = ctx["Style"]
     MenuItem = ctx["MenuItem"]
     REQUIRED_LIBS = ctx["REQUIRED_LIBS"]

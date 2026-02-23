@@ -35,7 +35,7 @@ PROMPT = (
     "Identifica el animal principal de la imagen y responde en español. "
     "Incluye primero la clase del animal y luego una breve descripción."
 )
-TEST_IMAGES_DIR = "data/raw/smoke_test"
+TEST_IMAGES_DIR = "data/smoke_test"
 
 TEST_CASES = [
     {
@@ -98,6 +98,15 @@ KEYWORDS_BY_LABEL = {
 
 
 def parse_lms_ls_output(raw_output: str) -> List[str]:
+    """
+    Analiza la salida cruda del comando 'lms ls' y extrae identificadores de modelos.
+    
+    Args:
+        raw_output (str): Salida del comando ejecutado en terminal.
+        
+    Returns:
+        List[str]: Lista de identificadores de modelos encontrados.
+    """
     lines = [line.strip() for line in raw_output.splitlines() if line.strip()]
     if not lines:
         return []
@@ -120,6 +129,17 @@ def parse_lms_ls_output(raw_output: str) -> List[str]:
 
 
 def _extract_model_key(item) -> str | None:
+    """
+    Extrae la clave o ID de un objeto de modelo de forma segura.
+    
+    Soporta extracción desde cadenas, diccionarios u objetos con atributos.
+    
+    Args:
+        item: Objeto del cual extraer el identificador.
+        
+    Returns:
+        str | None: El identificador encontrado o None si no se pudo extraer.
+    """
     if item is None:
         return None
     if isinstance(item, str):
@@ -139,6 +159,12 @@ def _extract_model_key(item) -> str | None:
 
 
 def _get_models_from_sdk() -> List[str]:
+    """
+    Obtiene la lista de modelos cargados usando el SDK de LM Studio.
+    
+    Returns:
+        List[str]: Lista de identificadores de modelos cargados.
+    """
     if lms is None:
         return []
 
@@ -148,6 +174,7 @@ def _get_models_from_sdk() -> List[str]:
             return []
 
         response = list_fn()
+
         keys: List[str] = []
 
         def collect(items):
@@ -189,7 +216,14 @@ def _get_models_from_sdk() -> List[str]:
 
 
 def get_installed_models() -> List[str]:
-    """Obtiene modelos disponibles en LM Studio (SDK primero, CLI como fallback)."""
+    """
+    Obtiene la lista de modelos disponibles en LM Studio.
+    
+    Intenta primero usar el SDK y, si falla o no devuelve nada, usa la CLI (`lms ls`).
+    
+    Returns:
+        List[str]: Lista de identificadores de modelos disponibles.
+    """
     sdk_models = _get_models_from_sdk()
     if sdk_models:
         return sdk_models
@@ -202,6 +236,18 @@ def get_installed_models() -> List[str]:
 
 
 def select_model_interactive(installed_models: List[str]) -> str:
+    """
+    Muestra un menú interactivo para seleccionar un modelo de la lista.
+    
+    Si hay modelos instalados, permite elegir uno usando las flechas.
+    También ofrece la opción de introducir manualmente el tag del modelo.
+    
+    Args:
+        installed_models (List[str]): Lista de modelos detectados.
+        
+    Returns:
+        str: El identificador del modelo seleccionado o None si se cancela.
+    """
     print("\n=== SELECCIÓN DE MODELO LM STUDIO ===")
 
     if installed_models:
@@ -264,6 +310,18 @@ def select_model_interactive(installed_models: List[str]) -> str:
 
 
 def _download_bytes_from_url(image_url: str) -> bytes:
+    """
+    Descarga el contenido binario de una URL.
+    
+    Args:
+        image_url (str): La URL del recurso a descargar.
+        
+    Returns:
+        bytes: El contenido descargado.
+        
+    Raises:
+        urllib.error.URLError: Si hay un error en la conexión.
+    """
     request = urllib.request.Request(
         image_url,
         headers={
@@ -277,7 +335,15 @@ def _download_bytes_from_url(image_url: str) -> bytes:
 
 
 def sanitize_image_file(image_path: str) -> None:
-    """Re-guarda imagen para limpiar metadatos y dejar formato uniforme."""
+    """
+    Normaliza y limpia una imagen guardada localmente.
+    
+    Abre la imagen, la convierte a RGB y la vuelve a guardar como JPEG
+    para eliminar metadatos y asegurar un formato estándar.
+    
+    Args:
+        image_path (str): Ruta al archivo de imagen.
+    """
     if Image is None:
         return
 
@@ -287,7 +353,19 @@ def sanitize_image_file(image_path: str) -> None:
 
 
 def download_image_if_missing(image_path: str, image_urls: List[str]) -> None:
-    """Descarga imagen desde lista de URLs fallback si no existe localmente."""
+    """
+    Descarga una imagen desde una lista de URLs de respaldo si no existe localmente.
+    
+    Intenta descargar secuencialmente desde la lista de URLs hasta tener éxito.
+    Verifica que el archivo descargado tenga un tamaño mínimo válido.
+    
+    Args:
+        image_path (str): Ruta local donde guardar la imagen.
+        image_urls (List[str]): Lista de URLs desde donde intentar la descarga.
+        
+    Raises:
+        RuntimeError: Si no se puede descargar la imagen desde ninguna URL.
+    """
     if os.path.exists(image_path):
         try:
             if os.path.getsize(image_path) >= 1024:
@@ -326,7 +404,14 @@ def download_image_if_missing(image_path: str, image_urls: List[str]) -> None:
 
 
 def ensure_test_images() -> List[Dict[str, str]]:
-    """Asegura disponibilidad local de múltiples imágenes con nombres neutros."""
+    """
+    Asegura que todas las imágenes de prueba necesarias están disponibles localmente.
+    
+    Itera sobre los casos de prueba definidos y descarga las imágenes faltantes.
+    
+    Returns:
+        List[Dict[str, str]]: Lista de casos de prueba resueltos con rutas locales válidas.
+    """
     resolved_cases: List[Dict[str, str]] = []
     for case in TEST_CASES:
         image_path = case["path"]
@@ -343,17 +428,51 @@ def ensure_test_images() -> List[Dict[str, str]]:
 
 
 def normalize_text(text: str) -> str:
+    """
+    Normaliza texto eliminando acentos y convirtiendo a minúsculas.
+    
+    Args:
+        text (str): El texto de entrada.
+        
+    Returns:
+        str: Texto normalizado (NFD, sin diacríticos, lowercase).
+    """
     normalized = unicodedata.normalize("NFD", text)
     without_accents = "".join(char for char in normalized if unicodedata.category(char) != "Mn")
     return without_accents.lower().strip()
 
 
 def contains_any_keyword(response_text: str, keywords: List[str]) -> bool:
+    """
+    Verifica si alguna de las palabras clave aparece en el texto.
+    
+    Args:
+        response_text (str): Texto donde buscar.
+        keywords (List[str]): Lista de palabras clave a buscar.
+        
+    Returns:
+        bool: True si alguna keyword está presente, False en caso contrario.
+    """
     normalized_response = normalize_text(response_text)
     return any(normalize_text(keyword) in normalized_response for keyword in keywords)
 
 
 def parse_structured_response(response_payload: str | Dict[str, object] | VLMStructuredResponse) -> Dict[str, object]:
+    """
+    Convierte la respuesta del modelo VLM en un diccionario uniforme.
+    
+    Acepta objetos VLMStructuredResponse, diccionarios o cadenas JSON.
+    Valida que contenga los campos requeridos.
+    
+    Args:
+        response_payload: Respuesta cruda del modelo.
+        
+    Returns:
+        Dict[str, object]: Diccionario con los datos analizados.
+        
+    Raises:
+        ValueError: Si el formato es inválido o faltan campos obligatorios.
+    """
     if isinstance(response_payload, VLMStructuredResponse):
         parsed = response_payload.model_dump()
     elif isinstance(response_payload, dict):
@@ -373,6 +492,19 @@ def parse_structured_response(response_payload: str | Dict[str, object] | VLMStr
 
 
 def validate_response(label: str, response_payload: str | Dict[str, object] | VLMStructuredResponse) -> Tuple[bool, str]:
+    """
+    Valida si la respuesta del modelo es correcta para la etiqueta dada.
+    
+    Verifica que la respuesta no sea vacía, que sea un JSON válido y que
+    la justificación contenga (o no) palabras clave según lo esperado.
+    
+    Args:
+        label (str): La etiqueta esperada (ej. 'cat', 'dog', 'none').
+        response_payload: La respuesta devuelta por el modelo.
+        
+    Returns:
+        Tuple[bool, str]: (Success, Mensaje descriptivo del resultado).
+    """
     if isinstance(response_payload, str) and (not response_payload or not response_payload.strip()):
         return False, (
             f"❌ Validación FALLIDA para {label}: respuesta vacía del modelo. "

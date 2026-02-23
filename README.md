@@ -30,15 +30,24 @@ Dependencias declaradas en `pyproject.toml`.
 
 ```text
 .
+├── .venv/
 ├── data/
 │   ├── raw/
-│   └── processed/
+│   ├── processed/
+│   └── smoke_test/
+├── notebooks/
+│   └── 01_eda_polypsegm.ipynb
 ├── src/
 │   ├── inference/
 │   │   └── vlm_runner.py
+│   ├── preprocessing/
+│   │   └── preprocess.py
 │   ├── scripts/
 │   │   └── test_inference.py
 │   └── utils/
+│       ├── lms_menu_helpers.py
+│       ├── lms_models.py
+│       ├── setup_ui_io.py
 │       ├── setup_menu_engine.py
 │       ├── setup_models_ui.py
 │       ├── setup_tests_ui.py
@@ -46,12 +55,58 @@ Dependencias declaradas en `pyproject.toml`.
 │       ├── setup_install_flow.py
 │       └── setup_diagnostics.py
 ├── tests/
+│   ├── test_vlm_runner.py
+│   ├── test_inference_script.py
+│   ├── test_setup_env_menu.py
+│   └── test_setup_extracted_menus.py
 ├── setup_env.py
 ├── setup.bat
 ├── setup.sh
 ├── pyproject.toml
+├── uv.lock
 └── README.md
 ```
+
+## Notebooks
+
+- `notebooks/01_eda_polypsegm.ipynb`: libreta principal de EDA y preparación de datos.
+
+Incluye:
+
+- Extracción automática del dataset y comprimidos anidados (ZIP/RAR).
+- Verificación de formato, resoluciones y revisión básica de metadatos EXIF.
+- Ejecución del preprocesado completo y comparativa visual antes/después.
+
+Para abrirla:
+
+```bash
+uv run jupyter notebook
+```
+
+> Si usas VS Code, puedes abrir la libreta directamente desde el explorador del proyecto.
+
+## Preprocesado (`src/preprocessing/preprocess.py`)
+
+Script CLI para recortar bordes negros en imágenes endoscópicas usando OpenCV.
+
+### Qué hace
+
+- Detecta el contorno principal del campo visible.
+- Recorta la imagen al bounding box del contorno.
+- Guarda el resultado en `data/processed` respetando la estructura relativa.
+- Duplica automáticamente los CSV de partición (`train.csv`, `valid.csv`, `gt_test.csv`) desde `data/raw` a `data/processed`.
+
+### Ejecución
+
+```bash
+uv run python src/preprocessing/preprocess.py --input-dir data/raw --output-dir data/processed
+```
+
+Opciones útiles:
+
+- `--max-images N`: limita el número de imágenes (smoke rápido).
+- `--min-area-ratio 0.1`: umbral mínimo de área del contorno.
+- `--dry-run`: calcula recortes sin escribir archivos.
 
 ## Prerrequisitos
 
@@ -140,7 +195,7 @@ loader = VLMLoader(
 )
 
 loader.preload_model()
-result = loader.inference("data/raw/smoke_test/sample_01.jpg", "Describe la imagen")
+result = loader.inference("data/smoke_test/sample_01.jpg", "Describe la imagen")
 print(result.model_dump())
 loader.unload_model()
 ```
@@ -202,7 +257,7 @@ El backend ya aplica normalización de imagen antes de subirla. Si persiste:
 
 1. Verifica que el modelo cargado es VLM (no LLM puro).
 2. Comprueba que LM Studio está en versión compatible.
-3. Reintenta con otra imagen de prueba o vuelve a descargar `data/raw/smoke_test/*`.
+3. Reintenta con otra imagen de prueba o vuelve a descargar `data/smoke_test/*`.
 
 ### Error: `LLM.respond() got an unexpected keyword argument ...`
 

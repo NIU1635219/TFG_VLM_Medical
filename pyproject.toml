@@ -8,10 +8,12 @@ dependencies = [
     "jupyter>=1.1.1",
     "lmstudio>=1.4.0",
     "matplotlib>=3.10.8",
+    "numpy>=2.3.4",
     "opencv-python>=4.13.0.92",
     "pandas>=3.0.0",
     "pydantic>=2.11.9",
     "pillow>=12.1.1",
     "pytest>=9.0.2",
+    "rarfile>=4.2",
     "tqdm>=4.67.3",
 ]

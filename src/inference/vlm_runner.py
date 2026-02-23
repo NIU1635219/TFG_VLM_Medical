@@ -39,7 +39,18 @@ class _LMSChatHandle(Protocol):
 
 
 class VLMLoader:
-    """Gestor de carga e inferencia para modelos VLM en LM Studio."""
+    """
+    Gestor de carga e inferencia para modelos VLM (Vision-Language Models) en LM Studio.
+    
+    Esta clase facilita la interacción con la API de LM Studio para cargar modelos,
+    enviar imágenes y preguntas, y obtener respuestas estructuradas.
+    
+    Attributes:
+        model_tag (str): Identificador o ruta del modelo a cargar.
+        verbose (bool): Si es True, imprime información de depuración.
+        server_api_host (str | None): URL del servidor de la API, si es diferente al local.
+        api_token (str | None): Token de autenticación para la API, si es necesario.
+    """
 
     def __init__(
         self,
@@ -48,6 +59,18 @@ class VLMLoader:
         server_api_host: str | None = None,
         api_token: str | None = None,
     ):
+        """
+        Inicializa el cargador de VLM.
+
+        Args:
+            model_path (str): El identificador del modelo en LM Studio (ej. "publisher/repo").
+            verbose (bool, optional): Habilita logs detallados. Por defecto es False.
+            server_api_host (str, optional): Host de la API de LM Studio.
+            api_token (str, optional): Token de API para autenticación.
+            
+        Raises:
+            ValueError: Si `model_path` está vacío o parámetros opcionales son cadenas vacías.
+        """
         if not model_path or not str(model_path).strip():
             raise ValueError("model_path no puede estar vacío")
 
@@ -65,7 +88,17 @@ class VLMLoader:
         self._loaded_model: _LMSModelHandle | None = None
 
     def _create_lms_client(self) -> Any:
-        """Construye cliente scoped de LM Studio con host/token opcionales."""
+        """
+        Crea e inicializa una instancia del cliente de LM Studio.
+        
+        Configura el cliente con el host y token si fueron proporcionados.
+        
+        Returns:
+            Any: Instancia configurada de `lms.Client`.
+            
+        Raises:
+            RuntimeError: Si la clase Client no está disponible en el paquete lms.
+        """
         assert lms is not None
         client_cls = getattr(lms, "Client", None)
         if not callable(client_cls):
@@ -80,7 +113,12 @@ class VLMLoader:
         return client_cls(**kwargs)
 
     def _ensure_lms_available(self) -> None:
-        """Verifica que lmstudio-python esté disponible."""
+        """
+        Verifica que la librería `lmstudio-python` esté instalada y disponible.
+        
+        Raises:
+            RuntimeError: Si la librería no se pudo importar.
+        """
         if lms is None:
             raise RuntimeError(
                 "La librería 'lmstudio-python' no está instalada. "
@@ -88,7 +126,18 @@ class VLMLoader:
             )
 
     def _extract_model_key(self, model_obj: Any) -> str | None:
-        """Extrae una clave de modelo desde dict u objeto."""
+        """
+        Extrae el identificador único (key) de un objeto de modelo de LM Studio.
+        
+        Intenta obtener la clave desde varias fuentes: string directo, diccionario
+        o atributo de objeto.
+        
+        Args:
+            model_obj (Any): El objeto del cual extraer la clave.
+            
+        Returns:
+            str | None: La clave del modelo o None si no se encuentra.
+        """
         if model_obj is None:
             return None
 
@@ -111,7 +160,15 @@ class VLMLoader:
         return None
 
     def _list_loaded_models_keys(self) -> list[str]:
-        """Lista claves de modelos cargados; devuelve [] si falla."""
+        """
+        Obtiene una lista de las claves de los modelos actualmente cargados en LM Studio.
+        
+        Realiza una llamada segura a `list_loaded_models` del SDK y procesa
+        recursivamente la respuesta para encontrar identificadores válidos.
+        
+        Returns:
+            list[str]: Lista de claves de modelos cargados. Devuelve lista vacía en caso de error.
+        """
         try:
             self._ensure_lms_available()
             list_fn = getattr(lms, "list_loaded_models", None)
@@ -159,7 +216,15 @@ class VLMLoader:
             return []
 
     def _build_structured_instruction(self, prompt: str) -> str:
-        """Construye instrucción estricta para salida JSON."""
+        """
+        Construye el prompt final añadiendo instrucciones para forzar salida JSON.
+        
+        Args:
+            prompt (str): La instrucción original del usuario.
+            
+        Returns:
+            str: El prompt modificado con instrucciones de formato JSON estricto.
+        """
         prompt_clean = prompt.strip()
         return (
             f"{prompt_clean}\n\n"
@@ -171,11 +236,22 @@ class VLMLoader:
         )
 
     def _extract_response_text(self, response: Any) -> str:
-        """Extrae contenido textual desde distintas formas de respuesta."""
+        """
+        Extrae el contenido textual de la respuesta del modelo, manejando diversos formatos.
+        
+        Procesa respuestas que pueden ser cadenas, objetos con atributos o diccionarios anidados.
+        
+        Args:
+            response (Any): El objeto de respuesta devuelto por el modelo.
+            
+        Returns:
+            str: El texto extraído de la respuesta.
+        """
 
         def extract(value: Any) -> str:
             if value is None:
                 return ""
+
 
             if isinstance(value, str):
                 return value
@@ -228,7 +304,15 @@ class VLMLoader:
         return extract(response).strip()
 
     def _encode_image_data_url(self, image_path: str) -> str:
-        """Convierte imagen local a data URL base64."""
+        """
+        Codifica una imagen local en formato Data URL (base64).
+        
+        Args:
+            image_path (str): Ruta al archivo de imagen.
+            
+        Returns:
+            str: La cadena Data URL representando la imagen.
+        """
         mime_type, _ = mimetypes.guess_type(image_path)
         if not mime_type:
             mime_type = "image/jpeg"
@@ -239,7 +323,18 @@ class VLMLoader:
         return f"data:{mime_type};base64,{encoded}"
 
     def _prepare_image_source_for_lms(self, image_path: str) -> Any:
-        """Normaliza imagen para LM Studio y devuelve source compatible con prepare_image."""
+        """
+        Prepara y optimiza una imagen para ser enviada a través de la API de LM Studio.
+        
+        Redimensiona la imagen si es necesario para no exceder las dimensiones máximas
+        soportadas y la convierte a formato PNG optimizado.
+        
+        Args:
+            image_path (str): Ruta al archivo de imagen original.
+            
+        Returns:
+            Any: Un objeto BytesIO con la imagen procesada o la ruta original en caso de error.
+        """
         if Image is None:
             return image_path
 
@@ -261,7 +356,19 @@ class VLMLoader:
             return image_path
 
     def _build_multimodal_history(self, structured_text: str, image_path: str) -> Any:
-        """Construye historial multimodal compatible con LM Studio SDK."""
+        """
+        Construye el historial de chat multimodal compatible con el SDK de LM Studio.
+        
+        Maneja la preparación de la imagen y la creación del objeto Chat o estructura de mensaje
+        adecuada según las capacidades del SDK disponible.
+        
+        Args:
+            structured_text (str): El texto del prompt estructurado.
+            image_path (str): Ruta a la imagen a analizar.
+            
+        Returns:
+            Any: Un objeto Chat de LM Studio o un diccionario de historial de mensajes.
+        """
         if self._client is not None:
             prepare_image_fn = getattr(getattr(self._client, "files", None), "prepare_image", None)
         else:
@@ -299,7 +406,20 @@ class VLMLoader:
         }
 
     def _respond_with_config_compat(self, model_handle: _LMSModelHandle, payload: Any, temperature: float) -> Any:
-        """Llama a respond priorizando response_format/config con degradación compatible."""
+        """
+        Ejecuta la inferencia intentando usar la configuración más estricta posible, con fallback.
+        
+        Intenta usar `response_format` para JSON estructurado. Si la llamada falla por argumentos
+        no soportados, reintenta con una configuración más simple.
+        
+        Args:
+            model_handle: El manejador del modelo cargado.
+            payload: El historial de chat o prompt.
+            temperature (float): Temperatura para la generación.
+            
+        Returns:
+            Any: La respuesta cruda del modelo.
+        """
 
         def unsupported_kwarg(error: TypeError, keyword: str) -> bool:
             error_text = str(error)
@@ -337,6 +457,19 @@ class VLMLoader:
                     raise
 
     def load_model(self, n_ctx: int = 2048, n_gpu_layers: int = -1) -> None:
+        """
+        Carga el modelo especificado en la configuración.
+        
+        Si ya hay un modelo cargado, no hace nada. Si el tag detectado es genérico ('auto', etc.),
+        intenta usar el primer modelo disponible.
+        
+        Args:
+            n_ctx (int, optional): Tamaño del contexto (ignorado, gestionado por LM Studio).
+            n_gpu_layers (int, optional): Capas en GPU (ignorado, gestionado por LM Studio).
+            
+        Raises:
+            RuntimeError: Si falla la inicialización del cliente o la carga del modelo.
+        """
         _ = n_ctx
         _ = n_gpu_layers
 
@@ -380,6 +513,19 @@ class VLMLoader:
         self._loaded_model = cast(_LMSModelHandle, model)
 
     def preload_model(self, keep_alive: str = "20m") -> None:
+        """
+        Precarga el modelo en memoria enviando una consulta mínima (warmup).
+        
+        Útil para asegurar que el modelo está listo antes de recibir tráfico real,
+        reduciendo la latencia de la primera petición.
+        
+        Args:
+            keep_alive (str, optional): Duración para mantener el modelo cargado.
+                Por defecto es "20m" (20 minutos), aunque actualmente no se usa explícitamente.
+                
+        Raises:
+            RuntimeError: Si falla la petición de calentamiento.
+        """
         _ = keep_alive
         self.load_model()
         try:
@@ -392,6 +538,12 @@ class VLMLoader:
             ) from error
 
     def unload_model(self) -> None:
+        """
+        Descarga el modelo de la memoria y libera recurssos del cliente.
+        
+        Intenta cerrar limpiamente la conexión con LM Studio y liberar el modelo.
+        No lanza excepciones si falla, solo limpia las referencias locales.
+        """
         try:
             self._ensure_lms_available()
             if self._client is not None:
@@ -414,7 +566,25 @@ class VLMLoader:
 
 
     def inference(self, image_path: str, prompt: str, temperature: float = 0.7) -> VLMStructuredResponse:
-        """Ejecuta inferencia VLM y devuelve objeto tipado validado."""
+        """
+        Ejecuta una inferencia multimodal (VLM) sobre una imagen.
+        
+        Carga el modelo si es necesario, prepara la imagen y el prompt, y 
+        devuelve una respuesta estructurada validada según el esquema `VLMStructuredResponse`.
+        
+        Args:
+            image_path (str): Ruta al archivo de imagen.
+            prompt (str): Pregunta o instrucción para el modelo.
+            temperature (float, optional): Creatividad de la respuesta (0.0 a 2.0). Default 0.7.
+            
+        Returns:
+            VLMStructuredResponse: Objeto con la respuesta validada (detección, score, justificación).
+            
+        Raises:
+            ValueError: Si path o prompt están vacíos, o temperatura fuera de rango.
+            FileNotFoundError: Si la imagen no existe.
+            RuntimeError: Si hay fallos en la inferencia, procesamiento de imagen o validación de respuesta.
+        """
 
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt no puede estar vacío")

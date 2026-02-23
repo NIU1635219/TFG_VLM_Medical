@@ -19,12 +19,27 @@ except ImportError:
 # ==========================================================
 
 def sdk_available() -> bool:
-    """Indica si el SDK oficial `lmstudio` está disponible en runtime."""
+    """
+    Indica si el SDK oficial de LM Studio (`lmstudio`) está disponible.
+    
+    Returns:
+        bool: True si el módulo `lmstudio` se importó correctamente.
+    """
     return lms is not None
 
 
 def _normalize_model_ref(model_ref: str) -> str:
-    """Normaliza referencias tipo URL/ID de Hugging Face para búsqueda/descarga."""
+    """
+    Normaliza referencias de modelos de Hugging Face para búsquedas.
+    
+    Elimina prefijos 'huggingface.co/' y extrae el identificador 'usuario/repo'.
+    
+    Args:
+        model_ref (str): Referencia en crudo (URL, ID parcial, etc.).
+        
+    Returns:
+        str: Identificador normalizado o el texto original limpio.
+    """
     text = (model_ref or "").strip()
     if not text:
         return ""
@@ -37,7 +52,18 @@ def _normalize_model_ref(model_ref: str) -> str:
 
 
 def _extract_quantization(name: str, fallback: str | None = None) -> str | None:
-    """Extrae etiqueta de cuantización (Q4_K_M, IQ4_M, etc.) desde un nombre."""
+    """
+    Extrae la etiqueta de cuantización desde un nombre de archivo o modelo.
+    
+    Busca patrones como Q4_K_M, IQ4_M, etc.
+    
+    Args:
+        name (str): Cadena donde buscar el patrón.
+        fallback (str, optional): Valor a devolver si no se encuentra nada.
+        
+    Returns:
+        str | None: La cuantización en mayúsculas o el valor de fallback.
+    """
     text = (name or "").strip()
     if not text:
         return fallback
@@ -52,7 +78,16 @@ def _extract_quantization(name: str, fallback: str | None = None) -> str | None:
 # ==========================================================
 
 def _run_lms_command(args: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
-    """Ejecuta un comando `lms` y devuelve el CompletedProcess."""
+    """
+    Ejecuta un comando del CLI `lms`.
+    
+    Args:
+        args (list[str]): Argumentos del comando.
+        check (bool, optional): Si True, lanza excepción en caso de error.
+        
+    Returns:
+        subprocess.CompletedProcess: Resultado de la ejecución con stdout/stderr capturados.
+    """
     return subprocess.run(
         args,
         text=True,
@@ -62,7 +97,14 @@ def _run_lms_command(args: list[str], check: bool = False) -> subprocess.Complet
 
 
 def check_lms() -> bool:
-    """Verifica si `lms` CLI está instalado y accesible."""
+    """
+    Verifica si la herramienta de línea de comandos `lms` está instalada y accesible.
+    
+    Intenta ejecutar `lms version`.
+    
+    Returns:
+        bool: True si `lms` responde correctamente.
+    """
     try:
         _run_lms_command(["lms", "version"], check=True)
         return True
@@ -71,7 +113,15 @@ def check_lms() -> bool:
 
 
 def parse_lms_table_models(raw_output: str) -> list[str]:
-    """Parsea salida tabular de `lms ls/ps` y extrae ids/tags de modelo."""
+    """
+    Parsea la salida tabular de comandos `lms ls` o `lms ps`.
+    
+    Args:
+        raw_output (str): Salida de texto cruda del comando CLI.
+        
+    Returns:
+        list[str]: Lista de identificadores o nombres de modelos extraídos.
+    """
     lines = [line.strip() for line in str(raw_output).splitlines() if line.strip()]
     models: list[str] = []
 
@@ -95,7 +145,13 @@ def parse_lms_table_models(raw_output: str) -> list[str]:
 
 
 def get_installed_models() -> list[str]:
-    """Obtiene modelos descargados/locales desde `lms ls`."""
+    """
+    Obtiene la lista de modelos descargados usando el CLI `lms ls`.
+    
+    Returns:
+        list[str]: Lista de identificadores de modelos instalados.
+        Devuelve lista vacía si `lms` no está disponible o falla.
+    """
     if not check_lms():
         return []
     try:
@@ -106,7 +162,12 @@ def get_installed_models() -> list[str]:
 
 
 def get_loaded_models() -> list[str]:
-    """Obtiene modelos cargados en memoria desde `lms ps`."""
+    """
+    Obtiene la lista de modelos actualmente cargados en memoria vía `lms ps`.
+    
+    Returns:
+        list[str]: Lista de identificadores de modelos cargados.
+    """
     if not check_lms():
         return []
     try:
@@ -117,7 +178,12 @@ def get_loaded_models() -> list[str]:
 
 
 def get_server_status() -> tuple[bool, str]:
-    """Devuelve `(is_running, detail)` para `lms server status`."""
+    """
+    Consulta el estado del servidor LM Studio (`lms server status`).
+    
+    Returns:
+        tuple[bool, str]: (Está corriendo?, Detalle/Mensaje de salida).
+    """
     if not check_lms():
         return False, "lms CLI not found"
 
@@ -134,7 +200,12 @@ def get_server_status() -> tuple[bool, str]:
 
 
 def start_server() -> bool:
-    """Arranca `lms server` y devuelve True si finaliza correctamente."""
+    """
+    Inicia el servidor local de LM Studio (`lms server start`).
+    
+    Returns:
+        bool: True si el comando de inicio fue exitoso.
+    """
     if not check_lms():
         return False
     try:
@@ -145,7 +216,12 @@ def start_server() -> bool:
 
 
 def stop_server() -> bool:
-    """Detiene `lms server` y devuelve True si finaliza correctamente."""
+    """
+    Detiene el servidor local de LM Studio (`lms server stop`).
+    
+    Returns:
+        bool: True si el comando de parada fue exitoso.
+    """
     if not check_lms():
         return False
     try:
@@ -156,7 +232,15 @@ def stop_server() -> bool:
 
 
 def _cli_get_model(model_tag: str) -> bool:
-    """Descarga un modelo usando `lms get` como fallback."""
+    """
+    Descarga un modelo usando el CLI (`lms get`) como mecanismo de respaldo.
+    
+    Args:
+        model_tag (str): Tag o ID del modelo a descargar.
+        
+    Returns:
+        bool: True si la descarga fue exitosa.
+    """
     if not check_lms():
         return False
     try:
@@ -167,7 +251,15 @@ def _cli_get_model(model_tag: str) -> bool:
 
 
 def _cli_load_model(model_tag: str) -> bool:
-    """Carga un modelo en memoria usando `lms load` como fallback."""
+    """
+    Carga un modelo usando el CLI (`lms load`) como respaldo.
+    
+    Args:
+        model_tag (str): Tag del modelo a cargar.
+        
+    Returns:
+        bool: True si la carga fue exitosa.
+    """
     if not check_lms():
         return False
     try:
@@ -178,7 +270,15 @@ def _cli_load_model(model_tag: str) -> bool:
 
 
 def _cli_unload_model(model_tag: str) -> bool:
-    """Descarga un modelo de memoria usando `lms unload` como fallback."""
+    """
+    Descarga un modelo de la memoria usando el CLI (`lms unload`).
+    
+    Args:
+        model_tag (str): Tag del modelo a descargar de RAM.
+        
+    Returns:
+        bool: True si la operación fue exitosa.
+    """
     if not check_lms():
         return False
     try:
@@ -193,7 +293,14 @@ def _cli_unload_model(model_tag: str) -> bool:
 # ==========================================================
 
 def list_local_llm_models() -> list[dict[str, Any]]:
-    """Lista modelos LLM descargados localmente con metadatos útiles."""
+    """
+    Lista los modelos LLM descargados en local.
+    
+    Intenta usar el SDK `lmstudio` para obtener metadatos detallados.
+    
+    Returns:
+        list[dict]: Lista de diccionarios con claves 'model_key', 'display_name', 'path', 'size_bytes'.
+    """
     if lms is None:
         return []
 
@@ -222,7 +329,12 @@ def list_local_llm_models() -> list[dict[str, Any]]:
 
 
 def list_loaded_llm_model_keys() -> set[str]:
-    """Devuelve las claves de modelos LLM cargados en memoria."""
+    """
+    Recupera las claves de los modelos LLM cargados en memoria usando el SDK.
+    
+    Returns:
+        set[str]: Conjunto de claves de modelos cargados.
+    """
     if lms is None:
         return set()
 
@@ -245,7 +357,17 @@ def list_loaded_llm_model_keys() -> set[str]:
 
 
 def load_model(model_key: str) -> bool:
-    """Carga un modelo LLM en memoria (SDK primero, CLI fallback)."""
+    """
+    Carga un modelo en memoria.
+    
+    Prioriza el SDK `lms.llm()`, con fallback al CLI `lms load`.
+    
+    Args:
+        model_key (str): Clave del modelo a cargar.
+        
+    Returns:
+        bool: True si tuvo éxito.
+    """
     if lms is None:
         return _cli_load_model(model_key)
     try:
@@ -256,7 +378,17 @@ def load_model(model_key: str) -> bool:
 
 
 def unload_model(model_key: str) -> bool:
-    """Descarga un modelo de memoria (SDK primero, CLI fallback)."""
+    """
+    Descarga un modelo de la memoria.
+    
+    Prioriza el SDK, intentando encontrar el handle del modelo y llamar `unload()`.
+    
+    Args:
+        model_key (str): Clave del modelo a descargar.
+        
+    Returns:
+        bool: True si tuvo éxito.
+    """
     if lms is None:
         return _cli_unload_model(model_key)
 
@@ -287,7 +419,15 @@ def unload_model(model_key: str) -> bool:
 
 
 def preload_model(model_key: str) -> bool:
-    """Precarga el modelo ejecutando un warmup mínimo de inferencia."""
+    """
+    Realiza un calentamiento (warmup) del modelo cargado mediante una inferencia trivial.
+    
+    Args:
+        model_key (str): Clave del modelo.
+        
+    Returns:
+        bool: True si el modelo respondió correctamente.
+    """
     if lms is None:
         return False
     try:
@@ -303,7 +443,18 @@ def preload_model(model_key: str) -> bool:
 # ==========================================================
 
 def _select_search_result(model_ref: str, candidates: list[Any]) -> Any | None:
-    """Selecciona el resultado más adecuado de búsqueda para un `model_ref`."""
+    """
+    Selecciona el mejor resultado de búsqueda dado un criterio.
+    
+    Busca coincidencia exacta de nombre, o contención de cadena.
+    
+    Args:
+        model_ref (str): Referencia buscada.
+        candidates (list[Any]): Resultados de búsqueda del SDK.
+        
+    Returns:
+        Any | None: El objeto resultado seleccionado o None.
+    """
     normalized_ref = _normalize_model_ref(model_ref).lower()
 
     if not candidates:
@@ -330,7 +481,15 @@ def _select_search_result(model_ref: str, candidates: list[Any]) -> Any | None:
 
 
 def get_download_options(model_ref: str) -> list[dict[str, Any]]:
-    """Devuelve opciones de descarga (cuantizaciones) para un modelo."""
+    """
+    Busca opciones de descarga (cuantizaciones) en el repositorio de LM Studio.
+    
+    Args:
+        model_ref (str): Nombre o referencia del modelo.
+        
+    Returns:
+        list[dict]: Lista de opciones de descarga con metadatos.
+    """
     if lms is None:
         return []
 
@@ -407,7 +566,17 @@ def download_option(
     on_progress: Callable[[Any], None] | None = None,
     on_finalize: Callable[[Any], None] | None = None,
 ) -> tuple[bool, str]:
-    """Descarga una opción y devuelve `(ok, model_key_o_error)`."""
+    """
+    Descarga una variante de modelo específica mediante el SDK.
+    
+    Args:
+        option_entry (dict): Entrada de opción obtenida de `get_download_options`.
+        on_progress (Callable, optional): Callback de progreso (float 0.0-1.0).
+        on_finalize (Callable, optional): Callback al finalizar.
+        
+    Returns:
+        tuple[bool, str]: (Éxito, Key del modelo descargado o mensaje de error).
+    """
     if lms is None:
         return False, "SDK lmstudio no disponible"
 
@@ -433,7 +602,16 @@ def download_option(
 
 
 def download_by_model_and_filename(model_ref: str, file_name: str) -> tuple[bool, str]:
-    """Descarga una cuantización concreta por nombre de archivo."""
+    """
+    Descarga un archivo específico de un modelo buscando por nombre de archivo.
+    
+    Args:
+        model_ref (str): Referencia del modelo.
+        file_name (str): Nombre del archivo (ej. 'modelo-q4_k_m.gguf').
+        
+    Returns:
+        tuple[bool, str]: (Éxito, Key del modelo o error).
+    """
     file_name_clean = (file_name or "").strip().lower()
     if not file_name_clean:
         return False, "file_name vacío"
@@ -449,7 +627,15 @@ def download_by_model_and_filename(model_ref: str, file_name: str) -> tuple[bool
 
 
 def download_model(model_ref: str) -> tuple[bool, str]:
-    """Descarga modelo completo por referencia (SDK recomendado o CLI fallback)."""
+    """
+    Descarga un modelo automáticamente (opción recomendada).
+    
+    Args:
+        model_ref (str): Referencia del modelo.
+        
+    Returns:
+        tuple[bool, str]: (Éxito, Key del modelo o error).
+    """
     normalized_ref = _normalize_model_ref(model_ref)
     if not normalized_ref:
         return False, "Referencia de modelo inválida"
@@ -466,7 +652,15 @@ def download_model(model_ref: str) -> tuple[bool, str]:
 
 
 def remove_local_model(model_key: str) -> tuple[bool, str]:
-    """Elimina artefacto local del modelo por ruta del SDK (si existe)."""
+    """
+    Elimina físicamente un modelo local y sus archivos.
+    
+    Args:
+        model_key (str): Clave del modelo a borrar.
+        
+    Returns:
+        tuple[bool, str]: (Éxito, Ruta eliminada o error).
+    """
     local_models = list_local_llm_models()
     target = next((item for item in local_models if item.get("model_key") == model_key), None)
     if target is None:

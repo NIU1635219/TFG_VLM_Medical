@@ -4,16 +4,19 @@ import setup_env
 
 
 def test_is_model_installed_does_not_mix_8b_and_latest():
+    """Valida que `is_model_installed` distinga entre versiones/tags específicos (ej. 8b vs latest)."""
     installed = ["qwen3-vl:latest"]
     assert setup_env.lms_menu_helpers.is_model_installed("qwen3-vl:8b", installed) is False
 
 
 def test_is_model_installed_accepts_latest_alias_without_tag():
+    """Comprueba que si no se especifica tag, se asuma 'latest' o coincidencia parcial."""
     installed = ["qwen3-vl:latest"]
     assert setup_env.lms_menu_helpers.is_model_installed("qwen3-vl", installed) is True
 
 
 def test_wait_for_any_key_windows_uses_getch(monkeypatch):
+    """Prueba que en Windows se use `msvcrt.getch()` para esperar una tecla."""
     class FakeMsvcrt:
         @staticmethod
         def getch():
@@ -35,6 +38,7 @@ def test_wait_for_any_key_windows_uses_getch(monkeypatch):
 
 
 def test_ask_user_uses_arrow_selection(monkeypatch):
+    """Verifica que `ask_user` maneje selección con flechas (simulada) correctamente."""
     # default = n => selected option should be "No"
     key_sequence = iter(["ENTER"])
 
@@ -48,6 +52,7 @@ def test_ask_user_uses_arrow_selection(monkeypatch):
 
 
 def test_wait_for_any_key_fallback_non_windows(monkeypatch):
+    """Asegura el fallback a `input()` en sistemas no Windows."""
     monkeypatch.setattr(setup_env.os, "name", "posix", raising=False)
 
     called = {"input": False}
@@ -62,6 +67,7 @@ def test_wait_for_any_key_fallback_non_windows(monkeypatch):
 
 
 def test_factory_reset_confirmation_defaults_to_no(monkeypatch):
+    """Valida que la opción de Factory Reset tenga 'No' como valor predeterminado."""
     captured_default = {"value": ""}
 
     def fake_ask_user(question, default="y"):
@@ -92,6 +98,7 @@ def test_factory_reset_confirmation_defaults_to_no(monkeypatch):
 
 
 def test_interactive_menu_shows_selected_description(monkeypatch, capsys):
+    """Comprueba que el menú interactivo muestre la descripción de la opción seleccionada."""
     keys = iter(["ENTER"])
 
     monkeypatch.setattr(setup_env, "read_key", lambda: next(keys))
@@ -107,6 +114,7 @@ def test_interactive_menu_shows_selected_description(monkeypatch, capsys):
 
 
 def test_interactive_menu_hides_description_when_missing(monkeypatch, capsys):
+    """Verifica que no se muestre el campo 'Descripción' si la opción no la tiene."""
     keys = iter(["ENTER"])
 
     monkeypatch.setattr(setup_env, "read_key", lambda: next(keys))
@@ -121,6 +129,7 @@ def test_interactive_menu_hides_description_when_missing(monkeypatch, capsys):
 
 
 def test_stop_lms_server_if_owned_only_stops_when_started(monkeypatch):
+    """Asegura que `stop_lms_server_if_owned` solo detenga el servidor si esta sesión lo inició."""
     calls = {"stop": 0}
 
     def fake_stop_server():
@@ -140,6 +149,7 @@ def test_stop_lms_server_if_owned_only_stops_when_started(monkeypatch):
 
 
 def test_main_wraps_show_menu_with_server_lifecycle(monkeypatch):
+    """Prueba la integración del ciclo de vida del servidor (start -> menu -> stop) en `main`."""
     calls = {"start": 0, "show": 0, "stop": 0}
 
     monkeypatch.setattr(setup_env.os.path, "exists", lambda *_: True)
@@ -164,3 +174,20 @@ def test_main_wraps_show_menu_with_server_lifecycle(monkeypatch):
     assert calls["start"] == 1
     assert calls["show"] == 1
     assert calls["stop"] == 1
+
+
+def test_run_diagnostics_ui_passes_read_key_in_context(monkeypatch):
+    """Asegura que setup_env pase read_key al contexto de setup_diagnostics.run_diagnostics_ui."""
+    captured = {"ctx": None}
+
+    def fake_run_diagnostics_ui(ctx):
+        captured["ctx"] = ctx
+        return None
+
+    monkeypatch.setattr(setup_env.setup_diagnostics, "run_diagnostics_ui", fake_run_diagnostics_ui)
+
+    setup_env.run_diagnostics_ui()
+
+    assert captured["ctx"] is not None
+    assert "read_key" in captured["ctx"]
+    assert captured["ctx"]["read_key"] is setup_env.read_key

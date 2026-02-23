@@ -6,7 +6,18 @@ from typing import Any
 
 
 def run_tests_menu(*, ctx: dict[str, Any]) -> None:
-    """Menú para ejecutar tests (unitarios y smoke tests)."""
+    """
+    Despliega el submenú para ejecución de tests y gestión de pruebas.
+    
+    Ofrece opciones para:
+    - Gestionar modelos (descarga/borrado).
+    - Ejecutar todos los tests unitarios.
+    - Ejecutar tests unitarios específicos.
+    - Ejecutar 'Smoke Test' (prueba de inferencia end-to-end con modelo).
+    
+    Args:
+        ctx (dict): Contexto de aplicación.
+    """
     Style = ctx["Style"]
     MenuItem = ctx["MenuItem"]
     print_banner = ctx["print_banner"]

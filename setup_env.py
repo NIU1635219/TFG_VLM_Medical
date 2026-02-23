@@ -57,6 +57,12 @@ if os.name == 'nt':
 # --- Visual Styles ---
 # Clases de colores ANSI para la interfaz de terminal
 class Style:
+    """
+    Clase que define códigos de escape ANSI para dar estilo al texto en la terminal.
+    
+    Proporciona constantes para colores (azul, cian, verde, amarillo, rojo),
+    estilos de texto (negrita, atenuado) y colores de fondo para selecciones.
+    """
     HEADER = '\033[95m'
     OKBLUE = '\033[94m'
     OKCYAN = '\033[96m'
@@ -72,7 +78,21 @@ class Style:
 # --- Diagnostic Issue Class ---
 # Objeto que representa un problema detectado durante el diagnóstico
 class DiagnosticIssue:
+    """
+    Representa un problema detectado durante el diagnóstico del entorno.
+    
+    Almacena la descripción del problema, la función que lo soluciona y el nombre
+    de la solución para mostrar en la interfaz de usuario.
+    """
     def __init__(self, description, fix_func, fix_name):
+        """
+        Inicializa una nueva instancia de DiagnosticIssue.
+        
+        Args:
+            description (str): Descripción detallada del problema detectado.
+            fix_func (callable): Función que se ejecutará para intentar solucionar el problema.
+            fix_name (str): Nombre corto o etiqueta de la solución para mostrar en el menú.
+        """
         self.description = description  # Descripción del problema para el usuario
         self.fix_func = fix_func        # La función Python que repara este problema
         self.fix_name = fix_name        # Nombre corto de la reparación para el menú
@@ -97,6 +117,8 @@ REQUIRED_LIBS = [
     "opencv-python",
     "pandas",
     "matplotlib",
+    "numpy",
+    "rarfile",
     "jupyter",
     "pytest",
     "tqdm"
@@ -119,43 +141,86 @@ _SYS_INFO_CACHE = None
 
 def clear_screen_ansi():
     """
-    Limpia pantalla usando CLS en Windows para asegurar limpieza.
+    Limpia la pantalla de la terminal usando secuencias ANSI o comandos del sistema.
+    
+    Utiliza el módulo `os` para ejecutar el comando de limpieza adecuado según
+    el sistema operativo (cls para Windows, clear para Unix).
     """
     setup_ui_io.clear_screen_ansi(os_module=os, sys_module=sys)
 
 def clear_screen():
-    """Wrapper compatible."""
+    """
+    Wrapper compatible para limpiar la pantalla.
+    
+    Llama a `clear_screen_ansi()` para mantener la compatibilidad con código existente.
+    """
     clear_screen_ansi()
 
 def read_key():
-    """Lee una tecla y devuelve un código unificado (UP, DOWN, ENTER, SPACE, ESC)."""
+    """
+    Lee una tecla presionada por el usuario y devuelve un código unificado.
+    
+    Returns:
+        str: Un código de tecla unificado ('UP', 'DOWN', 'ENTER', 'SPACE', 'ESC', o el carácter).
+    """
     return setup_ui_io.read_key(os_module=os, msvcrt_module=msvcrt)
 
 def log(msg, level="info"):
     """
-    Imprime mensajes con formato y color.
-    level: info, success, error, warning, step
+    Imprime mensajes en la terminal con formato y color según el nivel.
+    
+    Args:
+        msg (str): El mensaje a imprimir.
+        level (str, optional): El nivel del mensaje ('info', 'success', 'error', 'warning', 'step').
+            Por defecto es 'info'.
     """
     setup_ui_io.log(style=Style, msg=msg, level=level)
 
-def ask_user(question, default="y"):
-    """Pide confirmación con interfaz visual (flechas + ENTER, ESC cancela)."""
+def ask_user(question, default="y", info_text=""):
+    """
+    Pide confirmación al usuario con una interfaz visual interactiva.
+    
+    Permite al usuario seleccionar 'Yes' o 'No' usando las flechas del teclado
+    y confirmar con ENTER, o cancelar con ESC.
+    
+    Args:
+        question (str): La pregunta a mostrar al usuario.
+        default (str, optional): La opción por defecto ('y' o 'n'). Por defecto es 'y'.
+        
+    Returns:
+        bool: True si el usuario selecciona 'Yes', False si selecciona 'No' o cancela.
+    """
     return setup_ui_io.ask_user(
         question=question,
         default=default,
         style=Style,
         read_key_fn=read_key,
         clear_screen_fn=clear_screen_ansi,
+        info_text=info_text,
     )
 
 
 def input_with_esc(prompt):
-    """Entrada de texto que permite cancelar con ESC en Windows. Retorna None si se cancela."""
+    """
+    Solicita entrada de texto al usuario, permitiendo cancelar con la tecla ESC.
+    
+    Args:
+        prompt (str): El texto a mostrar antes de la entrada.
+        
+    Returns:
+        str or None: El texto introducido por el usuario, o None si se canceló con ESC.
+    """
     return setup_ui_io.input_with_esc(prompt=prompt, os_module=os, msvcrt_module=msvcrt)
 
 
 def wait_for_any_key(message="Press any key to return..."):
-    """Pausa breve: espera cualquier tecla y retorna al menú anterior."""
+    """
+    Pausa la ejecución y espera a que el usuario presione cualquier tecla.
+    
+    Args:
+        message (str, optional): El mensaje a mostrar durante la pausa.
+            Por defecto es "Press any key to return...".
+    """
     setup_ui_io.wait_for_any_key(
         message=message,
         style=Style,
@@ -165,8 +230,17 @@ def wait_for_any_key(message="Press any key to return..."):
 
 def run_cmd(cmd, critical=True):
     """
-    Ejecuta un comando de shell e imprime el comando en gris.
-    Si falla y critical=True, pregunta al usuario si reintentar.
+    Ejecuta un comando de shell e imprime el comando en la terminal.
+    
+    Si el comando falla y `critical` es True, pregunta al usuario si desea reintentar.
+    
+    Args:
+        cmd (str): El comando de shell a ejecutar.
+        critical (bool, optional): Si es True, permite reintentar en caso de fallo.
+            Por defecto es True.
+            
+    Returns:
+        bool: True si el comando se ejecutó con éxito, False en caso contrario.
     """
     return setup_ui_io.run_cmd(
         cmd=cmd,
@@ -177,7 +251,20 @@ def run_cmd(cmd, critical=True):
     )
 
 def get_sys_info(refresh=False):
-    """Recopila información básica del hardware (OS, Python, CPU, GPU, RAM)."""
+    """
+    Recopila información básica del hardware y sistema operativo.
+    
+    Obtiene detalles sobre el SO, versión de Python, núcleos de CPU,
+    modelo de GPU (si está disponible vía nvidia-smi) y memoria RAM total.
+    
+    Args:
+        refresh (bool, optional): Si es True, fuerza la recolección de datos
+            ignorando la caché. Por defecto es False.
+            
+    Returns:
+        dict: Un diccionario con la información del sistema ('os', 'python',
+            'cpu_cores', 'gpu', 'ram').
+    """
     global _SYS_INFO_CACHE
 
     if _SYS_INFO_CACHE is not None and not refresh:
@@ -212,17 +299,36 @@ def get_sys_info(refresh=False):
     return dict(info)
 
 def check_lms():
-    """Verifica si 'lms' (LM Studio CLI) está instalado y accesible."""
+    """
+    Verifica si la interfaz de línea de comandos de LM Studio ('lms') está instalada.
+    
+    Returns:
+        bool: True si 'lms' está disponible en el PATH, False en caso contrario.
+    """
     return lms_models.check_lms()
 
 
 def get_lms_server_status():
-    """Obtiene estado del servidor LM Studio vía CLI (`lms server status`)."""
+    """
+    Obtiene el estado actual del servidor local de LM Studio.
+    
+    Ejecuta el comando `lms server status` para comprobar si el servidor
+    está en ejecución.
+    
+    Returns:
+        str: El estado del servidor (ej. 'running', 'stopped', 'error').
+    """
     return lms_models.get_server_status()
 
 
 def ensure_lms_server_running():
-    """Arranca `lms server` si no está activo. Registra ownership de esta sesión."""
+    """
+    Asegura que el servidor de LM Studio esté en ejecución.
+    
+    Si el servidor no está activo, intenta iniciarlo. Si lo inicia con éxito,
+    registra que esta sesión es la propietaria del servidor para poder
+    detenerlo al salir.
+    """
     global LMS_SERVER_STARTED_BY_THIS_SESSION
 
     is_running, detail = get_lms_server_status()
@@ -250,7 +356,12 @@ def ensure_lms_server_running():
 
 
 def stop_lms_server_if_owned():
-    """Detiene `lms server` solo si fue iniciado por esta sesión."""
+    """
+    Detiene el servidor de LM Studio solo si fue iniciado por esta sesión.
+    
+    Verifica la variable global `LMS_SERVER_STARTED_BY_THIS_SESSION`. Si es True,
+    intenta detener el servidor y registra el resultado.
+    """
     global LMS_SERVER_STARTED_BY_THIS_SESSION
 
     if not LMS_SERVER_STARTED_BY_THIS_SESSION:
@@ -269,14 +380,28 @@ def stop_lms_server_if_owned():
 
 atexit.register(stop_lms_server_if_owned)
 def get_installed_lms_models():
-    """Obtiene modelos locales LLM (SDK primero, CLI como fallback)."""
+    """
+    Obtiene la lista de identificadores de los modelos LM Studio instalados localmente.
+    
+    Intenta primero usar la API del SDK local y, como fallback, usa la CLI.
+    
+    Returns:
+        list: Lista de strings con los keys/IDs de los modelos instalados.
+    """
     local_models = lms_models.list_local_llm_models()
     if local_models:
         return [str(item.get("model_key", "")).strip() for item in local_models if item.get("model_key")]
     return lms_models.get_installed_models()
 
 def list_test_files():
-    """Escanea la carpeta tests/ y devuelve los archivos .py válidos."""
+    """
+    Escanea la carpeta `tests/` en busca de archivos de prueba.
+    
+    Busca archivos que comiencen con 'test_' y terminen en '.py'.
+    
+    Returns:
+        list: Lista ordenada alfabéticamente de los nombres de archivos encontrados.
+    """
     test_dir = "tests"
     if not os.path.exists(test_dir):
         return []
@@ -286,14 +411,26 @@ def list_test_files():
 
 
 def _get_item_description(item):
-    """Devuelve la descripción del item si existe y no está vacía."""
+    """
+    Obtiene la descripción de un item de menú, si existe.
+    
+    Args:
+        item: Objeto que puede tener un atributo 'description'.
+             
+    Returns:
+        str: La descripción del item o una cadena vacía si no existe.
+    """
     description = getattr(item, "description", "")
     if not description:
         return ""
     return str(description).strip()
 
 def manage_models_menu_ui():
-    """Menú de gestión de modelos LM Studio (delegado a módulo UI)."""
+    """
+    Muestra el menú interactivo para la gestión de modelos de LM Studio.
+    
+    Delega la lógica al módulo `setup_models_ui`, pasando el contexto necesario.
+    """
     return setup_models_ui.manage_models_menu_ui(
         {
             "Style": Style,
@@ -315,11 +452,17 @@ def manage_models_menu_ui():
             "interactive_menu": interactive_menu,
             "get_installed_lms_models": get_installed_lms_models,
             "read_key": read_key,
+            "os_module": os,
+            "msvcrt_module": msvcrt,
         }
     )
 
 def run_tests_menu():
-    """Menú para ejecutar tests (delegado a módulo UI)."""
+    """
+    Ejecuta el menú para la selección y ejecución de pruebas automatizadas.
+    
+    Delega la lógica al módulo `setup_tests_ui`.
+    """
     return setup_tests_ui.run_tests_menu(
         ctx={
             "Style": Style,
@@ -338,13 +481,18 @@ def run_tests_menu():
     )
 
 def print_banner():
-    """Muestra el banner principal con el estado del sistema."""
+    """
+    Imprime el banner principal de la aplicación mostrando información del sistema.
+    
+    Limpia la pantalla y muestra una tabla con SO, Python, CPU, RAM y GPU.
+    """
     clear_screen()
     info = get_sys_info()
-    box_inner = 65
+    box_inner = setup_ui_io.get_full_ui_width(shutil_module=shutil)
     label_width = 7
 
     def truncate(text, width):
+        """Trunca el texto para ajustarlo al ancho especificado con elipsis."""
         value = str(text)
         if len(value) <= width:
             return value
@@ -353,10 +501,12 @@ def print_banner():
         return value[: width - 1] + "…"
 
     def line(content=""):
+        """Formatea una línea de contenido para que se ajuste al recuadro."""
         text = truncate(content, box_inner)
         return f"║{text:<{box_inner}}║"
 
     def metric_row(label, value):
+        """Genera una fila de métricas con etiqueta y valor."""
         value_width = box_inner - (1 + label_width + 3)
         value_text = truncate(value, value_width)
         return line(f" {label:<{label_width}} │ {value_text}")
@@ -375,7 +525,12 @@ def print_banner():
     print(Style.ENDC)
 
 def restart_program():
-    """Reinicia el script actual de forma limpia."""
+    """
+    Reinicia el programa actual completamente.
+    
+    Útil cuando se instalan nuevas dependencias y es necesario recargar el entorno.
+    Muestra un aviso, espera 2 segundos y reinicia el proceso usando `subprocess`.
+    """
     print(f"\n{Style.BOLD}{Style.WARNING}🔴 CRITICAL ENVIRONMENT UPDATE DETECTED 🔴{Style.ENDC}")
     print(f"{Style.WARNING}The application must restart to load the new libraries correctly.{Style.ENDC}")
     print(f"{Style.WARNING}Restarting in 2 seconds...{Style.ENDC}")
@@ -401,7 +556,14 @@ def restart_program():
 # --- Core Utility Functions ---
 
 def detect_gpu():
-    """Detecta si hay una GPU NVIDIA disponible usando nvidia-smi."""
+    """
+    Detecta si el sistema tiene una GPU NVIDIA disponible.
+    
+    Ejecuta `nvidia-smi` y devuelve True si el comando tiene éxito.
+    
+    Returns:
+        bool: True si se detecta GPU NVIDIA, False en caso contrario.
+    """
     try:
         subprocess.check_call("nvidia-smi", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
@@ -409,7 +571,12 @@ def detect_gpu():
         return False
 
 def check_uv():
-    """Verifica si 'uv' está instalado y accesible en el PATH."""
+    """
+    Verifica si el gestor de paquetes 'uv' está instalado.
+    
+    Returns:
+        bool: True si 'uv --version' se ejecuta correctamente.
+    """
     try:
         subprocess.check_call("uv --version", shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
@@ -417,11 +584,18 @@ def check_uv():
         return False
 
 def create_project_structure(verbose=True):
-    """Crea la estructura de carpetas necesaria si no existe."""
+    """
+    Crea la estructura de carpetas necesaria para el proyecto.
+    
+    Verifica la existencia de directorios clave (data, src, notebooks) y
+    los crea si faltan.
+    
+    Args:
+        verbose (bool, optional): Si es True, imprime mensajes de progreso.
+    """
     folders = [
         "data/raw",
         "data/processed",
-        "models",
         "src/preprocessing",
         "src/inference",
         "notebooks"
@@ -444,17 +618,35 @@ def create_project_structure(verbose=True):
 # Estas funciones son llamadas automáticamente por el Smart Fix Menu
 
 def fix_folders():
-    """Reparación: Regenera carpetas faltantes."""
+    """
+    Reparación automática: Regenera carpetas faltantes en el proyecto.
+    
+    Llama a `create_project_structure` para asegurar que los directorios
+    esenciales existen.
+    """
     log("Regenerating folder structure...", "step")
     create_project_structure(verbose=True)
 
 def fix_uv():
-    """Reparación: Instala la herramienta uv."""
+    """
+    Reparación automática: Instala el gestor de paquetes 'uv' usando pip.
+    
+    Se utiliza como prerrequisito para la instalación rápida de dependencias.
+    """
     log("Installing 'uv' package manager...", "step")
     run_cmd("pip install uv")
 
 def fix_libs(libs_to_install=None):
-    """Reparación: Reinstala una lista de librerías en modo Soft (sin romper dependencias)."""
+    """
+    Reparación automática: Sincroniza o reinstala las dependencias del proyecto.
+    
+    Si `libs_to_install` es None y existe un archivo de proyecto, usa `uv sync`.
+    De lo contrario, reinstala las librerías especificadas o las por defecto.
+    
+    Args:
+        libs_to_install (list or str, optional): Librería(s) específica(s) a instalar.
+            Si es None, intenta instalar todas las requeridas.
+    """
     if libs_to_install is None:
         if os.path.exists("pyproject.toml"):
             log("Syncing dependencies from pyproject.toml/uv.lock...", "step")
@@ -479,10 +671,15 @@ def fix_libs(libs_to_install=None):
 
 def perform_diagnostics():
     """
-    Ejecuta comprobaciones del sistema.
-    Retorna:
-    - report: Lista de tuplas (Nombre, Estado, ColorStatus) para mostrar.
-    - issues: Lista de objetos DiagnosticIssue con soluciones vinculadas.
+    Ejecuta una serie de comprobaciones para diagnosticar el estado del entorno.
+    
+    Verifica la estructura de carpetas, la instalación de 'uv', las librerías
+    requeridas y el estado del servidor LM Studio.
+    
+    Returns:
+        tuple: Una tupla conteniendo:
+            - report (list): Lista de resultados para mostrar en tabla UI.
+            - issues (list): Lista de objetos `DiagnosticIssue` detectados.
     """
     return setup_diagnostics.perform_diagnostics(
         {
@@ -500,7 +697,12 @@ def perform_diagnostics():
 
 
 def print_report_table(report):
-    """Imprime la tabla de diagnóstico de forma formateada."""
+    """
+    Imprime una tabla formateada con los resultados del diagnóstico.
+    
+    Args:
+        report (list): Lista de tuplas (Nombre, Estado, Color) generada por `perform_diagnostics`.
+    """
     return setup_diagnostics.print_report_table(report, style=Style)
 
 
@@ -516,10 +718,23 @@ def interactive_menu(
     sub_nav_hint_text=None,
     footer_hint_text=None,
     repaint_strategy="auto",
+    dynamic_info_top=False,
 ):
     """
-    Menú interactivo genérico controlado por teclado.
-    Soporta circularidad y navegación por sub-niveles.
+    Muestra un menú interactivo controlado por teclado.
+    
+    Soporta navegación con flechas, selección múltiple, secciones plegables (si
+    está soportado) y renderizado personalizado.
+    
+    Args:
+        options (list): Lista de objetos `MenuItem` o separadores.
+        header_func (callable, optional): Función que imprime un encabezado antes del menú.
+        multi_select (bool, optional): Permite seleccionar múltiples opciones.
+        ... (otros parámetros de configuración visual y comportamiento)
+        
+    Returns:
+        object: El item seleccionado (o lista de items si multi_select=True),
+        o None si se cancela.
     """
     return setup_menu_engine.interactive_menu(
         options,
@@ -541,12 +756,19 @@ def interactive_menu(
         sub_nav_hint_text=sub_nav_hint_text,
         footer_hint_text=footer_hint_text,
         repaint_strategy=repaint_strategy,
+        dynamic_info_top=dynamic_info_top,
     )
 
 
 def smart_fix_menu(issues, report=None):
     """
-    Menú gráfico para seleccionar arreglos.
+    Muestra un menú interactivo para aplicar soluciones a problemas detectados.
+    
+    Permite al usuario seleccionar qué problemas corregir automáticamente.
+    
+    Args:
+        issues (list): Lista de objetos `DiagnosticIssue`.
+        report (list, optional): Reporte de diagnóstico previo para contexto.
     """
     return setup_diagnostics.smart_fix_menu(
         issues,
@@ -562,12 +784,18 @@ def smart_fix_menu(issues, report=None):
 
 
 def run_diagnostics_ui():
-    """Wrapper UI para ejecutar diagnósticos y mostrar resultados."""
+    """
+    Ejecuta el flujo completo de diagnóstico y reparación (UI).
+    
+    Realiza el diagnóstico, muestra el reporte y, si hay problemas,
+    lanza el menú de reparación inteligente.
+    """
     return setup_diagnostics.run_diagnostics_ui(
         {
             "Style": Style,
             "clear_screen": clear_screen,
             "wait_for_any_key": wait_for_any_key,
+            "read_key": read_key,
             "perform_diagnostics": perform_diagnostics,
             "print_report_table": print_report_table,
             "smart_fix_menu": smart_fix_menu,
@@ -577,7 +805,11 @@ def run_diagnostics_ui():
 # --- Install & Menus ---
 
 def reinstall_library_menu():
-    """Menú manual para forzar reinstalaciones limpias (delegado)."""
+    """
+    Muestra un menú para reinstalar librerías específicas manualmente.
+    
+    Delega al módulo `setup_reinstall_ui`.
+    """
     return setup_reinstall_ui.reinstall_library_menu(
         ctx={
             "Style": Style,
@@ -596,8 +828,14 @@ def reinstall_library_menu():
 
 def perform_install(full_reinstall=False):
     """
-    Flujo de instalación inicial o reseteo de fábrica.
-    Crea el venv y lanza las instalaciones secuenciales.
+    Ejecuta el flujo de instalación de dependencias del proyecto.
+    
+    Verifica prerrequisitos (uv, carpetas) e instala las librerías necesarias.
+    Puede realizar una reinstalación completa si se solicita.
+    
+    Args:
+        full_reinstall (bool, optional): Si es True, fuerza la reinstalación
+            de todo el entorno. Por defecto es False.
     """
     return setup_install_flow.perform_install(
         ctx={
@@ -612,7 +850,12 @@ def perform_install(full_reinstall=False):
     )
 
 def show_menu():
-    """Bucle principal del menú."""
+    """
+    Muestra el menú principal de la aplicación de configuración.
+    
+    Punto de entrada para todas las funcionalidades (test, install, diagnose, etc.).
+    Delega al módulo `setup_install_flow`.
+    """
     return setup_install_flow.show_menu(
         ctx={
             "MenuItem": MenuItem,
@@ -631,6 +874,11 @@ def show_menu():
     )
 
 def main():
+    """
+    Función principal del script setup_env.py.
+    
+    Inicializa el contexto y lanza el menú principal.
+    """
     return setup_install_flow.main(
         ctx={
             "os": os,

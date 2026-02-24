@@ -22,7 +22,7 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Python >= 3.12
 - Gestor de dependencias: `uv`
 - Inferencia: LM Studio + `lmstudio-python`
-- Librerías principales: `lmstudio`, `pydantic`, `pillow`, `opencv-python`, `pandas`, `matplotlib`, `pytest`, `tqdm`, `jupyter`
+- Librerías principales: `lmstudio`, `pydantic`, `pillow`, `opencv-python`, `pandas`, `matplotlib`, `pytest`, `tqdm`, `jupyter`, `numpy`, `rarfile`
 
 Dependencias declaradas en `pyproject.toml`.
 
@@ -57,8 +57,14 @@ Dependencias declaradas en `pyproject.toml`.
 ├── tests/
 │   ├── test_vlm_runner.py
 │   ├── test_inference_script.py
+│   ├── test_preprocess.py
+│   ├── test_lms_models.py
 │   ├── test_setup_env_menu.py
-│   └── test_setup_extracted_menus.py
+│   ├── test_setup_extracted_menus.py
+│   ├── test_setup_diagnostics.py
+│   ├── test_setup_install_flow.py
+│   ├── test_setup_models_ui.py
+│   └── test_setup_ui_io_render.py
 ├── setup_env.py
 ├── setup.bat
 ├── setup.sh
@@ -240,8 +246,8 @@ Tests más relevantes:
 
 - `tests/test_vlm_runner.py`: backend de inferencia, compatibilidades SDK, parseo estructurado.
 - `tests/test_inference_script.py`: smoke test y validación por etiquetas.
-- `tests/test_setup_env_menu.py`: menú principal y comportamiento del manager.
-- `tests/test_setup_extracted_menus.py`: menús extraídos/modularizados.
+- `tests/test_setup_*.py`: cubren la modularización completa del manager, flujos de instalación (`test_setup_install_flow.py`), diagnósticos (`test_setup_diagnostics.py`), UI (`test_setup_ui_io_render.py`, `test_setup_models_ui.py`) y menús.
+- `tests/test_lms_models.py` y `test_preprocess.py`: validación de utilidades y preprocesado.
 
 ## Configuración avanzada de LM Studio
 

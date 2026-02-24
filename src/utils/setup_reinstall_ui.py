@@ -28,6 +28,9 @@ def reinstall_library_menu(*, ctx: dict[str, Any]) -> None:
     wait_for_any_key = ctx["wait_for_any_key"]
 
     def header() -> None:
+        """
+        Imprime el encabezado del menú.
+        """
         print_banner()
         print(f"{Style.BOLD} REINSTALL LIBRARIES {Style.ENDC}")
         print(" Select libraries to force re-install (clean install).")

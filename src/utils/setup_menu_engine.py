@@ -96,6 +96,15 @@ class MenuSeparator(MenuStaticItem):
         self.fill = (fill or "─")[0]
 
         def _dynamic_label(_is_selected_row):
+            """
+            Genera el texto dinámico para el separador.
+            
+            Args:
+                _is_selected_row (bool): No se usa, pero es necesario para cumplir con la interfaz.
+            
+            Returns:
+                str: Texto del separador.
+            """
             if not self.text:
                 return self.fill * self.width
 

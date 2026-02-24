@@ -11,7 +11,12 @@ from .setup_ui_io import IncrementalPanelRenderer, get_ui_width, render_title_ba
 
 
 def _dynamic_ui_width() -> int:
-    """Calcula ancho de UI adaptado al terminal actual sin tope fijo de 86."""
+    """
+    Calcula ancho de UI adaptado al terminal actual sin tope fijo de 86.
+    
+    Returns:
+        int: Ancho calculado.
+    """
     try:
         cols = int(shutil.get_terminal_size(fallback=(120, 30)).columns)
     except Exception:
@@ -188,6 +193,9 @@ def smart_fix_menu(issues, report, ctx: dict[str, Any]) -> bool:
             seen_funcs.add(func_key)
 
     def draw_header():
+        """
+        Renderiza el encabezado del menú de correcciones automáticas.
+        """
         if report:
             width = _dynamic_ui_width()
             render_title_banner(title="SYSTEM DIAGNOSTICS (CACHED)", style=style, width=width)
@@ -247,6 +255,9 @@ def run_diagnostics_ui(ctx: dict[str, Any]) -> None:
         """
 
         def _render_static() -> None:
+            """
+            Renderiza el resumen estático de diagnóstico.
+            """
             width = _dynamic_ui_width()
             print()
             render_title_banner(title="SYSTEM DIAGNOSTICS & VERIFICATION", style=style, width=width)

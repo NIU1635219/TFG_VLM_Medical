@@ -105,20 +105,35 @@ def show_menu(*, ctx: dict[str, Any]) -> None:
     clear_screen_ansi = ctx["clear_screen_ansi"]
 
     def header():
+        """
+        Renderiza el encabezado del menú principal.
+        """
         print_banner()
         print(f"{Style.BOLD} MAIN MENU {Style.ENDC}")
 
     def action_diag():
+        """
+        Ejecuta el menú de diagnóstico.
+        """
         run_diagnostics_ui()
 
     def action_reinstall():
+        """
+        Ejecuta el menú de reinstalación de dependencias.
+        """
         reinstall_library_menu()
 
     def action_regen():
+        """
+        Regenera la estructura del proyecto.
+        """
         create_project_structure(verbose=True)
         wait_for_any_key()
 
     def action_reset():
+        """
+        Ejecuta el menú de reinicio del entorno.
+        """
         if ask_user("This will delete .venv and reinstall everything. Sure?", "n"):
             perform_install_fn(full_reinstall=True)
 

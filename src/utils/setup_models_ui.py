@@ -228,12 +228,28 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
     FINISHED_STATUS_TTL_SECONDS = 5.0
 
     def _new_job_id() -> str:
+        """
+        Genera un nuevo ID para un nuevo trabajo de descarga.
+        
+        Returns:
+            str: ID único para el nuevo trabajo.
+        """
         with downloads_lock:
             counter = int(shared_download_state.get("counter", 0)) + 1
             shared_download_state["counter"] = counter
             return f"job-{counter}"
 
     def _create_download_job(*, model: str, quant: str) -> str:
+        """
+        Crea un nuevo trabajo de descarga para un modelo específico.
+        
+        Args:
+            model (str): ID o URL del modelo.
+            quant (str): Tipo de cuantización.
+        
+        Returns:
+            str: ID del nuevo trabajo de descarga.
+        """
         job_id = _new_job_id()
         now = time.time()
         with downloads_lock:
@@ -253,6 +269,13 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         return job_id
 
     def _update_download_job(job_id: str, **updates: Any) -> None:
+        """
+        Actualiza el estado de un trabajo de descarga.
+        
+        Args:
+            job_id (str): ID del trabajo de descarga.
+            **updates (Any): Actualizaciones para el trabajo de descarga.
+        """
         with downloads_lock:
             if job_id not in download_jobs:
                 return
@@ -265,6 +288,12 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
             download_jobs[job_id]["updated_at"] = time.time()
 
     def _prune_finished_jobs_locked(now_ts: float) -> None:
+        """
+        Elimina trabajos de descarga que han estado en estado finalizado por un tiempo excedido.
+        
+        Args:
+            now_ts (float): Timestamp actual.
+        """
         stale_ids = []
         for job_id, job in download_jobs.items():
             status = str(job.get("status") or "")
@@ -276,12 +305,28 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
             download_jobs.pop(job_id, None)
 
     def _snapshot_download_jobs() -> list[dict[str, Any]]:
+        """
+        Genera una instantánea de los trabajos de descarga.
+        
+        Returns:
+            list[dict[str, Any]]: Lista de trabajos de descarga ordenada por fecha de creación.
+        """
         with downloads_lock:
             _prune_finished_jobs_locked(time.time())
             ordered = sorted(download_jobs.items(), key=lambda item: float(item[1].get("created_at") or 0.0))
             return [{"job_id": jid, **dict(data)} for jid, data in ordered]
 
     def _download_signature_for_option(entry: dict[str, Any], model_ref: str) -> str:
+        """
+        Genera una firma única para una opción de descarga.
+        
+        Args:
+            entry (dict[str, Any]): Entrada del registro de modelos.
+            model_ref (str): Referencia al modelo.
+        
+        Returns:
+            str: Firma única para la opción de descarga.
+        """
         quant = str(entry.get("quantization") or "").strip().upper()
         if not quant or quant == "UNKNOWN":
             quant = lms_menu_helpers.extract_quantization_from_text(entry.get("name"))
@@ -295,12 +340,31 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         return f"{model_key}|{str(quant or 'UNKNOWN').upper()}"
 
     def _running_download_signatures(*, snapshot: dict[str, Any] | None = None) -> set[str]:
+        """
+        Obtiene las firmas de descargas en ejecución.
+        
+        Args:
+            snapshot (dict[str, Any] | None, optional): Instantánea de descargas. Defaults to None.
+        
+        Returns:
+            set[str]: Conjunto de firmas de descargas en ejecución.
+        """
         if snapshot is not None:
             return set(str(sig) for sig in snapshot.get("running_signatures", set()))
         built = _build_download_status_snapshot(ui_width=_current_ui_width())
         return set(str(sig) for sig in built.get("running_signatures", set()))
 
     def _trim_text(text: str, max_len: int) -> str:
+        """
+        Trunca un texto si excede una longitud máxima.
+        
+        Args:
+            text (str): Texto a truncar.
+            max_len (int): Longitud máxima del texto.
+        
+        Returns:
+            str: Texto truncado si es necesario.
+        """
         raw = str(text or "")
         if len(raw) <= max_len:
             return raw
@@ -404,6 +468,16 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         }
 
     def _format_download_info_text(*, include_running_lines: bool, snapshot: dict[str, Any] | None = None) -> str:
+        """
+        Formatea el texto de información de descargas.
+        
+        Args:
+            include_running_lines (bool): Incluir líneas de descargas en ejecución.
+            snapshot (dict[str, Any] | None, optional): Instantánea de descargas. Defaults to None.
+        
+        Returns:
+            str: Texto formateado de información de descargas.
+        """
         current_snapshot = snapshot or _build_download_status_snapshot(ui_width=_current_ui_width())
         summary = str(current_snapshot.get("summary") or "")
         running_lines = list(current_snapshot.get("running_lines") or [])
@@ -417,6 +491,18 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
     ram_mem_bytes = lms_menu_helpers.detect_ram_memory_bytes(psutil)
 
     def _pick_download_option(options, title, local_keys=None, model_ref=None):
+        """
+        Selecciona una opción de descarga.
+        
+        Args:
+            options (list[dict[str, Any]]): Lista de opciones de descarga.
+            title (str): Título de la selección.
+            local_keys (list[str] | None, optional): Claves locales. Defaults to None.
+            model_ref (str | None, optional): Referencia al modelo. Defaults to None.
+        
+        Returns:
+            dict[str, Any] | None: Opción seleccionada o None si no hay opciones.
+        """
         if not options:
             return None
 
@@ -424,9 +510,27 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         model_hint = lms_menu_helpers.model_hint_from_ref(model_ref)
 
         def _is_local_option(entry):
+            """
+            Verifica si una opción es local.
+            
+            Args:
+                entry (dict[str, Any]): Entrada de la opción.
+            
+            Returns:
+                bool: True si la opción es local, False en caso contrario.
+            """
             return lms_menu_helpers.option_is_local(entry, normalized_local, model_hint)
 
         def _capacity_status(entry):
+            """
+            Obtiene el estado de capacidad de una opción.
+            
+            Args:
+                entry (dict[str, Any]): Entrada de la opción.
+            
+            Returns:
+                str: Estado de capacidad de la opción.
+            """
             size_bytes = entry.get("size_bytes")
             return lms_menu_helpers.capacity_status(size_bytes, gpu_mem_bytes, ram_mem_bytes)
 
@@ -472,6 +576,12 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         option_items.append(MenuItem("Back", lambda: None, description="Volver al menú anterior."))
 
         def q_header():
+            """
+            Genera el encabezado para la selección de cuantización.
+            
+            Returns:
+                str: Encabezado formateado.
+            """
             ui_width = _current_ui_width()
             render_title_banner(title=title, style=Style, width=ui_width)
             print(" " + _divider(ui_width))
@@ -498,6 +608,12 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         return None
 
     def _download_with_progress(selected_option):
+        """
+        Descarga un modelo con progreso.
+        
+        Args:
+            selected_option (dict[str, Any]): Opción seleccionada para descargar.
+        """
         option_name = str(selected_option.get("name") or "").strip()
         option_quant = str(selected_option.get("quantization") or "unknown").strip().upper()
         option_identifier = str(selected_option.get("indexed_model_identifier") or "").strip()
@@ -512,6 +628,12 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         job_id = _create_download_job(model=option_model_name, quant=option_quant)
 
         def on_progress(update):
+            """
+            Maneja el progreso de la descarga.
+            
+            Args:
+                update (object): Actualización del progreso.
+            """
             downloaded = float(getattr(update, "downloaded_bytes", 0) or 0)
             total = float(getattr(update, "total_bytes", 0) or 0)
             speed = float(getattr(update, "speed_bytes_per_second", 0) or 0)
@@ -519,6 +641,12 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
             _update_download_job(job_id, downloaded=downloaded, total=total, speed=speed)
 
         def on_finalize(_result=None):
+            """
+            Maneja la finalización de la descarga.
+            
+            Args:
+                _result (object, optional): Resultado de la descarga. Defaults to None.
+            """
             snapshot = next((item for item in _snapshot_download_jobs() if item.get("job_id") == job_id), None)
             if snapshot is None:
                 return
@@ -530,6 +658,9 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
             _update_download_job(job_id, downloaded=final_total, total=final_total, speed=0.0)
 
         def _worker():
+            """
+            Ejecuta el trabajo de descarga.
+            """
             ok, info = lms_models.download_option(selected_option, on_progress=on_progress, on_finalize=on_finalize)
             snapshot = next((item for item in _snapshot_download_jobs() if item.get("job_id") == job_id), None)
             if snapshot is None:
@@ -584,6 +715,9 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
             footer_lines = list(footer_snapshot.get("running_lines") or [])
 
             def _render_static() -> None:
+                """
+                Renderiza el panel estático.
+                """
                 print_banner()
                 print(f"{Style.BOLD} LM STUDIO MODEL MANAGER {Style.ENDC}")
                 print()
@@ -643,6 +777,9 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
                 current_value += ch
 
     def _download_registry_model_ui():
+        """
+        Interfaz de usuario para descargar un modelo de registro.
+        """
         registry_items = list(MODELS_REGISTRY.items())
         model_cursor = MENU_CURSOR_MEMORY.get("lms_registry_selector", 0)
         model_quant_cursor: dict[str, int] = {}
@@ -654,6 +791,9 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         ram_gb = lms_menu_helpers.bytes_to_gb(ram_mem_bytes)
 
         def _render_registry_static() -> None:
+            """
+            Renderiza el panel estático para la interfaz de usuario de descarga de modelos de registro.
+            """
             ui_width = _current_ui_width()
             print_banner()
             print(f"{Style.BOLD} LM STUDIO MODEL MANAGER {Style.ENDC}")
@@ -674,6 +814,15 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         panel = incremental_panel_renderer_cls(clear_screen_fn=clear_screen_ansi, render_static_fn=_render_registry_static)
 
         def _get_cached_options(model_ref: str) -> list[dict[str, object]]:
+            """
+            Obtiene las opciones de descarga缓存.
+            
+            Args:
+                model_ref (str): Referencia al modelo.
+            
+            Returns:
+                list[dict[str, object]]: Lista de opciones de descarga.
+            """
             if model_ref in options_cache:
                 return options_cache[model_ref]
             raw_options = lms_menu_helpers.sort_download_options(lms_models.get_download_options(model_ref))
@@ -687,6 +836,18 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
             model_ref: str,
             running_signatures: set[str],
         ) -> tuple[str, str, bool]:
+            """
+            Obtiene el estado de una opción de descarga.
+            
+            Args:
+                entry (dict[str, object]): Entrada de la opción.
+                local_signatures (set[str]): Firmas locales.
+                model_ref (str): Referencia al modelo.
+                running_signatures (set[str]): Firmas en ejecución.
+            
+            Returns:
+                tuple[str, str, bool]: Tupla con el estado, el token de color y si está bloqueada.
+            """
             option_signature = _download_signature_for_option(entry, model_ref).lower()
             if option_signature in running_signatures:
                 return "DOWNLOADING", Style.OKCYAN, True
@@ -697,6 +858,15 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
             return state_text, color, blocked
 
         def _clamp_model_cursor(value: int) -> int:
+            """
+            Ajusta el cursor del modelo.
+            
+            Args:
+                value (int): Valor del cursor.
+            
+            Returns:
+                int: Cursor ajustado.
+            """
             total_rows = len(registry_items) + 1
             if total_rows <= 0:
                 return 0
@@ -895,6 +1065,9 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
             time.sleep(0.01)
 
     def _download_custom_model_ui():
+        """
+        Interfaz de usuario para descargar un modelo personalizado.
+        """
         clear_screen_ansi()
         print_banner()
         print(f"{Style.BOLD} LM STUDIO MODEL MANAGER {Style.ENDC}")
@@ -946,6 +1119,12 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
             wait_for_any_key()
 
     def _delete_model_ui(model_key):
+        """
+        Interfaz de usuario para eliminar un modelo local.
+        
+        Args:
+            model_key (str): Clave del modelo.
+        """
         if ask_user(
             f"Confirm delete local model '{model_key}'?",
             "n",
@@ -961,11 +1140,20 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         wait_for_any_key()
 
     def _menu_header():
+        """
+        Imprime el encabezado del menú.
+        """
         print_banner()
         print(f"{Style.BOLD} LM STUDIO MODEL MANAGER {Style.ENDC}")
         print()
 
     def _table_layout() -> tuple[int, int, int]:
+        """
+        Calcula el diseño de la tabla.
+        
+        Returns:
+            tuple[int, int, int]: Tupla con el ancho de la tabla, el ancho de la columna de modelos y el ancho de la columna de cuantiaciones.
+        """
         quant_col_width = 12
         status_col_width = 10
         table_width = _current_ui_width()
@@ -983,6 +1171,15 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         table_header_item.selectable = False
 
         def table_header_dynamic_label(_is_selected):
+            """
+            Genera el encabezado dinámico de la tabla.
+            
+            Args:
+                _is_selected (bool): Indica si el encabezado está seleccionado.
+            
+            Returns:
+                str: Encabezado dinámico de la tabla.
+            """
             _table_width, model_col_width, quant_col_width = _table_layout()
             return (
                 f"{Style.DIM}{'MODEL':<{model_col_width}} | "
@@ -994,6 +1191,15 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
 
         table_separator_item = MenuStaticItem(label="", description="")
         def colorized_table_separator(_is_selected):
+            """
+            Genera el separador dinámico de la tabla.
+            
+            Args:
+                _is_selected (bool): Indica si el separador está seleccionado.
+            
+            Returns:
+                str: Separador dinámico de la tabla.
+            """
             table_width, _model_col_width, _quant_col_width = _table_layout()
             return f"{Style.DIM}{'─' * table_width}{Style.ENDC}"
 
@@ -1022,6 +1228,19 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
                 loaded_set=loaded_keys,
                 name_cell=shown_name,
             ):
+                """
+                Genera el encabezado dinámico de la tabla.
+                
+                Args:
+                    is_selected_row (bool): Indica si la fila está seleccionada.
+                    key (str): Clave del modelo.
+                    quant (str): Cantidad del modelo.
+                    loaded_set (set[str]): Conjunto de claves cargadas.
+                    name_cell (str): Celda del nombre.
+                
+                Returns:
+                    str: Encabezado dinámico de la tabla.
+                """
                 _table_width, model_col_width, quant_col_width = _table_layout()
                 status_plain = "REMOVE" if is_selected_row else ("LOADED" if key in loaded_set else "LOCAL")
                 if is_selected_row:
@@ -1056,6 +1275,15 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         separator_item.selectable = False
 
         def separator_dynamic_label(_is_selected):
+            """
+            Genera el separador dinámico de la tabla.
+            
+            Args:
+                _is_selected (bool): Indica si el separador está seleccionado.
+            
+            Returns:
+                str: Separador dinámico de la tabla.
+            """
             table_width, _model_col_width, _quant_col_width = _table_layout()
             return f"{Style.DIM}{'─' * table_width}{Style.ENDC}"
 

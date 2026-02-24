@@ -34,15 +34,19 @@ def test_crop_image_remove_black_borders():
 @patch('src.preprocessing.preprocess.cv2.imread')
 @patch('src.preprocessing.preprocess.cv2.imwrite')
 @patch('src.preprocessing.preprocess.iter_images')
-def test_process_dataset(mock_iter, mock_imwrite, mock_imread):
-    from pathlib import Path
-    mock_iter.return_value = [Path("dummy_in_dir/img1.jpg"), Path("dummy_in_dir/img2.jpg")]
+def test_process_dataset(mock_iter, mock_imwrite, mock_imread, tmp_path):
+    in_dir = tmp_path / "input"
+    out_dir = tmp_path / "output"
+    in_dir.mkdir()
+    out_dir.mkdir()
+    
+    mock_iter.return_value = [in_dir / "img1.jpg", in_dir / "img2.jpg"]
     
     img = np.zeros((100, 100, 3), dtype=np.uint8)
     img[20:80, 20:80] = 255
     mock_imread.return_value = img
     
-    results = process_dataset(Path("dummy_in_dir"), Path("dummy_out_dir"))
+    results = process_dataset(in_dir, out_dir)
     
     assert len(results) == 2
     assert mock_imwrite.call_count == 2

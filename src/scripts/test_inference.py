@@ -544,6 +544,16 @@ def validate_response(label: str, response_payload: str | Dict[str, object] | VL
 
 
 def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
+    """
+    Ejecuta un test de humo para validar que el modelo puede procesar imágenes.
+    
+    Args:
+        model_tag (str): Etiqueta del modelo a probar.
+        test_cases (List[Dict[str, str]]): Lista de casos de prueba.
+        
+    Returns:
+        int: Cantidad de casos de prueba exitosos.
+    """
     print("\n=== TAREA 4: SMOKE TEST VLM (LM STUDIO) ===")
     print(f"👉 Modelo objetivo: {model_tag}")
 
@@ -592,6 +602,16 @@ def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
 
 
 def resolve_model(model_arg: str | None, interactive: bool) -> str:
+    """
+    Resuelve el modelo objetivo para el test de humo.
+    
+    Args:
+        model_arg (str | None): Etiqueta del modelo proporcionada por el usuario.
+        interactive (bool): Indica si se debe mostrar un menú interactivo.
+        
+    Returns:
+        str: Etiqueta del modelo seleccionado.
+    """
     if model_arg:
         return model_arg
 
@@ -615,6 +635,16 @@ def resolve_model(model_arg: str | None, interactive: bool) -> str:
 
 
 def main(model_path: str | None = None, interactive: bool = False) -> int:
+    """
+    Ejecuta el test de humo para validar que el modelo puede procesar imágenes.
+    
+    Args:
+        model_path (str | None): Ruta al modelo a probar.
+        interactive (bool): Indica si se debe mostrar un menú interactivo.
+        
+    Returns:
+        int: Cantidad de casos de prueba exitosos.
+    """
     try:
         model_tag = resolve_model(model_path, interactive)
         test_cases = ensure_test_images()

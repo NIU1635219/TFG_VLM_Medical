@@ -31,7 +31,15 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
     time_module = ctx["time"]
 
     def run_smoke_test_in_process(model_tag: str) -> int:
-        """Ejecuta smoke test sin subprocess para mantener navegación de menú estable."""
+        """
+        Ejecuta smoke test sin subprocess para mantener navegación de menú estable.
+        
+        Args:
+            model_tag (str): Etiqueta del modelo.
+        
+        Returns:
+            int: Codigo de salida del smoke test.
+        """
         try:
             from src.scripts.test_inference import main as smoke_test_main
         except Exception as error:
@@ -45,11 +53,17 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
             return 1
 
     def run_all_unit_tests() -> None:
+        """
+        Ejecuta todos los tests unitarios.
+        """
         log("Running All Unit Tests...", "step")
         run_cmd("uv run python -m pytest tests/")
         wait_for_any_key()
 
     def run_specific_test() -> None:
+        """
+        Ejecuta un test específico.
+        """
         while True:
             files = list_test_files()
             if not files:
@@ -61,6 +75,9 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
             test_opts.append(MenuItem("Cancel", lambda: None, description="Vuelve al menú anterior sin ejecutar pruebas."))
 
             def t_header() -> None:
+                """
+                Imprime el encabezado del menú.
+                """
                 print_banner()
                 print(f"{Style.BOLD} SELECT TEST FILE {Style.ENDC}")
 
@@ -81,7 +98,9 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
             wait_for_any_key("Finished. Press any key to return to test selector...")
 
     def run_smoke_test_wrapper() -> None:
-        """Lanza smoke test y mantiene retorno al selector de modelo (un nivel atrás)."""
+        """
+        Lanza smoke test y mantiene retorno al selector de modelo (un nivel atrás).
+        """
         while True:
             model_opts = []
             installed_models = get_installed_lms_models()
@@ -97,6 +116,9 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
             model_opts.append(MenuItem("Cancel", lambda: None, description="Vuelve al menú anterior sin ejecutar smoke test."))
 
             def m_header() -> None:
+                """
+                Imprime el encabezado del menú.
+                """
                 print_banner()
                 print(f"{Style.BOLD} SELECT INFERENCE MODEL {Style.ENDC}")
 
@@ -125,6 +147,9 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
             wait_for_any_key("Press any key to return to model selector...")
 
     def header() -> None:
+        """
+        Imprime el encabezado del menú.
+        """
         print_banner()
         print(f"{Style.BOLD} TEST & MODEL MANAGER {Style.ENDC}")
 

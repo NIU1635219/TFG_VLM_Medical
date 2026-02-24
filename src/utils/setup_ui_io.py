@@ -18,7 +18,16 @@ DEFAULT_UI_WIDTH = 86
 
 
 def _visual_rows(text: str, terminal_width: int) -> int:
-    """Calcula cuántas filas visuales ocupa un texto considerando wrap automático."""
+    """
+    Calcula cuántas filas visuales ocupa un texto considerando wrap automático.
+    
+    Args:
+        text (str): Texto a analizar.
+        terminal_width (int): Ancho del terminal.
+    
+    Returns:
+        int: Número de filas visuales.
+    """
     clean_text = _ANSI_RE.sub("", str(text or ""))
     chunks = clean_text.splitlines() or [""]
     width = max(1, int(terminal_width or 1))
@@ -31,7 +40,17 @@ def _visual_rows(text: str, terminal_width: int) -> int:
 
 
 def get_ui_width(*, shutil_module: Any = None, max_width: int = DEFAULT_UI_WIDTH, min_width: int = 60) -> int:
-    """Calcula un ancho consistente de UI adaptado al tamaño de terminal."""
+    """
+    Calcula un ancho consistente de UI adaptado al tamaño de terminal.
+    
+    Args:
+        shutil_module (Any, optional): Módulo shutil inyectado para tests.
+        max_width (int, optional): Ancho máximo de seguridad.
+        min_width (int, optional): Ancho mínimo de seguridad.
+    
+    Returns:
+        int: Ancho utilizable en el frame actual sin tope fijo.
+    """
     width = int(max_width)
     try:
         module = shutil_module or shutil
@@ -43,8 +62,9 @@ def get_ui_width(*, shutil_module: Any = None, max_width: int = DEFAULT_UI_WIDTH
 
 
 def get_full_ui_width(*, shutil_module: Any = None, min_width: int = 60, side_padding: int = 4) -> int:
-    """Calcula el ancho de UI ocupando todo el terminal disponible.
-
+    """
+    Calcula el ancho de UI ocupando todo el terminal disponible.
+    
     Args:
         shutil_module (Any, optional): Módulo shutil inyectado para tests.
         min_width (int, optional): Ancho mínimo de seguridad.
@@ -64,7 +84,15 @@ def get_full_ui_width(*, shutil_module: Any = None, min_width: int = 60, side_pa
 
 
 def render_title_banner(*, title: str, style: Any, width: int, left_margin: int = 1) -> None:
-    """Imprime un banner rectangular alineado al ancho de separadores."""
+    """
+    Imprime un banner rectangular alineado al ancho de separadores.
+    
+    Args:
+        title (str): Título del banner.
+        style (Any): Estilo ANSI para el banner.
+        width (int): Ancho del banner.
+        left_margin (int, optional): Margen izquierdo.
+    """
     margin = " " * max(0, int(left_margin))
     content = str(title or "").strip()
     if len(content) > width:
@@ -75,7 +103,16 @@ def render_title_banner(*, title: str, style: Any, width: int, left_margin: int 
 
 
 def wrap_plain_text(text: str, width: int) -> list[str]:
-    """Envuelve texto plano sin códigos ANSI para evitar overflow visual."""
+    """
+    Envuelve texto plano sin códigos ANSI para evitar overflow visual.
+    
+    Args:
+        text (str): Texto a envolver.
+        width (int): Ancho máximo de la línea.
+    
+    Returns:
+        list[str]: Lista de líneas envueltas.
+    """
     raw = str(text or "")
     if width <= 4 or len(raw) <= width:
         return [raw]
@@ -248,7 +285,9 @@ class IncrementalPanelRenderer:
         self.prev_terminal_width: int | None = None
 
     def reset(self) -> None:
-        """Invalida el caché visual para forzar repaint completo en próximo render."""
+        """
+        Invalida el caché visual para forzar repaint completo en próximo render.
+        """
         self.static_rendered = False
         self.prev_dynamic_visual_rows = 0
         self.prev_terminal_width = None
@@ -302,8 +341,8 @@ def clear_screen_ansi(*, os_module: Any, sys_module: Any) -> None:
     Usa 'cls' en Windows y secuencias ANSI ('\033[H\033[2J') en otros sistemas.
     
     Args:
-        os_module: Módulo `os` inyectado.
-        sys_module: Módulo `sys` inyectado.
+        os_module (Any): Módulo `os` inyectado.
+        sys_module (Any): Módulo `sys` inyectado.
     """
     if os_module.name == "nt":
         os_module.system("cls")
@@ -320,8 +359,8 @@ def read_key(*, os_module: Any, msvcrt_module: Any) -> str | None:
     Específico para Windows usando `msvcrt`.
     
     Args:
-        os_module: Módulo `os` inyectado.
-        msvcrt_module: Módulo `msvcrt` inyectado (puede ser None en Linux/Mac).
+        os_module (Any): Módulo `os` inyectado.
+        msvcrt_module (Any): Módulo `msvcrt` inyectado (puede ser None en Linux/Mac).
         
     Returns:
         str | None: Código de tecla ('UP', 'DOWN', 'LEFT', 'RIGHT', 'ENTER', 'SPACE', 'ESC') o None.
@@ -361,7 +400,7 @@ def log(*, style: Any, msg: str, level: str = "info") -> None:
     Imprime mensajes de estado con formato y color.
     
     Args:
-        style: Clase con definiciones de estilos ANSI.
+        style (Any): Clase con definiciones de estilos ANSI.
         msg (str): El mensaje a imprimir.
         level (str, optional): Nivel del mensaje ('info', 'success', 'error', 'warning', 'step').
     """
@@ -394,7 +433,7 @@ def ask_user(
     Args:
         question (str): La pregunta a mostrar al usuario.
         default (str): Opción por defecto ('y' o 'n').
-        style: Clase con definiciones de estilos ANSI.
+        style (Any): Clase con definiciones de estilos ANSI.
         read_key_fn (Callable): Función para leer entrada de teclado.
         clear_screen_fn (Callable): Función para limpiar la pantalla.
         info_text (str | Callable, optional): Texto adicional dinámico o fijo a mostrar.
@@ -408,6 +447,9 @@ def ask_user(
 
     selected = 0 if normalized_default == "y" else 1
     def _render_static() -> None:
+        """
+        Renderiza la parte estática de la interfaz de selección.
+        """
         content_width = get_full_ui_width(shutil_module=shutil)
         divider = "─" * (content_width + 2)
         for q_line in wrap_plain_text(str(question or ""), max(16, content_width)):
@@ -488,8 +530,8 @@ def input_with_esc(*, prompt: str, os_module: Any, msvcrt_module: Any) -> str | 
     
     Args:
         prompt (str): Texto a mostrar antes de la entrada.
-        os_module: Módulo `os` inyectado.
-        msvcrt_module: Módulo `msvcrt` inyectado (para Windows).
+        os_module (Any): Módulo `os` inyectado.
+        msvcrt_module (Any): Módulo `msvcrt` inyectado (para Windows).
         
     Returns:
         str | None: El texto ingresado, o None si se canceló con ESC.
@@ -532,9 +574,9 @@ def wait_for_any_key(*, message: str, style: Any, os_module: Any, msvcrt_module:
     
     Args:
         message (str): Mensaje a mostrar al usuario.
-        style: Clase con definiciones de estilos ANSI.
-        os_module: Módulo `os` inyectado.
-        msvcrt_module: Módulo `msvcrt` inyectado (para Windows).
+        style (Any): Clase con definiciones de estilos ANSI.
+        os_module (Any): Módulo `os` inyectado.
+        msvcrt_module (Any): Módulo `msvcrt` inyectado (para Windows).
     """
     print(f"\n{style.DIM}{message}{style.ENDC}", end="", flush=True)
     if os_module.name == "nt" and msvcrt_module:
@@ -560,7 +602,7 @@ def run_cmd(
     Args:
         cmd (str): El comando de shell a ejecutar.
         critical (bool): Si es True, preguntará al usuario si quiere reintentar en caso de fallo.
-        style: Clase con definiciones de estilos ANSI.
+        style (Any): Clase con definiciones de estilos ANSI.
         ask_user_fn (Callable): Función para solicitar confirmación al usuario.
         log_fn (Callable): Función para logging.
         

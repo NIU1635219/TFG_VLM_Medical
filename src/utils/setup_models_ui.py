@@ -15,6 +15,7 @@ from .setup_ui_io import (
     render_title_banner,
     should_repaint_static,
     wrap_plain_text,
+    IncrementalPanelRenderer,
 )
 
 
@@ -75,73 +76,7 @@ def _wrap_colored_chunks(chunks: list[str], *, prefix: str, max_width: int) -> l
     return lines
 
 
-class _FallbackIncrementalPanelRenderer:
-    """
-    Renderizador fallback simple para cuando no se inyecta el IncrementalPanelRenderer completo.
-    
-    Implementa la misma interfaz (reset, render) pero con una implementación mínima.
-    """
 
-    def __init__(self, *, clear_screen_fn, render_static_fn):
-        """
-        Inicializa el renderer fallback.
-
-        Args:
-            clear_screen_fn (Callable): Función para limpiar pantalla.
-            render_static_fn (Callable): Función para renderizar parte estática.
-        """
-        self.clear_screen_fn = clear_screen_fn
-        self.render_static_fn = render_static_fn
-        self.static_rendered = False
-        self.prev_dynamic_visual_rows = 0
-        self.prev_terminal_width: int | None = None
-
-    def reset(self):
-        """Resetea el estado del renderer."""
-        self.static_rendered = False
-        self.prev_dynamic_visual_rows = 0
-        self.prev_terminal_width = None
-
-    def render(self, dynamic_lines, *, force_full=False):
-        """
-        Renderiza líneas dinámicas sobre la parte estática.
-
-        Args:
-            dynamic_lines (list[str]): Líneas a mostrar.
-            force_full (bool, optional): Forzar limpieza completa. Defaults to False.
-        """
-        terminal_width = shutil.get_terminal_size(fallback=(120, 30)).columns
-        decision = compute_render_decision(
-            dynamic_lines=dynamic_lines,
-            terminal_width=terminal_width,
-            prev_terminal_width=self.prev_terminal_width,
-            static_rendered=self.static_rendered,
-            force_full=force_full,
-        )
-        self.prev_terminal_width = terminal_width
-
-        has_wrapped_lines = bool(decision["has_wrapped_lines"])
-        current_dynamic_rows = int(decision["current_dynamic_rows"])
-        effective_force_full = bool(decision["effective_force_full"])
-        use_incremental_frame = bool(decision["use_incremental_frame"])
-
-        if should_repaint_static(
-            use_incremental=True,
-            static_rendered=self.static_rendered,
-            force_full=effective_force_full,
-            has_wrapped_lines=has_wrapped_lines,
-        ):
-            self.clear_screen_fn()
-            self.render_static_fn()
-            self.static_rendered = True
-            self.prev_dynamic_visual_rows = 0
-
-        self.prev_dynamic_visual_rows = paint_dynamic_lines(
-            dynamic_lines=dynamic_lines,
-            prev_dynamic_visual_rows=self.prev_dynamic_visual_rows,
-            current_dynamic_rows=current_dynamic_rows,
-            use_incremental_frame=use_incremental_frame,
-        )
 
 
 def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
@@ -163,7 +98,7 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
     MenuItem = ctx["MenuItem"]
     MenuStaticItem = ctx.get("MenuStaticItem", MenuItem)
     MenuSeparator = ctx.get("MenuSeparator", MenuItem)
-    incremental_panel_renderer_cls = ctx.get("IncrementalPanelRenderer") or _FallbackIncrementalPanelRenderer
+    incremental_panel_renderer_cls = ctx["IncrementalPanelRenderer"]
     lms_models = ctx["lms_models"]
     lms_menu_helpers = ctx["lms_menu_helpers"]
     psutil = ctx["psutil"]

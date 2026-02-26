@@ -1,13 +1,14 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-from src.utils.setup_models_ui import _FallbackIncrementalPanelRenderer, manage_models_menu_ui
+from src.utils.setup_ui_io import IncrementalPanelRenderer
+from src.utils.setup_models_ui import manage_models_menu_ui
 import src.utils.setup_models_ui as setup_models_ui
 
 def test_fallback_incremental_panel_renderer():
     mock_clear = MagicMock()
     mock_render_static = MagicMock()
     
-    renderer = _FallbackIncrementalPanelRenderer(
+    renderer = IncrementalPanelRenderer(
         clear_screen_fn=mock_clear,
         render_static_fn=mock_render_static
     )

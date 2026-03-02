@@ -34,7 +34,15 @@ MODELS_REGISTRY = {
     },
     "internvl3_5_8b": {
         "name": "https://huggingface.co/bartowski/OpenGVLab_InternVL3_5-8B-GGUF",
-        "description": "InternVL 3.5 (8B) - Blaifa"
+        "description": "InternVL 3.5 (8B) - Blaifa",
+    },
+    "internvl3_5_14b": {
+        "name": "https://huggingface.co/bartowski/OpenGVLab_InternVL3_5-14B-GGUF",
+        "description": "InternVL 3.5 (14B) - OpenGVLab (GGUF)",
+    },
+    "qwen3_vl_8b_thinking": {
+        "name": "https://huggingface.co/Qwen/Qwen3-VL-8B-Thinking-GGUF",
+        "description": "Qwen3-VL 8B Thinking (GGUF)",
     }
 }
 

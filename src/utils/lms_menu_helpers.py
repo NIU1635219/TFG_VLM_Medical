@@ -262,18 +262,27 @@ def option_is_local(entry: dict[str, Any], normalized_local: set[str], model_hin
     """
     indexed = str(entry.get("indexed_model_identifier") or "").strip().lower()
     indexed_file = indexed.rsplit("/", 1)[-1] if indexed else ""
+    normalized_hint = model_hint_from_ref(model_hint)
 
-    if indexed and indexed in normalized_local:
+    normalized_local_keys = {
+        str(local_key or "").replace("\\", "/").strip().lower()
+        for local_key in normalized_local
+        if str(local_key or "").strip()
+    }
+
+    has_matching_hint = True
+    if normalized_hint:
+        has_matching_hint = any(normalized_hint in local_key for local_key in normalized_local_keys)
+
+    if indexed and indexed in normalized_local_keys:
         return True
 
-    for local_key in normalized_local:
-        if not local_key:
-            continue
-
-        normalized_local_key = local_key.replace("\\", "/")
+    for normalized_local_key in normalized_local_keys:
         local_file = normalized_local_key.rsplit("/", 1)[-1]
 
         if indexed_file and indexed_file == local_file:
+            if normalized_hint and not has_matching_hint:
+                continue
             return True
 
     return False

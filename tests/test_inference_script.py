@@ -1,6 +1,6 @@
 import pytest
 
-from src.inference.vlm_runner import VLMStructuredResponse
+from src.inference.vlm_runner import GenericObjectDetection
 
 from src.scripts.test_inference import (
     TEST_CASES,
@@ -62,18 +62,18 @@ def test_validate_response_empty_output_has_clear_message():
 def test_parse_structured_response_requires_fields():
     """Verifica que se lance ValueError si faltan campos obligatorios en el JSON."""
     with pytest.raises(ValueError):
-        parse_structured_response('{"polyp_detected": false}')
+        parse_structured_response('{"object_detected": "cat"}')
 
 
 def test_parse_structured_response_accepts_typed_payload():
     """Comprueba que `parse_structured_response` acepte directamente objetos Pydantic/dataclass."""
-    payload = VLMStructuredResponse(
-        polyp_detected=False,
+    payload = GenericObjectDetection(
+        object_detected="cat",
         confidence_score=90,
         justification="Se ve un gato",
     )
     parsed = parse_structured_response(payload)
-    assert parsed["polyp_detected"] is False
+    assert parsed["object_detected"] == "cat"
     assert parsed["confidence_score"] == 90
 
 

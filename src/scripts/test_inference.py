@@ -29,7 +29,7 @@ except ImportError:
 # Add project root to sys.path to allow importing src
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-from src.inference.vlm_runner import VLMLoader, VLMStructuredResponse
+from src.inference.vlm_runner import VLMLoader, GenericObjectDetection
 
 PROMPT = (
     "Identifica el animal principal de la imagen y responde en español. "
@@ -457,11 +457,11 @@ def contains_any_keyword(response_text: str, keywords: List[str]) -> bool:
     return any(normalize_text(keyword) in normalized_response for keyword in keywords)
 
 
-def parse_structured_response(response_payload: str | Dict[str, object] | VLMStructuredResponse) -> Dict[str, object]:
+def parse_structured_response(response_payload: str | Dict[str, object] | GenericObjectDetection) -> Dict[str, object]:
     """
     Convierte la respuesta del modelo VLM en un diccionario uniforme.
     
-    Acepta objetos VLMStructuredResponse, diccionarios o cadenas JSON.
+    Acepta objetos GenericObjectDetection, diccionarios o cadenas JSON.
     Valida que contenga los campos requeridos.
     
     Args:
@@ -473,7 +473,7 @@ def parse_structured_response(response_payload: str | Dict[str, object] | VLMStr
     Raises:
         ValueError: Si el formato es inválido o faltan campos obligatorios.
     """
-    if isinstance(response_payload, VLMStructuredResponse):
+    if isinstance(response_payload, GenericObjectDetection):
         parsed = response_payload.model_dump()
     elif isinstance(response_payload, dict):
         parsed = response_payload
@@ -483,15 +483,19 @@ def parse_structured_response(response_payload: str | Dict[str, object] | VLMStr
     if not isinstance(parsed, dict):
         raise ValueError("La salida estructurada no es un objeto JSON")
 
-    required_keys = {"polyp_detected", "confidence_score", "justification"}
-    missing = required_keys - set(parsed.keys())
-    if missing:
+    # GenericObjectDetection genérico usa 'object_detected'; los esquemas médicos usan sus propios campos.
+    # Verificamos que al menos existan confidence_score y justification, más algún campo de detección.
+    detection_keys = {"object_detected", "polyp_detected", "agrees_with_user", "is_blurry"}
+    has_detection = bool(detection_keys & set(parsed.keys()))
+    has_base = {"confidence_score", "justification"} <= set(parsed.keys())
+    if not has_detection or not has_base:
+        missing = (detection_keys | {"confidence_score", "justification"}) - set(parsed.keys())
         raise ValueError(f"Faltan campos obligatorios en JSON: {', '.join(sorted(missing))}")
 
     return parsed
 
 
-def validate_response(label: str, response_payload: str | Dict[str, object] | VLMStructuredResponse) -> Tuple[bool, str]:
+def validate_response(label: str, response_payload: str | Dict[str, object] | GenericObjectDetection) -> Tuple[bool, str]:
     """
     Valida si la respuesta del modelo es correcta para la etiqueta dada.
     
@@ -578,7 +582,7 @@ def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
             print(f"Imagen: {image_path}")
             response = loader.inference(image_path, PROMPT)
             print("Respuesta estructurada del modelo:")
-            if isinstance(response, VLMStructuredResponse):
+            if isinstance(response, GenericObjectDetection):
                 print(response.model_dump_json(indent=2, ensure_ascii=False))
             else:
                 print(response)

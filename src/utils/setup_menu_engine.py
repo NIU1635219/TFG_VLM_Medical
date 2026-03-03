@@ -142,6 +142,7 @@ def interactive_menu(
     footer_hint_text: str | None = None,
     repaint_strategy: str = "auto",
     dynamic_info_top: bool = False,
+    description_slot_rows: int = 2,
 ) -> Any | list[Any] | None:
     """
     Despliega un menú interactivo controlado por teclado en la terminal.
@@ -359,18 +360,34 @@ def interactive_menu(
             selected_item = flat_rows[current_row]["obj"]
             selected_description = get_item_description_fn(selected_item)
             dynamic_lines.append(divider)
-            description_slot_rows = 2
+            _desc_rows = max(1, int(description_slot_rows))
             if selected_description:
                 desc_prefix = "Descripción: "
-                desc_lines = wrap_plain_text(str(selected_description), max(16, content_width - len(desc_prefix) - 2))
-                shown_desc_lines = desc_lines[:description_slot_rows]
+                # Dividir por \n y envolver cada sub-línea preservando la
+                # sangría original en todas las líneas de continuación.
+                # Así "      # texto largo" se parte como:
+                #   Descripción:       # texto largo que sigue
+                #                      # en la siguiente línea
+                line_width = max(16, content_width - len(desc_prefix) - 2)
+                desc_lines: list[str] = []
+                for raw_line in str(selected_description).replace("\r", "").split("\n"):
+                    if not raw_line.strip():
+                        if desc_lines:
+                            continue   # saltar líneas vacías intermedias
+                        raw_line = " "
+                    stripped = raw_line.lstrip()
+                    indent = raw_line[: len(raw_line) - len(stripped)]
+                    avail = max(8, line_width - len(indent))
+                    for chunk in wrap_plain_text(stripped, avail):
+                        desc_lines.append(indent + chunk)
+                shown_desc_lines = desc_lines[:_desc_rows]
                 dynamic_lines.append(f"{margin}{style.DIM}{desc_prefix}{shown_desc_lines[0]}{style.ENDC}")
                 for extra_desc in shown_desc_lines[1:]:
                     dynamic_lines.append(f"{margin}{style.DIM}{' ' * len(desc_prefix)}{extra_desc}{style.ENDC}")
-                for _ in range(max(0, description_slot_rows - len(shown_desc_lines))):
+                for _ in range(max(0, _desc_rows - len(shown_desc_lines))):
                     dynamic_lines.append(margin)
             else:
-                for _ in range(description_slot_rows):
+                for _ in range(_desc_rows):
                     dynamic_lines.append(margin)
 
             dynamic_lines.append(divider)

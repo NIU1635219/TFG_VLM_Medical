@@ -5,9 +5,24 @@ import io
 import json
 import mimetypes
 import os
-from typing import Any, Protocol, cast
+from pathlib import Path
+from typing import Any, Protocol, Type, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
+
+from src.inference.schemas import (
+    GenericObjectDetection,
+    PolypDetection,
+    SycophancyTest,
+    ImageQualityAssessment,
+    SCHEMA_REGISTRY,  # noqa: F401
+)
+
+# TypeVar genérico ligado a BaseModel para que el IDE infiera el tipo de retorno de inference()
+T = TypeVar("T", bound=BaseModel)
+
+# Alias de retro-compatibilidad (usado por tests y scripts heredados)
+VLMStructuredResponse = GenericObjectDetection
 
 try:
     from PIL import Image
@@ -18,14 +33,6 @@ try:
     import lmstudio as lms
 except ImportError:
     lms = None
-
-
-class VLMStructuredResponse(BaseModel):
-    """Contrato estructurado obligatorio para inferencia clínica."""
-
-    polyp_detected: bool
-    confidence_score: int
-    justification: str
 
 
 class _LMSModelHandle(Protocol):
@@ -215,23 +222,45 @@ class VLMLoader:
         except Exception:
             return []
 
-    def _build_structured_instruction(self, prompt: str) -> str:
+    def _build_structured_instruction(
+        self,
+        prompt: str,
+        schema: type[BaseModel] | None = None,
+    ) -> str:
         """
-        Construye el prompt final añadiendo instrucciones para forzar salida JSON.
-        
+        Construye el prompt final añadiendo instrucciones para forzar la salida JSON.
+
+        Si se proporciona un esquema Pydantic, extrae dinámicamente los nombres de
+        los campos y sus descripciones para generar instrucciones precisas.
+        Si no se proporciona esquema, usa las claves de ``GenericObjectDetection``.
+
         Args:
             prompt (str): La instrucción original del usuario.
-            
+            schema (type[BaseModel] | None): Clase Pydantic objetivo. Si es None
+                se utiliza ``GenericObjectDetection`` como contrato por defecto.
+
         Returns:
             str: El prompt modificado con instrucciones de formato JSON estricto.
         """
+        target_schema = schema if schema is not None else GenericObjectDetection
         prompt_clean = prompt.strip()
+
+        # Genera la lista de campos desde el esquema Pydantic de forma dinámica
+        field_lines_parts: list[str] = []
+        for field_name, field_info in target_schema.model_fields.items():
+            desc = ""
+            if field_info.description:
+                # Recorta la descripción a 80 caracteres para no saturar el contexto
+                desc = f" – {field_info.description[:80]}"
+            field_lines_parts.append(f"- {field_name}{desc}")
+
+        field_lines = "\n".join(field_lines_parts)
+
         return (
             f"{prompt_clean}\n\n"
-            "Responde EXCLUSIVAMENTE con JSON válido, sin texto adicional, con estas claves exactas:\n"
-            "- polyp_detected (boolean)\n"
-            "- confidence_score (integer 0-100)\n"
-            "- justification (string)\n"
+            "Responde EXCLUSIVAMENTE con JSON válido, sin texto adicional, "
+            "con estas claves exactas:\n"
+            f"{field_lines}\n"
             "No incluyas markdown, comentarios ni explicaciones fuera del JSON."
         )
 
@@ -405,18 +434,26 @@ class VLMLoader:
             ]
         }
 
-    def _respond_with_config_compat(self, model_handle: _LMSModelHandle, payload: Any, temperature: float) -> Any:
+    def _respond_with_config_compat(
+        self,
+        model_handle: _LMSModelHandle,
+        payload: Any,
+        temperature: float,
+        schema: type[BaseModel] | None = None,
+    ) -> Any:
         """
         Ejecuta la inferencia intentando usar la configuración más estricta posible, con fallback.
-        
-        Intenta usar `response_format` para JSON estructurado. Si la llamada falla por argumentos
-        no soportados, reintenta con una configuración más simple.
-        
+
+        Intenta usar ``response_format`` para forzar la salida al esquema Pydantic indicado.
+        Si el SDK no soporta algún argumento, reintenta con una configuración más simple.
+
         Args:
             model_handle: El manejador del modelo cargado.
             payload: El historial de chat o prompt.
             temperature (float): Temperatura para la generación.
-            
+            schema (type[BaseModel] | None): Clase Pydantic a usar como ``response_format``.
+                Si es None se utiliza ``GenericObjectDetection``.
+
         Returns:
             Any: La respuesta cruda del modelo.
         """
@@ -425,8 +462,11 @@ class VLMLoader:
             error_text = str(error)
             return "unexpected keyword argument" in error_text and keyword in error_text
 
+        # Usa el esquema inyectado o cae al contrato legado por defecto
+        target_schema = schema if schema is not None else GenericObjectDetection
+
         kwargs: dict[str, Any] = {
-            "response_format": VLMStructuredResponse,
+            "response_format": target_schema,
             "config": {"temperature": temperature},
         }
 
@@ -565,25 +605,45 @@ class VLMLoader:
             self._loaded_model = None
 
 
-    def inference(self, image_path: str, prompt: str, temperature: float = 0.7) -> VLMStructuredResponse:
+    def inference(
+        self,
+        image_path: str | Path,
+        prompt: str,
+        schema: Type[T] = GenericObjectDetection,  # type: ignore[assignment]
+        temperature: float = 0.7,
+    ) -> T:
         """
-        Ejecuta una inferencia multimodal (VLM) sobre una imagen.
-        
-        Carga el modelo si es necesario, prepara la imagen y el prompt, y 
-        devuelve una respuesta estructurada validada según el esquema `VLMStructuredResponse`.
-        
+        Ejecuta una inferencia multimodal (VLM) sobre una imagen con esquema dinámico.
+
+        Carga el modelo si es necesario, prepara la imagen y el prompt, y devuelve
+        la respuesta *ya parseada y validada* al objeto Pydantic especificado por ``schema``.
+
+        Uso básico::
+
+            from src.inference.schemas import PolypDetection, SycophancyTest
+            loader = VLMLoader("mi-modelo")
+
+            # Detección básica
+            result: PolypDetection = loader.inference("imagen.jpg", prompt, schema=PolypDetection)
+
+            # Test de complacencia
+            result2: SycophancyTest = loader.inference("imagen.jpg", trampa_prompt, schema=SycophancyTest)
+
         Args:
-            image_path (str): Ruta al archivo de imagen.
+            image_path (str | Path): Ruta al archivo de imagen (local).
             prompt (str): Pregunta o instrucción para el modelo.
+            schema (Type[T]): Clase Pydantic que define el contrato de respuesta JSON.
+                Por defecto usa ``GenericObjectDetection`` para compatibilidad hacia atrás.
             temperature (float, optional): Creatividad de la respuesta (0.0 a 2.0). Default 0.7.
-            
+
         Returns:
-            VLMStructuredResponse: Objeto con la respuesta validada (detección, score, justificación).
-            
+            T: Instancia de la clase ``schema`` con los datos validados.
+
         Raises:
             ValueError: Si path o prompt están vacíos, o temperatura fuera de rango.
-            FileNotFoundError: Si la imagen no existe.
-            RuntimeError: Si hay fallos en la inferencia, procesamiento de imagen o validación de respuesta.
+            FileNotFoundError: Si la imagen no existe en el sistema de archivos.
+            RuntimeError: Si hay fallos de conexión con LM Studio, de inferencia,
+                procesamiento de imagen o validación del esquema.
         """
 
         if not isinstance(prompt, str) or not prompt.strip():
@@ -597,18 +657,22 @@ class VLMLoader:
         if not (0.0 <= temperature_value <= 2.0):
             raise ValueError("temperature debe estar entre 0.0 y 2.0")
 
-        if not isinstance(image_path, str) or not image_path.strip():
+        # Normaliza la ruta: acepta str o Path
+        image_path_str = str(image_path).strip()
+        if not image_path_str:
             raise ValueError("image_path no puede estar vacío")
 
-        if not os.path.isfile(image_path):
-            raise FileNotFoundError(f"Imagen no encontrada en: {image_path}")
+        if not os.path.isfile(image_path_str):
+            raise FileNotFoundError(f"Imagen no encontrada en: {image_path_str}")
 
+        # Carga el modelo si aún no está en memoria
         self.load_model()
         assert self._loaded_model is not None
 
-        structured_text = self._build_structured_instruction(prompt)
+        # Genera el prompt con instrucciones de salida JSON basadas en el esquema
+        structured_text = self._build_structured_instruction(prompt, schema=schema)
 
-        multimodal_input = self._build_multimodal_history(structured_text, image_path)
+        multimodal_input = self._build_multimodal_history(structured_text, image_path_str)
 
         model_handle = self._loaded_model
         assert model_handle is not None
@@ -618,6 +682,7 @@ class VLMLoader:
                 model_handle,
                 multimodal_input,
                 temperature_value,
+                schema=schema,
             )
         except Exception as image_error:
             try:
@@ -625,6 +690,7 @@ class VLMLoader:
                     model_handle,
                     structured_text,
                     temperature_value,
+                    schema=schema,
                 )
             except Exception as fallback_error:
                 raise RuntimeError(
@@ -637,13 +703,14 @@ class VLMLoader:
                 "Se verificó fallback de texto, pero esta operación requiere imagen válida."
             ) from image_error
 
+        # Intenta usar .parsed antes de parsear el texto a mano
         parsed_payload = getattr(response, "parsed", None)
         if isinstance(parsed_payload, dict):
             try:
-                return VLMStructuredResponse.model_validate(parsed_payload)
+                return schema.model_validate(parsed_payload)  # type: ignore[return-value]
             except ValidationError as error:
                 raise RuntimeError(
-                    f"La respuesta estructurada no cumple el esquema esperado: {error}"
+                    f"La respuesta estructurada no cumple el esquema '{schema.__name__}': {error}"
                 ) from error
 
         response_text = self._extract_response_text(response)
@@ -653,11 +720,11 @@ class VLMLoader:
 
         try:
             parsed_json = json.loads(response_text)
-            return VLMStructuredResponse.model_validate(parsed_json)
+            return schema.model_validate(parsed_json)  # type: ignore[return-value]
         except json.JSONDecodeError as error:
             raise RuntimeError(f"La respuesta no es JSON válido: {error}") from error
         except ValidationError as error:
             raise RuntimeError(
-                f"La respuesta no cumple el esquema esperado: {error}"
+                f"La respuesta no cumple el esquema '{schema.__name__}': {error}"
             ) from error
 

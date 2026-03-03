@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, mock_open, patch
-from src.inference.vlm_runner import VLMLoader, VLMStructuredResponse
+from src.inference.vlm_runner import VLMLoader, GenericObjectDetection
 
 # Constants
 FAKE_MODEL_TAG = "fake-model:latest"
@@ -64,15 +64,15 @@ def test_load_model_raises_if_sdk_fails(loader, mock_lms_sdk):
 
 
 def test_inference_returns_typed_structured_response(loader, mock_lms_sdk):
-    """Verifica que el método `inference` devuelva un objeto `VLMStructuredResponse`."""
+    """Verifica que el método `inference` devuelva un objeto `GenericObjectDetection`."""
     _mock_lms, mock_model = mock_lms_sdk
-    mock_model.respond.return_value = '{"polyp_detected": false, "confidence_score": 91, "justification": "No se observan pólipos."}'
+    mock_model.respond.return_value = '{"object_detected": "cat", "confidence_score": 91, "justification": "Se ve un gato."}'
 
     with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
         result = loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba")
 
-    assert isinstance(result, VLMStructuredResponse)
-    assert result.polyp_detected is False
+    assert isinstance(result, GenericObjectDetection)
+    assert result.object_detected == "cat"
     assert result.confidence_score == 91
 
 
@@ -81,23 +81,23 @@ def test_inference_uses_parsed_when_available(loader, mock_lms_sdk):
     _mock_lms, mock_model = mock_lms_sdk
     mock_response = MagicMock()
     mock_response.parsed = {
-        "polyp_detected": False,
+        "object_detected": "dog",
         "confidence_score": 92,
-        "justification": "Sin pólipos.",
+        "justification": "Se ve un perro.",
     }
     mock_model.respond.return_value = mock_response
 
     with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
         result = loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba")
 
-    assert isinstance(result, VLMStructuredResponse)
+    assert isinstance(result, GenericObjectDetection)
     assert result.confidence_score == 92
 
 
 def test_inference_uses_chat_history_with_images(loader, mock_lms_sdk):
     """Confirma que se construya correctamente el historial de chat incluyendo imágenes."""
     mock_lms, mock_model = mock_lms_sdk
-    mock_model.respond.return_value = '{"polyp_detected": false, "confidence_score": 75, "justification": "Sin pólipos."}'
+    mock_model.respond.return_value = '{"object_detected": "cat", "confidence_score": 75, "justification": "Se ve un gato."}'
 
     with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
         loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba", temperature=0.5)
@@ -114,7 +114,7 @@ def test_inference_uses_chat_history_with_images(loader, mock_lms_sdk):
     assert add_args.args[0]
     assert add_args.kwargs.get("images")
     assert first_call_kwargs.get("config") == {"temperature": 0.5}
-    assert first_call_kwargs.get("response_format") is VLMStructuredResponse
+    assert first_call_kwargs.get("response_format") is GenericObjectDetection
 
 
 def test_inference_retries_with_temperature_when_config_not_supported(loader, mock_lms_sdk):
@@ -125,19 +125,19 @@ def test_inference_retries_with_temperature_when_config_not_supported(loader, mo
         if "config" in kwargs:
             raise TypeError("LLM.respond() got an unexpected keyword argument 'config'")
         if "temperature" in kwargs:
-            return '{"polyp_detected": false, "confidence_score": 80, "justification": "Sin hallazgos."}'
-        return '{"polyp_detected": false, "confidence_score": 80, "justification": "Sin hallazgos."}'
+            return '{"object_detected": "mountain", "confidence_score": 80, "justification": "Se ve una montaña."}'
+        return '{"object_detected": "mountain", "confidence_score": 80, "justification": "Se ve una montaña."}'
 
     mock_model.respond.side_effect = fake_respond
 
     with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
         result = loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba", temperature=0.3)
 
-    assert isinstance(result, VLMStructuredResponse)
+    assert isinstance(result, GenericObjectDetection)
     assert mock_model.respond.call_count == 2
     assert mock_model.respond.call_args_list[0].kwargs.get("config") == {"temperature": 0.3}
     assert mock_model.respond.call_args_list[1].kwargs.get("temperature") == 0.3
-    assert mock_model.respond.call_args_list[1].kwargs.get("response_format") is VLMStructuredResponse
+    assert mock_model.respond.call_args_list[1].kwargs.get("response_format") is GenericObjectDetection
 
 
 def test_inference_retries_without_temperature_when_not_supported(loader, mock_lms_sdk):
@@ -149,18 +149,18 @@ def test_inference_retries_without_temperature_when_not_supported(loader, mock_l
             raise TypeError("LLM.respond() got an unexpected keyword argument 'config'")
         if "temperature" in kwargs:
             raise TypeError("LLM.respond() got an unexpected keyword argument 'temperature'")
-        return '{"polyp_detected": false, "confidence_score": 80, "justification": "Sin hallazgos."}'
+        return '{"object_detected": "river", "confidence_score": 80, "justification": "Se ve un río."}'
 
     mock_model.respond.side_effect = fake_respond
 
     with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
         result = loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba", temperature=0.3)
 
-    assert isinstance(result, VLMStructuredResponse)
+    assert isinstance(result, GenericObjectDetection)
     assert mock_model.respond.call_count == 3
     assert mock_model.respond.call_args_list[0].kwargs.get("config") == {"temperature": 0.3}
     assert mock_model.respond.call_args_list[1].kwargs.get("temperature") == 0.3
-    assert mock_model.respond.call_args_list[2].kwargs.get("response_format") is VLMStructuredResponse
+    assert mock_model.respond.call_args_list[2].kwargs.get("response_format") is GenericObjectDetection
 
 def test_inference_raises_file_not_found(loader):
     """Verifica que se lance `FileNotFoundError` si la imagen no existe."""

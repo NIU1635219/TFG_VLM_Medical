@@ -727,6 +727,7 @@ def interactive_menu(
     footer_hint_text=None,
     repaint_strategy="auto",
     dynamic_info_top=False,
+    description_slot_rows=2,
 ):
     """
     Muestra un menú interactivo controlado por teclado.
@@ -765,6 +766,7 @@ def interactive_menu(
         footer_hint_text=footer_hint_text,
         repaint_strategy=repaint_strategy,
         dynamic_info_top=dynamic_info_top,
+        description_slot_rows=description_slot_rows,
     )
 
 

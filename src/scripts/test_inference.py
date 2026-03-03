@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -444,17 +445,23 @@ def normalize_text(text: str) -> str:
 
 def contains_any_keyword(response_text: str, keywords: List[str]) -> bool:
     """
-    Verifica si alguna de las palabras clave aparece en el texto.
-    
+    Verifica si alguna de las palabras clave aparece en el texto como palabra completa.
+
+    Usa límites de palabra (\\b) para evitar falsos positivos por substring
+    (p.ej. "cat" dentro de "significativa").
+
     Args:
         response_text (str): Texto donde buscar.
         keywords (List[str]): Lista de palabras clave a buscar.
-        
+
     Returns:
-        bool: True si alguna keyword está presente, False en caso contrario.
+        bool: True si alguna keyword está presente como palabra completa, False en caso contrario.
     """
     normalized_response = normalize_text(response_text)
-    return any(normalize_text(keyword) in normalized_response for keyword in keywords)
+    return any(
+        re.search(r"\b" + re.escape(normalize_text(kw)) + r"\b", normalized_response)
+        for kw in keywords
+    )
 
 
 def parse_structured_response(response_payload: str | Dict[str, object] | GenericObjectDetection) -> Dict[str, object]:
@@ -522,6 +529,10 @@ def validate_response(label: str, response_payload: str | Dict[str, object] | Ge
         return False, f"❌ Validación FALLIDA para {label}: salida JSON inválida ({error})."
 
     justification = str(payload.get("justification", ""))
+    detection_value = str(payload.get("object_detected", "") or "")
+    # Combina la justificación y el campo de detección para cubrir casos donde
+    # el modelo pone la clase correcta en object_detected pero no la repite en justification.
+    full_text = justification + " " + detection_value
 
     # Si la etiqueta es neutral o no tiene keywords esperadas, consideramos
     # válida la salida cuando NO aparece ninguna keyword de gato/perro.
@@ -529,14 +540,14 @@ def validate_response(label: str, response_payload: str | Dict[str, object] | Ge
     if not expected_keywords:
         # comprobar ausencia de keywords de gato/perro
         combined = KEYWORDS_BY_LABEL.get("cat", []) + KEYWORDS_BY_LABEL.get("dog", [])
-        if contains_any_keyword(justification, combined):
+        if contains_any_keyword(full_text, combined):
             return False, (
                 f"❌ Validación FALLIDA para {label}: se detectaron menciones de animales "
-                "(gato/perro) en la justificación, pero se esperaba ausencia."
+                "(gato/perro) en la respuesta, pero se esperaba ausencia."
             )
         return True, f"✅ Validación OK para {label}: salida válida y no se mencionan gato/perro."
 
-    is_valid = contains_any_keyword(justification, expected_keywords)
+    is_valid = contains_any_keyword(full_text, expected_keywords)
     if is_valid:
         return True, f"✅ Validación OK para {label}: JSON válido y justificación alineada con keywords esperadas."
 

@@ -36,7 +36,32 @@ def test_contains_any_keyword_with_variants():
     assert contains_any_keyword(response, ["gato", "felino"]) is True
 
 
-def test_validate_response_by_label_success_and_fail():
+def test_contains_any_keyword_no_false_positive_substring():
+    """Regresión: 'cat' NO debe coincidir dentro de palabras como 'significativa' o 'indica'."""
+    text = "La imagen muestra una montaña con picos cubiertos de nieve y áreas verdes, lo que indica una altitud significativa."
+    assert contains_any_keyword(text, ["cat"]) is False
+    assert contains_any_keyword(text, ["cat", "gato", "perro"]) is False
+
+
+def test_validate_response_none_no_false_positive_in_significativa():
+    """Regresión: label 'none' no debe fallar por 'cat' dentro de 'significativa'."""
+    ok, _ = validate_response(
+        "none",
+        '{"object_detected": "montaña", "confidence_score": 95, "justification": "La imagen muestra una montaña con picos cubiertos de nieve y áreas verdes, lo que indica una altitud significativa."}',
+    )
+    assert ok is True
+
+
+def test_validate_response_dog_via_object_detected_field():
+    """Regresión: si object_detected='perro' pero justification no menciona perro, debe PASAR."""
+    ok, _ = validate_response(
+        "dog",
+        '{"object_detected": "perro", "confidence_score": 95, "justification": "El animal tiene pelaje blanco y una forma característica de orejas y hocico."}',
+    )
+    assert ok is True
+
+
+
     """Confirma que `validate_response` distinga aciertos y fallos basándose en keywords."""
     ok, _ = validate_response(
         "cat",

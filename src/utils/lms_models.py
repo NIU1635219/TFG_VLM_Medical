@@ -683,3 +683,22 @@ def remove_local_model(model_key: str) -> tuple[bool, str]:
         return True, target_path
     except Exception as error:
         return False, str(error)
+
+
+def get_installed_lms_models() -> list[str]:
+    """Devuelve la lista de modelos LM Studio instalados localmente.
+
+    Intenta primero el SDK local (``list_local_llm_models``) y cae al CLI
+    (``get_installed_models``) como fallback.
+
+    Returns:
+        list[str]: Identificadores de los modelos instalados.
+    """
+    local_models = list_local_llm_models()
+    if local_models:
+        return [
+            str(item.get("model_key", "")).strip()
+            for item in local_models
+            if item.get("model_key")
+        ]
+    return get_installed_models()

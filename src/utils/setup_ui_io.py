@@ -17,6 +17,95 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 DEFAULT_UI_WIDTH = 86
 
 
+# ---------------------------------------------------------------------------
+# Style — códigos de escape ANSI
+# ---------------------------------------------------------------------------
+
+
+class Style:
+    """Constantes de escape ANSI para estilizar texto en la terminal.
+
+    Re-exportada en ``setup_env.py`` para mantener compatibilidad con módulos
+    que la referencian a través del punto de entrada principal.
+    """
+
+    HEADER = "\033[95m"
+    OKBLUE = "\033[94m"
+    OKCYAN = "\033[96m"
+    OKGREEN = "\033[92m"
+    WARNING = "\033[93m"
+    FAIL = "\033[91m"
+    ENDC = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    # Fondo invertido para ítems seleccionados en menús
+    SELECTED = "\033[7m"
+
+
+# ---------------------------------------------------------------------------
+# Helpers de ancho visible (respetando secuencias ANSI)
+# ---------------------------------------------------------------------------
+
+
+def _visible_len(text: str) -> int:
+    """Longitud visible de una cadena ignorando códigos ANSI.
+
+    Args:
+        text (str): Texto con o sin secuencias de escape ANSI.
+
+    Returns:
+        int: Longitud visual en caracteres.
+    """
+    return len(_ANSI_RE.sub("", str(text or "")))
+
+
+def _wrap_colored_chunks(chunks: list[str], *, prefix: str, max_width: int) -> list[str]:
+    """Envuelve segmentos coloreados sin romper secuencias ANSI.
+
+    Args:
+        chunks (list[str]): Segmentos de texto con posibles códigos ANSI.
+        prefix (str): Prefijo añadido al comienzo de cada nueva línea.
+        max_width (int): Ancho visible máximo por línea.
+
+    Returns:
+        list[str]: Líneas compuestas que respetan el ancho visible.
+    """
+    if not chunks:
+        return [prefix]
+
+    prefix_len = _visible_len(prefix)
+    separator = "  "
+    separator_len = _visible_len(separator)
+
+    lines: list[str] = []
+    current = prefix
+    current_len = prefix_len
+
+    for chunk in chunks:
+        chunk_len = _visible_len(chunk)
+        extra = chunk_len if current_len == prefix_len else (separator_len + chunk_len)
+        if current_len + extra > max_width and current_len > prefix_len:
+            lines.append(current)
+            current = prefix + chunk
+            current_len = prefix_len + chunk_len
+            continue
+
+        if current_len == prefix_len:
+            current += chunk
+            current_len += chunk_len
+        else:
+            current += separator + chunk
+            current_len += separator_len + chunk_len
+
+    lines.append(current)
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Helpers internos de geometría
+# ---------------------------------------------------------------------------
+
+
 def _visual_rows(text: str, terminal_width: int) -> int:
     """
     Calcula cuántas filas visuales ocupa un texto considerando wrap automático.

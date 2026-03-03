@@ -2,266 +2,75 @@
 
 from __future__ import annotations
 
-import re
 import shutil
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .setup_ui_io import (
-    compute_render_decision,
-    get_ui_width,
-    paint_dynamic_lines,
-    render_title_banner,
-    should_repaint_static,
-    wrap_plain_text,
-    IncrementalPanelRenderer,
-)
+if TYPE_CHECKING:
+    from .menu_kit import AppContext, UIKit
+
+from .setup_ui_io import _wrap_colored_chunks  # noqa: E402
+from .lms_download_manager import DownloadJobState  # noqa: E402
 
 
-_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-
-
-def _visible_len(text: str) -> int:
-    """Calcula la longitud visible de una cadena ignorando códigos ANSI.
-
-    Args:
-        text (str): Texto con o sin estilos ANSI.
-
-    Returns:
-        int: Longitud visible en caracteres.
+def manage_models_menu_ui(kit: "UIKit", app: "AppContext") -> None:
     """
-    return len(_ANSI_RE.sub("", str(text or "")))
+    Despliega la interfaz de usuario para la gestión de modelos de LM Studio.
 
-
-def _wrap_colored_chunks(chunks: list[str], *, prefix: str, max_width: int) -> list[str]:
-    """Envuelve segmentos coloreados sin romper secuencias ANSI.
-
-    Args:
-        chunks (list[str]): Segmentos de texto potencialmente coloreados.
-        prefix (str): Prefijo fijo al inicio de cada línea.
-        max_width (int): Ancho máximo visible permitido por línea.
-
-    Returns:
-        list[str]: Líneas compuestas que respetan el ancho visible.
-    """
-    if not chunks:
-        return [prefix]
-
-    prefix_len = _visible_len(prefix)
-    separator = "  "
-    separator_len = _visible_len(separator)
-
-    lines: list[str] = []
-    current = prefix
-    current_len = prefix_len
-
-    for chunk in chunks:
-        chunk_len = _visible_len(chunk)
-        extra = chunk_len if current_len == prefix_len else (separator_len + chunk_len)
-        if current_len + extra > max_width and current_len > prefix_len:
-            lines.append(current)
-            current = prefix + chunk
-            current_len = prefix_len + chunk_len
-            continue
-
-        if current_len == prefix_len:
-            current += chunk
-            current_len += chunk_len
-        else:
-            current += separator + chunk
-            current_len += separator_len + chunk_len
-
-    lines.append(current)
-    return lines
-
-
-
-
-
-def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
-    """
-    Despliega la interfaz de usuario para la pro de modelos de LM Studio.
-    
     Permite:
     - Listar modelos instalados y su estado (cargado/local).
     - Eliminar modelos locales.
     - Navegar por el registro de modelos (MODELS_REGISTRY).
     - Buscar y descargar cuantizaciones específicas.
     - Descargar modelos por ID/URL personalizada.
-    
-    Args:
-        ctx (dict): Contexto de la aplicación con dependencias inyectadas 
-                   (estilos, helpers, funciones de UI, configuraciones).
-    """
-    Style = ctx["Style"]
-    MenuItem = ctx["MenuItem"]
-    MenuStaticItem = ctx.get("MenuStaticItem", MenuItem)
-    MenuSeparator = ctx.get("MenuSeparator", MenuItem)
-    incremental_panel_renderer_cls = ctx["IncrementalPanelRenderer"]
-    lms_models = ctx["lms_models"]
-    lms_menu_helpers = ctx["lms_menu_helpers"]
-    psutil = ctx["psutil"]
-    MODELS_REGISTRY = ctx["MODELS_REGISTRY"]
-    MENU_CURSOR_MEMORY = ctx["MENU_CURSOR_MEMORY"]
 
-    print_banner = ctx["print_banner"]
-    clear_screen_ansi = ctx["clear_screen_ansi"]
-    input_with_esc = ctx["input_with_esc"]
-    wait_for_any_key = ctx["wait_for_any_key"]
-    log = ctx["log"]
-    ask_user = ctx["ask_user"]
-    interactive_menu = ctx["interactive_menu"]
-    get_installed_lms_models = ctx["get_installed_lms_models"]
-    read_key = ctx["read_key"]
-    os_module = ctx.get("os_module")
-    msvcrt_module = ctx.get("msvcrt_module")
+    Args:
+        kit (UIKit): Interfaz de UI de terminal.
+        app (AppContext): Contexto de dominio de la aplicación.
+    """
+    Style = kit.style
+    MenuItem = kit.MenuItem
+    incremental_panel_renderer_cls = kit.IncrementalPanelRenderer
+    lms_models = app.lms_models
+    lms_menu_helpers = app.lms_menu_helpers
+    psutil = app.psutil
+    MODELS_REGISTRY = app.MODELS_REGISTRY
+    MENU_CURSOR_MEMORY = kit.cursor_memory
+
+    print_banner = app.print_banner
+    clear_screen_ansi = kit.clear
+    input_with_esc = kit.input
+    wait_for_any_key = kit.wait
+    log = kit.log
+    ask_user = kit.ask
+    interactive_menu = kit.menu
+    get_installed_lms_models = app.get_installed_lms_models
+    read_key = kit.read_key
+    os_module = kit.os_module
+    msvcrt_module = kit.msvcrt_module
 
     def _current_ui_width() -> int:
-        """Obtiene el ancho de UI actual para render dinámico.
-
-        Returns:
-            int: Ancho usable de UI para el frame actual.
-        """
-        try:
-            cols = int(shutil.get_terminal_size(fallback=(120, 30)).columns)
-        except Exception:
-            cols = 120
-        max_width = max(60, cols - 4)
-        return get_ui_width(shutil_module=shutil, max_width=max_width)
+        """Obtiene el ancho de UI actual para render dinámico."""
+        return kit.width()
 
     def _divider(width: int) -> str:
-        """Construye una línea separadora alineada con banners.
+        """Construye una línea separadora alineada con banners."""
+        return kit.divider(width)
 
-        Args:
-            width (int): Ancho interno del contenido.
-
-        Returns:
-            str: Separador horizontal con ancho visual consistente.
-        """
-        return "─" * (max(8, int(width)) + 2)
-
-    shared_download_state = MENU_CURSOR_MEMORY.get("__lms_download_state__")
-    if not isinstance(shared_download_state, dict):
-        shared_download_state = {
-            "lock": threading.Lock(),
-            "jobs": {},
-            "counter": 0,
-        }
-        MENU_CURSOR_MEMORY["__lms_download_state__"] = shared_download_state
-
-    downloads_lock = shared_download_state.get("lock")
-    if downloads_lock is None:
-        downloads_lock = threading.Lock()
-        shared_download_state["lock"] = downloads_lock
-
-    download_jobs = shared_download_state.get("jobs")
-    if not isinstance(download_jobs, dict):
-        download_jobs = {}
-        shared_download_state["jobs"] = download_jobs
-
-    FINISHED_STATUS_TTL_SECONDS = 5.0
-
-    def _new_job_id() -> str:
-        """
-        Genera un nuevo ID para un nuevo trabajo de descarga.
-        
-        Returns:
-            str: ID único para el nuevo trabajo.
-        """
-        with downloads_lock:
-            counter = int(shared_download_state.get("counter", 0)) + 1
-            shared_download_state["counter"] = counter
-            return f"job-{counter}"
+    # ── Máquina de estado de descargas ─────────────────────────────────
+    _djs = DownloadJobState(style=Style, cursor_memory=MENU_CURSOR_MEMORY)
 
     def _create_download_job(*, model: str, quant: str) -> str:
-        """
-        Crea un nuevo trabajo de descarga para un modelo específico.
-        
-        Args:
-            model (str): ID o URL del modelo.
-            quant (str): Tipo de cuantización.
-        
-        Returns:
-            str: ID del nuevo trabajo de descarga.
-        """
-        job_id = _new_job_id()
-        now = time.time()
-        with downloads_lock:
-            download_jobs[job_id] = {
-                "status": "running",
-                "model": model,
-                "quant": quant,
-                "downloaded": 0.0,
-                "total": 0.0,
-                "speed": 0.0,
-                "message": "",
-                "created_at": now,
-                "updated_at": now,
-                "finished_at": None,
-                "signature": f"{str(model or '').strip().lower()}|{str(quant or '').strip().upper()}",
-            }
-        return job_id
+        return _djs.create_job(model=model, quant=quant)
 
     def _update_download_job(job_id: str, **updates: Any) -> None:
-        """
-        Actualiza el estado de un trabajo de descarga.
-        
-        Args:
-            job_id (str): ID del trabajo de descarga.
-            **updates (Any): Actualizaciones para el trabajo de descarga.
-        """
-        with downloads_lock:
-            if job_id not in download_jobs:
-                return
-            download_jobs[job_id].update(updates)
-            if str(download_jobs[job_id].get("status") or "") in ("completed", "failed", "cancelled"):
-                if download_jobs[job_id].get("finished_at") is None:
-                    download_jobs[job_id]["finished_at"] = time.time()
-            else:
-                download_jobs[job_id]["finished_at"] = None
-            download_jobs[job_id]["updated_at"] = time.time()
-
-    def _prune_finished_jobs_locked(now_ts: float) -> None:
-        """
-        Elimina trabajos de descarga que han estado en estado finalizado por un tiempo excedido.
-        
-        Args:
-            now_ts (float): Timestamp actual.
-        """
-        stale_ids = []
-        for job_id, job in download_jobs.items():
-            status = str(job.get("status") or "")
-            finished_at = job.get("finished_at")
-            if status in ("completed", "failed", "cancelled") and isinstance(finished_at, (int, float)):
-                if (now_ts - float(finished_at)) >= FINISHED_STATUS_TTL_SECONDS:
-                    stale_ids.append(job_id)
-        for job_id in stale_ids:
-            download_jobs.pop(job_id, None)
+        _djs.update_job(job_id, **updates)
 
     def _snapshot_download_jobs() -> list[dict[str, Any]]:
-        """
-        Genera una instantánea de los trabajos de descarga.
-        
-        Returns:
-            list[dict[str, Any]]: Lista de trabajos de descarga ordenada por fecha de creación.
-        """
-        with downloads_lock:
-            _prune_finished_jobs_locked(time.time())
-            ordered = sorted(download_jobs.items(), key=lambda item: float(item[1].get("created_at") or 0.0))
-            return [{"job_id": jid, **dict(data)} for jid, data in ordered]
+        return _djs.snapshot()
 
     def _download_signature_for_option(entry: dict[str, Any], model_ref: str) -> str:
-        """
-        Genera una firma única para una opción de descarga.
-        
-        Args:
-            entry (dict[str, Any]): Entrada del registro de modelos.
-            model_ref (str): Referencia al modelo.
-        
-        Returns:
-            str: Firma única para la opción de descarga.
-        """
         quant = str(entry.get("quantization") or "").strip().upper()
         if not quant or quant == "UNKNOWN":
             quant = lms_menu_helpers.extract_quantization_from_text(entry.get("name"))
@@ -275,152 +84,23 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         return f"{model_key}|{str(quant or 'UNKNOWN').upper()}"
 
     def _running_download_signatures(*, snapshot: dict[str, Any] | None = None) -> set[str]:
-        """
-        Obtiene las firmas de descargas en ejecución.
-        
-        Args:
-            snapshot (dict[str, Any] | None, optional): Instantánea de descargas. Defaults to None.
-        
-        Returns:
-            set[str]: Conjunto de firmas de descargas en ejecución.
-        """
         if snapshot is not None:
             return set(str(sig) for sig in snapshot.get("running_signatures", set()))
-        built = _build_download_status_snapshot(ui_width=_current_ui_width())
-        return set(str(sig) for sig in built.get("running_signatures", set()))
-
-    def _trim_text(text: str, max_len: int) -> str:
-        """
-        Trunca un texto si excede una longitud máxima.
-        
-        Args:
-            text (str): Texto a truncar.
-            max_len (int): Longitud máxima del texto.
-        
-        Returns:
-            str: Texto truncado si es necesario.
-        """
-        raw = str(text or "")
-        if len(raw) <= max_len:
-            return raw
-        if max_len <= 1:
-            return raw[:max_len]
-        return raw[: max_len - 1] + "…"
+        return _djs.running_signatures()
 
     def _build_download_status_snapshot(*, ui_width: int) -> dict[str, Any]:
-        """Construye un snapshot consistente de estado de descargas para un frame.
-
-        Args:
-            ui_width (int): Ancho de UI activo para ajustar barras y truncado.
-
-        Returns:
-            dict[str, Any]: Resumen, líneas renderizables y metadatos de estado.
-        """
-        jobs = _snapshot_download_jobs()
-        if not jobs:
-            return {
-                "summary": "",
-                "running_lines": [],
-                "signature": "",
-                "running_signatures": set(),
-                "completed_ids": set(),
-            }
-
-        running = [job for job in jobs if str(job.get("status")) == "running"]
-        done = [job for job in jobs if str(job.get("status")) in ("completed", "failed", "cancelled")]
-        recent_done: list[dict[str, Any]] = []
-        now_ts = time.time()
-        for job in done:
-            finished_at = job.get("finished_at")
-            if isinstance(finished_at, (int, float)) and (now_ts - float(finished_at)) < FINISHED_STATUS_TTL_SECONDS:
-                recent_done.append(job)
-
-        completed_ids = {
-            str(job.get("job_id"))
-            for job in jobs
-            if str(job.get("status") or "") == "completed"
-        }
-        running_signatures = {
-            str(job.get("signature") or "").strip().lower()
-            for job in running
-            if str(job.get("signature") or "").strip()
-        }
-
-        if not running and not recent_done:
-            return {
-                "summary": "",
-                "running_lines": [],
-                "signature": "",
-                "running_signatures": running_signatures,
-                "completed_ids": completed_ids,
-            }
-
-        summary = (
-            f"Descargas: {len(running)} activas · {len(done)} finalizadas"
-            if running
-            else "Resultados recientes (auto-ocultar 5s)"
-        )
-        running_lines: list[str] = []
-        bar_width = max(12, min(26, ui_width - 46))
-        for job in running:
-            model = _trim_text(str(job.get("model") or "model"), max(18, ui_width - 20))
-            quant = str(job.get("quant") or "unknown").upper()
-            downloaded = float(job.get("downloaded") or 0.0)
-            total = float(job.get("total") or 0.0)
-            speed = float(job.get("speed") or 0.0)
-            pct = int((downloaded / total) * 100.0) if total > 0 else 0
-            pct = max(0, min(pct, 100))
-            filled = int((pct / 100.0) * bar_width)
-            filled = max(0, min(filled, bar_width))
-            bar = f"{Style.OKCYAN}{'█' * filled}{Style.DIM}{'░' * (bar_width - filled)}{Style.ENDC}"
-
-            total_mb = total / (1024 * 1024) if total > 0 else 0.0
-            downloaded_mb = downloaded / (1024 * 1024)
-            speed_mb = speed / (1024 * 1024) if speed > 0 else 0.0
-
-            running_lines.append(f"{Style.OKCYAN}↓ {model} [{quant}]{Style.ENDC}")
-            running_lines.append(
-                f"  {bar} {Style.BOLD}{pct:>3d}%{Style.ENDC} · {downloaded_mb:.1f}/{total_mb:.1f} MB · {speed_mb:.1f} MB/s"
-            )
-
-        for job in recent_done:
-            model = _trim_text(str(job.get("model") or "model"), max(18, ui_width - 20))
-            quant = str(job.get("quant") or "unknown").upper()
-            status = str(job.get("status") or "").lower()
-            if status == "completed":
-                running_lines.append(f"{Style.OKGREEN}✔ {model} [{quant}] completado{Style.ENDC}")
-            elif status == "failed":
-                running_lines.append(f"{Style.FAIL}✖ {model} [{quant}] error{Style.ENDC}")
-            else:
-                running_lines.append(f"{Style.WARNING}⚠ {model} [{quant}] cancelado{Style.ENDC}")
-        signature = "\n".join([summary, *running_lines])
-        return {
-            "summary": summary,
-            "running_lines": running_lines,
-            "signature": signature,
-            "running_signatures": running_signatures,
-            "completed_ids": completed_ids,
-        }
+        return _djs.build_status_snapshot(ui_width=ui_width)
 
     def _format_download_info_text(*, include_running_lines: bool, snapshot: dict[str, Any] | None = None) -> str:
-        """
-        Formatea el texto de información de descargas.
-        
-        Args:
-            include_running_lines (bool): Incluir líneas de descargas en ejecución.
-            snapshot (dict[str, Any] | None, optional): Instantánea de descargas. Defaults to None.
-        
-        Returns:
-            str: Texto formateado de información de descargas.
-        """
-        current_snapshot = snapshot or _build_download_status_snapshot(ui_width=_current_ui_width())
-        summary = str(current_snapshot.get("summary") or "")
-        running_lines = list(current_snapshot.get("running_lines") or [])
-        if not summary:
-            return ""
-        if not include_running_lines or not running_lines:
-            return summary
-        return "\n".join([summary, *running_lines])
+        if snapshot is not None:
+            summary = str(snapshot.get("summary") or "")
+            if not summary:
+                return ""
+            if not include_running_lines:
+                return summary
+            lines = list(snapshot.get("running_lines") or [])
+            return "\n".join([summary, *lines]) if lines else summary
+        return _djs.format_info_text(include_running_lines=include_running_lines, ui_width=_current_ui_width())
 
     gpu_mem_bytes = lms_menu_helpers.detect_gpu_memory_bytes()
     ram_mem_bytes = lms_menu_helpers.detect_ram_memory_bytes(psutil)
@@ -518,7 +198,7 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
                 str: Encabezado formateado.
             """
             ui_width = _current_ui_width()
-            render_title_banner(title=title, style=Style, width=ui_width)
+            kit.banner(title=title, width=ui_width)
             print(" " + _divider(ui_width))
             print(f" {Style.DIM}Selecciona una cuantización compatible y confirma con ENTER.{Style.ENDC}")
             print(" " + _divider(ui_width))
@@ -656,7 +336,7 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
                 print_banner()
                 print(f"{Style.BOLD} LM STUDIO MODEL MANAGER {Style.ENDC}")
                 print()
-                render_title_banner(title="DOWNLOAD BY MODEL ID/URL (QUANTIZATIONS)", style=Style, width=ui_width)
+                kit.banner(title="DOWNLOAD BY MODEL ID/URL (QUANTIZATIONS)", width=ui_width)
                 print(" " + _divider(ui_width))
                 print(f" {Style.DIM}Pega una URL de Hugging Face o un ID exacto. ESC para cancelar.{Style.ENDC}")
                 print(f" {Style.DIM}Ejemplos:{Style.ENDC}")
@@ -733,7 +413,7 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
             print_banner()
             print(f"{Style.BOLD} LM STUDIO MODEL MANAGER {Style.ENDC}")
             print()
-            render_title_banner(title="DOWNLOAD FROM MODELS_REGISTRY", style=Style, width=ui_width)
+            kit.banner(title="DOWNLOAD FROM MODELS_REGISTRY", width=ui_width)
             print(" " + _divider(ui_width))
             print(
                 f" {Style.OKBLUE}LOCAL{Style.ENDC} | "
@@ -1008,7 +688,7 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         print(f"{Style.BOLD} LM STUDIO MODEL MANAGER {Style.ENDC}")
         print()
         ui_width = _current_ui_width()
-        render_title_banner(title="DOWNLOAD BY MODEL ID/URL (QUANTIZATIONS)", style=Style, width=ui_width)
+        kit.banner(title="DOWNLOAD BY MODEL ID/URL (QUANTIZATIONS)", width=ui_width)
         print(" " + _divider(ui_width))
         print(f" {Style.DIM}Pega una URL de Hugging Face o un ID exacto. ESC para cancelar.{Style.ENDC}")
         print(f" {Style.DIM}Ejemplos:{Style.ENDC}")
@@ -1018,7 +698,7 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         footer = str(footer_snapshot.get("summary") or "")
         if footer:
             print(" " + _divider(ui_width))
-            for summary_line in wrap_plain_text(footer, max(16, ui_width - 2)):
+            for summary_line in kit.wrap(footer, max(16, ui_width - 2)):
                 print(f" {Style.DIM}{summary_line}{Style.ENDC}")
             for running_line in list(footer_snapshot.get("running_lines") or []):
                 print(f" {running_line}")
@@ -1082,67 +762,18 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
         print(f"{Style.BOLD} LM STUDIO MODEL MANAGER {Style.ENDC}")
         print()
 
-    def _table_layout() -> tuple[int, int, int]:
-        """
-        Calcula el diseño de la tabla.
-        
-        Returns:
-            tuple[int, int, int]: Tupla con el ancho de la tabla, el ancho de la columna de modelos y el ancho de la columna de cuantiaciones.
-        """
-        quant_col_width = 12
-        status_col_width = 10
-        table_width = _current_ui_width()
-        model_col_width = max(24, table_width - (quant_col_width + status_col_width + 6))
-        return table_width, model_col_width, quant_col_width
-
     while True:
         local_models = lms_models.list_local_llm_models()
         loaded_keys = lms_models.list_loaded_llm_model_keys()
-        status_col_width = 10
 
-        options = []
-
-        table_header_item = MenuStaticItem(label="", description="")
-        table_header_item.selectable = False
-
-        def table_header_dynamic_label(_is_selected):
-            """
-            Genera el encabezado dinámico de la tabla.
-            
-            Args:
-                _is_selected (bool): Indica si el encabezado está seleccionado.
-            
-            Returns:
-                str: Encabezado dinámico de la tabla.
-            """
-            _table_width, model_col_width, quant_col_width = _table_layout()
-            return (
-                f"{Style.DIM}{'MODEL':<{model_col_width}} | "
-                f"{'QUANT':<{quant_col_width}} | {'STATUS':<{status_col_width}}{Style.ENDC}"
-            )
-
-        table_header_item.dynamic_label = table_header_dynamic_label
-        options.append(table_header_item)
-
-        table_separator_item = MenuStaticItem(label="", description="")
-        def colorized_table_separator(_is_selected):
-            """
-            Genera el separador dinámico de la tabla.
-            
-            Args:
-                _is_selected (bool): Indica si el separador está seleccionado.
-            
-            Returns:
-                str: Separador dinámico de la tabla.
-            """
-            table_width, _model_col_width, _quant_col_width = _table_layout()
-            return f"{Style.DIM}{'─' * table_width}{Style.ENDC}"
-
-        table_separator_item.dynamic_label = colorized_table_separator
-        table_separator_item.selectable = False
-        options.append(table_separator_item)
+        columns = [
+            kit.TableColumn("MODEL", min_width=24),
+            kit.TableColumn("QUANT", fixed_width=12),
+            kit.TableColumn("STATUS", fixed_width=10),
+        ]
 
         previous_base_name = None
+        table_rows = []
 
         for model in local_models:
             model_key = str(model.get("model_key", "")).strip()
@@ -1151,84 +782,29 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
 
             quant_label = lms_menu_helpers.detect_local_model_quantization(model)
             base_name = model_key.rsplit("@", 1)[0].strip() if "@" in model_key else model_key
-            shown_name = base_name if base_name != previous_base_name else "↳"
+            shown_name = base_name if base_name != previous_base_name else "\u21b3"
             previous_base_name = base_name
 
-            menu_item = MenuItem(model_key, action=lambda mk=model_key: _delete_model_ui(mk), description="Pulsa ENTER para eliminar este modelo local.")
+            in_loaded = model_key in loaded_keys
+            quant_color = "OKCYAN" if quant_label != "unknown" else "DIM"
+            status_color = "OKGREEN" if in_loaded else "DIM"
+            status_text = "LOADED" if in_loaded else "LOCAL"
 
-            def dynamic_label(
-                is_selected_row,
-                key=model_key,
-                quant=quant_label,
-                loaded_set=loaded_keys,
-                name_cell=shown_name,
-            ):
-                """
-                Genera el encabezado dinámico de la tabla.
-                
-                Args:
-                    is_selected_row (bool): Indica si la fila está seleccionada.
-                    key (str): Clave del modelo.
-                    quant (str): Cantidad del modelo.
-                    loaded_set (set[str]): Conjunto de claves cargadas.
-                    name_cell (str): Celda del nombre.
-                
-                Returns:
-                    str: Encabezado dinámico de la tabla.
-                """
-                _table_width, model_col_width, quant_col_width = _table_layout()
-                status_plain = "REMOVE" if is_selected_row else ("LOADED" if key in loaded_set else "LOCAL")
-                if is_selected_row:
-                    status_color = Style.FAIL
-                elif key in loaded_set:
-                    status_color = Style.OKGREEN
-                else:
-                    status_color = Style.DIM
+            table_rows.append(kit.TableRow(
+                cells=[shown_name, str(quant_label).upper(), status_text],
+                action=lambda mk=model_key: _delete_model_ui(mk),
+                description="Pulsa ENTER para eliminar este modelo local.",
+                selected_cells=[shown_name, str(quant_label).upper(), "REMOVE"],
+                cell_colors=[None, quant_color, status_color],
+                selected_cell_colors=[None, None, "FAIL"],
+            ))
 
-                model_display = name_cell if len(name_cell) <= model_col_width else name_cell[: model_col_width - 1] + "…"
-                quant_plain = str(quant).upper()
-                quant_cell = (
-                    f"{quant_plain:<{quant_col_width}}"
-                    if len(quant_plain) <= quant_col_width
-                    else f"{quant_plain[: quant_col_width - 1]}…"
-                )
-                status_cell = f"{status_plain:<{status_col_width}}"
-
-                if is_selected_row:
-                    status_render = f"{Style.FAIL}{status_cell}{Style.ENDC}"
-                    return f"{model_display:<{model_col_width}} | {quant_cell} | {status_render}"
-
-                quant_color = Style.OKCYAN if quant != "unknown" else Style.DIM
-                quant_render = f"{quant_color}{quant_cell}{Style.ENDC}"
-                status_render = f"{status_color}{status_cell}{Style.ENDC}"
-                return f"{model_display:<{model_col_width}} | {quant_render} | {status_render}"
-
-            menu_item.dynamic_label = dynamic_label
-            options.append(menu_item)
-
-        separator_item = MenuStaticItem(label="", description="")
-        separator_item.selectable = False
-
-        def separator_dynamic_label(_is_selected):
-            """
-            Genera el separador dinámico de la tabla.
-            
-            Args:
-                _is_selected (bool): Indica si el separador está seleccionado.
-            
-            Returns:
-                str: Separador dinámico de la tabla.
-            """
-            table_width, _model_col_width, _quant_col_width = _table_layout()
-            return f"{Style.DIM}{'─' * table_width}{Style.ENDC}"
-
-        separator_item.dynamic_label = separator_dynamic_label
-
-        options.append(separator_item)
-
-        options.append(MenuItem("Download from MODELS_REGISTRY (quantizations)...", _download_registry_model_ui, description="Descarga variantes por cuantización de modelos del registro."))
-        options.append(MenuItem("Download by model ID/URL (quantizations)...", _download_custom_model_ui, description="Descarga variantes por cuantización usando id/url manual."))
-        options.append(MenuItem("Back", lambda: "BACK", description="Vuelve al menú de Tests & Models."))
+        options = [
+            *kit.build_table_items(columns, table_rows),
+            MenuItem("Download from MODELS_REGISTRY (quantizations)...", _download_registry_model_ui, description="Descarga variantes por cuantización de modelos del registro."),
+            MenuItem("Download by model ID/URL (quantizations)...", _download_custom_model_ui, description="Descarga variantes por cuantización usando id/url manual."),
+            MenuItem("Back", lambda: "BACK", description="Vuelve al menú de Tests & Models."),
+        ]
 
         choice = interactive_menu(
             options,
@@ -1244,8 +820,6 @@ def manage_models_menu_ui(ctx: dict[str, Any]) -> None:
             break
 
         clear_screen_ansi()
-        if choice is separator_item:
-            continue
         if not callable(getattr(choice, "action", None)):
             continue
         result = choice.action()

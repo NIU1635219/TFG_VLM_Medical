@@ -3,7 +3,11 @@ import sys
 import types
 
 import setup_env
-from src.utils import setup_reinstall_ui, setup_tests_ui
+from src.utils import setup_reinstall_ui, setup_tests_ui, setup_menu_engine
+from unittest.mock import MagicMock
+
+# Alias cómodo para los tests
+_MenuItem = setup_menu_engine.MenuItem
 
 
 class _DummyStyle:
@@ -11,19 +15,66 @@ class _DummyStyle:
     ENDC = ""
 
 
+# ---------------------------------------------------------------------------
+# Helper: convierte un ctx-dict al nuevo par (kit, app)
+# ---------------------------------------------------------------------------
+
+def _make_kit_app(ctx):
+    """Adapta un dict ctx (API antigua) a mocks (kit, app) de la nueva API."""
+    kit = MagicMock()
+    kit.style = ctx.get("Style", _DummyStyle)
+    kit.MenuItem = ctx.get("MenuItem", MagicMock())
+    kit.menu = ctx.get("interactive_menu", MagicMock())
+    kit.log = ctx.get("log", MagicMock())
+    kit.clear = ctx.get("clear_screen_ansi", MagicMock())
+    kit.wait = ctx.get("wait_for_any_key", MagicMock())
+    kit.ask = ctx.get("ask_user", MagicMock())
+    kit.input = ctx.get("input_with_esc", MagicMock())
+    kit.run_cmd = ctx.get("run_cmd", MagicMock(return_value=True))
+    kit.subtitle = MagicMock()
+    kit.banner = MagicMock()
+    kit.table = MagicMock()
+    kit.read_key = ctx.get("read_key", MagicMock())
+    kit.width = MagicMock(return_value=80)
+    kit.divider = MagicMock(return_value="─" * 80)
+    kit.cursor_memory = ctx.get("MENU_CURSOR_MEMORY", {})
+    kit.os_module = ctx.get("os_module", MagicMock())
+    kit.msvcrt_module = ctx.get("msvcrt_module", None)
+    kit.IncrementalPanelRenderer = ctx.get("IncrementalPanelRenderer", MagicMock())
+
+    app = MagicMock()
+    app.print_banner = ctx.get("print_banner", MagicMock())
+    app.fix_libs = ctx.get("fix_libs", MagicMock())
+    app.fix_uv = ctx.get("fix_uv", MagicMock())
+    app.fix_folders = ctx.get("fix_folders", MagicMock())
+    app.check_uv = ctx.get("check_uv", MagicMock())
+    app.check_lms = ctx.get("check_lms", MagicMock())
+    app.restart_program = ctx.get("restart_program", MagicMock())
+    app.REQUIRED_LIBS = ctx.get("REQUIRED_LIBS", [])
+    app.LIB_IMPORT_MAP = ctx.get("LIB_IMPORT_MAP", {})
+    app.MODELS_REGISTRY = ctx.get("MODELS_REGISTRY", {})
+    app.lms_models = ctx.get("lms_models", MagicMock())
+    app.lms_menu_helpers = ctx.get("lms_menu_helpers", MagicMock())
+    app.psutil = ctx.get("psutil", MagicMock())
+    app.DiagnosticIssue = ctx.get("DiagnosticIssue", MagicMock())
+    app.list_test_files = ctx.get("list_test_files", MagicMock())
+    app.get_installed_lms_models = ctx.get("get_installed_lms_models", MagicMock())
+    app.time_module = ctx.get("time", MagicMock())
+    app.create_project_structure = ctx.get("create_project_structure", MagicMock())
+    app.detect_gpu = ctx.get("detect_gpu", MagicMock())
+
+    return kit, app
+
+
 def test_setup_env_wrappers_delegate_to_extracted_modules(monkeypatch):
     """Verifica que los wrappers en `setup_env` deleguen correctamente a los módulos extraídos."""
     calls = {"tests": 0, "reinstall": 0}
 
-    def fake_tests(*, ctx):
+    def fake_tests(kit, app):
         calls["tests"] += 1
-        assert "interactive_menu" in ctx
-        assert "manage_models_menu_ui" in ctx
 
-    def fake_reinstall(*, ctx):
+    def fake_reinstall(kit, app):
         calls["reinstall"] += 1
-        assert "fix_libs" in ctx
-        assert "restart_program" in ctx
 
     monkeypatch.setattr(setup_env.setup_tests_ui, "run_tests_menu", fake_tests)
     monkeypatch.setattr(setup_env.setup_reinstall_ui, "reinstall_library_menu", fake_reinstall)
@@ -52,7 +103,7 @@ def test_setup_tests_ui_run_all_executes_pytest_command():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "print_banner": lambda: None,
         "log": lambda *args, **kwargs: None,
         "run_cmd": lambda command: run_cmd_calls.append(command),
@@ -65,7 +116,7 @@ def test_setup_tests_ui_run_all_executes_pytest_command():
         "time": SimpleNamespace(sleep=lambda *_: None),
     }
 
-    setup_tests_ui.run_tests_menu(ctx=ctx)
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
 
     assert run_cmd_calls == ["uv run python -m pytest tests/"]
     assert waits["count"] == 1
@@ -90,7 +141,7 @@ def test_setup_reinstall_ui_core_selection_installs_and_restarts():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "REQUIRED_LIBS": ["lmstudio", "pytest"],
         "print_banner": lambda: None,
         "interactive_menu": interactive_menu,
@@ -102,7 +153,7 @@ def test_setup_reinstall_ui_core_selection_installs_and_restarts():
         "wait_for_any_key": lambda *args, **kwargs: waits.__setitem__("count", waits["count"] + 1),
     }
 
-    setup_reinstall_ui.reinstall_library_menu(ctx=ctx)
+    setup_reinstall_ui.reinstall_library_menu(*_make_kit_app(ctx))
 
     assert fix_libs_calls == [["lmstudio"]]
     assert fix_uv_calls["count"] == 1
@@ -116,7 +167,7 @@ def test_setup_reinstall_ui_no_selection_does_nothing():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "REQUIRED_LIBS": ["lmstudio"],
         "print_banner": lambda: None,
         "interactive_menu": lambda *args, **kwargs: None,
@@ -128,7 +179,7 @@ def test_setup_reinstall_ui_no_selection_does_nothing():
         "wait_for_any_key": lambda *args, **kwargs: calls.__setitem__("wait", calls["wait"] + 1),
     }
 
-    setup_reinstall_ui.reinstall_library_menu(ctx=ctx)
+    setup_reinstall_ui.reinstall_library_menu(*_make_kit_app(ctx))
 
     assert calls == {"fix_libs": 0, "fix_uv": 0, "restart": 0, "wait": 0}
 
@@ -152,7 +203,7 @@ def test_setup_tests_ui_run_specific_cancel_returns_without_command():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "print_banner": lambda: None,
         "log": lambda *args, **kwargs: None,
         "run_cmd": lambda command: run_cmd_calls.append(command),
@@ -165,7 +216,7 @@ def test_setup_tests_ui_run_specific_cancel_returns_without_command():
         "time": SimpleNamespace(sleep=lambda *_: None),
     }
 
-    setup_tests_ui.run_tests_menu(ctx=ctx)
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
 
     assert run_cmd_calls == []
     assert menu_calls["specific"] == 1
@@ -193,7 +244,7 @@ def test_setup_tests_ui_run_specific_executes_selected_file():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "print_banner": lambda: None,
         "log": lambda *args, **kwargs: None,
         "run_cmd": lambda command: run_cmd_calls.append(command),
@@ -206,7 +257,7 @@ def test_setup_tests_ui_run_specific_executes_selected_file():
         "time": SimpleNamespace(sleep=lambda *_: None),
     }
 
-    setup_tests_ui.run_tests_menu(ctx=ctx)
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
 
     assert run_cmd_calls == ["uv run python -m pytest tests/test_alpha.py"]
     assert waits["count"] == 1
@@ -232,7 +283,7 @@ def test_setup_tests_ui_smoke_without_models_warns_and_returns():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "print_banner": lambda: None,
         "log": log,
         "run_cmd": lambda *_: None,
@@ -245,7 +296,7 @@ def test_setup_tests_ui_smoke_without_models_warns_and_returns():
         "time": SimpleNamespace(sleep=lambda *_: None),
     }
 
-    setup_tests_ui.run_tests_menu(ctx=ctx)
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
 
     assert waits["count"] == 1
     assert any("No hay modelos disponibles" in msg for msg in warns)
@@ -262,7 +313,7 @@ def test_setup_reinstall_ui_uv_only_does_not_restart_or_install_core():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "REQUIRED_LIBS": ["lmstudio"],
         "print_banner": lambda: None,
         "interactive_menu": interactive_menu,
@@ -274,7 +325,7 @@ def test_setup_reinstall_ui_uv_only_does_not_restart_or_install_core():
         "wait_for_any_key": lambda *args, **kwargs: calls.__setitem__("wait", calls["wait"] + 1),
     }
 
-    setup_reinstall_ui.reinstall_library_menu(ctx=ctx)
+    setup_reinstall_ui.reinstall_library_menu(*_make_kit_app(ctx))
 
     assert calls["fix_uv"] == 1
     assert calls["fix_libs"] == 0
@@ -311,7 +362,7 @@ def test_setup_tests_ui_smoke_import_error_logs_and_recovers(monkeypatch):
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "print_banner": lambda: None,
         "log": log,
         "run_cmd": lambda *_: None,
@@ -324,7 +375,7 @@ def test_setup_tests_ui_smoke_import_error_logs_and_recovers(monkeypatch):
         "time": SimpleNamespace(sleep=lambda *_: None),
     }
 
-    setup_tests_ui.run_tests_menu(ctx=ctx)
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
 
     assert any("Could not import smoke test script" in msg for msg in errors)
     assert any("Smoke test failed" in msg for msg in errors)
@@ -343,7 +394,7 @@ def test_setup_reinstall_ui_multiple_core_libs_grouped_once_and_restart():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "REQUIRED_LIBS": ["lmstudio", "pytest", "pydantic"],
         "print_banner": lambda: None,
         "interactive_menu": interactive_menu,
@@ -355,7 +406,7 @@ def test_setup_reinstall_ui_multiple_core_libs_grouped_once_and_restart():
         "wait_for_any_key": lambda *args, **kwargs: None,
     }
 
-    setup_reinstall_ui.reinstall_library_menu(ctx=ctx)
+    setup_reinstall_ui.reinstall_library_menu(*_make_kit_app(ctx))
 
     assert fix_libs_calls == [["lmstudio", "pytest"]]
     assert restart_calls["count"] == 1
@@ -372,7 +423,7 @@ def test_setup_tests_ui_main_menu_back_exits_immediately():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "print_banner": lambda: None,
         "log": lambda *args, **kwargs: None,
         "run_cmd": lambda *_: None,
@@ -385,7 +436,7 @@ def test_setup_tests_ui_main_menu_back_exits_immediately():
         "time": SimpleNamespace(sleep=lambda *_: None),
     }
 
-    setup_tests_ui.run_tests_menu(ctx=ctx)
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
     assert calls["count"] == 1
 
 
@@ -403,7 +454,7 @@ def test_setup_tests_ui_empty_list_choice_is_safe_and_exits_next_loop():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "print_banner": lambda: None,
         "log": lambda *args, **kwargs: None,
         "run_cmd": lambda *_: None,
@@ -416,7 +467,7 @@ def test_setup_tests_ui_empty_list_choice_is_safe_and_exits_next_loop():
         "time": SimpleNamespace(sleep=lambda *_: None),
     }
 
-    setup_tests_ui.run_tests_menu(ctx=ctx)
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
     assert menu_calls["count"] == 1
 
 
@@ -434,7 +485,7 @@ def test_setup_tests_ui_non_action_choice_does_not_crash():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "print_banner": lambda: None,
         "log": lambda *args, **kwargs: None,
         "run_cmd": lambda *_: None,
@@ -447,7 +498,7 @@ def test_setup_tests_ui_non_action_choice_does_not_crash():
         "time": SimpleNamespace(sleep=lambda *_: None),
     }
 
-    setup_tests_ui.run_tests_menu(ctx=ctx)
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
     assert menu_calls["count"] == 2
 
 
@@ -471,7 +522,7 @@ def test_setup_tests_ui_run_specific_without_files_warns_and_returns():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "print_banner": lambda: None,
         "log": log,
         "run_cmd": lambda *_: None,
@@ -484,7 +535,7 @@ def test_setup_tests_ui_run_specific_without_files_warns_and_returns():
         "time": SimpleNamespace(sleep=lambda *_: sleeps.__setitem__("count", sleeps["count"] + 1)),
     }
 
-    setup_tests_ui.run_tests_menu(ctx=ctx)
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
     assert any("No tests found in tests/ folder." in msg for msg in warns)
     assert sleeps["count"] == 1
 
@@ -508,7 +559,7 @@ def test_setup_tests_ui_smoke_model_selector_cancel_returns_cleanly():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "print_banner": lambda: None,
         "log": lambda *args, **kwargs: None,
         "run_cmd": lambda *_: None,
@@ -521,7 +572,7 @@ def test_setup_tests_ui_smoke_model_selector_cancel_returns_cleanly():
         "time": SimpleNamespace(sleep=lambda *_: None),
     }
 
-    setup_tests_ui.run_tests_menu(ctx=ctx)
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
     assert menu_calls["smoke"] == 1
     assert waits["count"] == 0
 
@@ -552,7 +603,7 @@ def test_setup_tests_ui_smoke_empty_model_tag_then_cancel():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "print_banner": lambda: None,
         "log": log,
         "run_cmd": lambda *_: None,
@@ -565,7 +616,7 @@ def test_setup_tests_ui_smoke_empty_model_tag_then_cancel():
         "time": SimpleNamespace(sleep=lambda *_: None),
     }
 
-    setup_tests_ui.run_tests_menu(ctx=ctx)
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
     assert any("No model selected." in msg for msg in warns)
     assert waits["count"] == 1
 
@@ -576,7 +627,7 @@ def test_setup_reinstall_ui_empty_selection_list_behaves_like_cancel():
 
     ctx = {
         "Style": _DummyStyle,
-        "MenuItem": setup_env.MenuItem,
+        "MenuItem": _MenuItem,
         "REQUIRED_LIBS": ["lmstudio"],
         "print_banner": lambda: None,
         "interactive_menu": lambda *args, **kwargs: [],
@@ -588,5 +639,5 @@ def test_setup_reinstall_ui_empty_selection_list_behaves_like_cancel():
         "wait_for_any_key": lambda *args, **kwargs: calls.__setitem__("wait", calls["wait"] + 1),
     }
 
-    setup_reinstall_ui.reinstall_library_menu(ctx=ctx)
+    setup_reinstall_ui.reinstall_library_menu(*_make_kit_app(ctx))
     assert calls == {"fix_libs": 0, "fix_uv": 0, "restart": 0, "wait": 0}

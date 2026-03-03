@@ -11,7 +11,6 @@ from typing import Any, Callable, Optional
 from .setup_ui_io import (
     compute_render_decision,
     get_full_ui_width,
-    get_ui_width,
     paint_dynamic_lines,
     should_repaint_static,
     wrap_plain_text,

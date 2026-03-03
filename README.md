@@ -16,6 +16,8 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Respuesta estructurada con esquema `VLMStructuredResponse`.
 - Smoke test con 5 casos (`sample_01`...`sample_05`) y descarga automática de imágenes si faltan.
 - Manager TUI modularizado y con tests de regresión.
+- `UIKit` incluye API de tablas interactivas (`TableColumn`, `TableRow`, `build_table_items`, `table_menu`) con anchos de columna adaptativos al terminal.
+- Schema Tester integrado en el manager: selección interactiva de modelo + esquema + inferencia por lotes.
 
 ## Stack técnico
 
@@ -39,32 +41,43 @@ Dependencias declaradas en `pyproject.toml`.
 │   └── 01_eda_polypsegm.ipynb
 ├── src/
 │   ├── inference/
+│   │   ├── schemas.py
 │   │   └── vlm_runner.py
 │   ├── preprocessing/
 │   │   └── preprocess.py
 │   ├── scripts/
-│   │   └── test_inference.py
+    │   ├── test_inference.py        # Smoke test CLI (5 imágenes, fallback descarga)
+    │   └── test_schema.py           # Lógica de inferencia por lotes para el Schema Tester
 │   └── utils/
-│       ├── lms_menu_helpers.py
-│       ├── lms_models.py
-│       ├── setup_ui_io.py
-│       ├── setup_menu_engine.py
-│       ├── setup_models_ui.py
-│       ├── setup_tests_ui.py
-│       ├── setup_reinstall_ui.py
-│       ├── setup_install_flow.py
-│       └── setup_diagnostics.py
+│       ├── app_config.py            # Configuración estática (REQUIRED_LIBS, MODELS_REGISTRY…)
+│       ├── lms_download_manager.py  # Máquina de estado para descargas LM Studio
+│       ├── lms_menu_helpers.py      # Helpers de menú para lms
+│       ├── lms_models.py            # Wrappers sobre lmstudio SDK
+│       ├── menu_kit.py              # UIKit + AppContext: capa de abstracción para UI de terminal
+│       ├── setup_diagnostics.py     # Diagnóstico y smart-fix del entorno
+│       ├── setup_install_flow.py    # Flujo de instalación de dependencias
+│       ├── setup_menu_engine.py     # Motor de menús interactivos (MenuItem, interactive_menu)
+│       ├── setup_models_ui.py       # UI del gestor de modelos LM Studio
+│       ├── setup_reinstall_ui.py    # UI de reinstalación selectiva
+│       ├── setup_tests_ui.py        # UI para ejecución de tests
+│       └── setup_ui_io.py           # Helpers de terminal (estilo ANSI, lectura de teclas, render)
 ├── tests/
-│   ├── test_vlm_runner.py
+│   ├── test_app_config.py
 │   ├── test_inference_script.py
-│   ├── test_preprocess.py
+│   ├── test_lms_download_manager.py
+│   ├── test_lms_menu_helpers.py
 │   ├── test_lms_models.py
+│   ├── test_menu_kit.py
+│   ├── test_preprocess.py
+│   ├── test_schemas.py
+│   ├── test_setup_diagnostics.py
 │   ├── test_setup_env_menu.py
 │   ├── test_setup_extracted_menus.py
-│   ├── test_setup_diagnostics.py
 │   ├── test_setup_install_flow.py
+│   ├── test_setup_menu_engine.py
 │   ├── test_setup_models_ui.py
-│   └── test_setup_ui_io_render.py
+│   ├── test_setup_ui_io_render.py
+│   └── test_vlm_runner.py
 ├── setup_env.py
 ├── setup.bat
 ├── setup.sh
@@ -161,6 +174,22 @@ El manager ofrece:
 - Reinstalación selectiva de librerías.
 - Factory reset con confirmación segura.
 
+La UI de terminal está centralizada en `UIKit` (`src/utils/menu_kit.py`), que encapsula estilo ANSI, helpers de renderizado (banners, tablas, menús, divisores…) y módulos del SO. Todos los submódulos reciben una instancia de `UIKit` + `AppContext` en lugar de dicts `ctx` con referencias sueltas.
+
+`UIKit` incluye un generador de tablas interactivas con columnas y filas tipadas:
+
+```python
+kit.build_table_items(
+    columns=[kit.TableColumn("MODEL", min_width=24), kit.TableColumn("QUANT", fixed_width=12)],
+    rows=[
+        kit.TableRow(cells=["my-model", "Q4_K_M"], action=fn,
+                     cell_colors=[None, "OKCYAN"]),
+    ],
+)
+```
+
+O como menú completo con `kit.table_menu(columns, rows)` que devuelve el `TableRow` seleccionado.
+
 Controles de teclado:
 
 - `↑/↓`: navegar
@@ -236,7 +265,7 @@ uv run python src/scripts/test_inference.py --interactive
 
 ## Testing
 
-Suite completa:
+Suite completa (219 tests):
 
 ```bash
 uv run python -m pytest -q
@@ -246,8 +275,17 @@ Tests más relevantes:
 
 - `tests/test_vlm_runner.py`: backend de inferencia, compatibilidades SDK, parseo estructurado.
 - `tests/test_inference_script.py`: smoke test y validación por etiquetas.
-- `tests/test_setup_*.py`: cubren la modularización completa del manager, flujos de instalación (`test_setup_install_flow.py`), diagnósticos (`test_setup_diagnostics.py`), UI (`test_setup_ui_io_render.py`, `test_setup_models_ui.py`) y menús.
-- `tests/test_lms_models.py` y `test_preprocess.py`: validación de utilidades y preprocesado.
+- `tests/test_schemas.py`: validación de esquemas Pydantic (`VLMStructuredResponse`).
+- `tests/test_menu_kit.py`: `UIKit.table()`, `TableColumn`/`TableRow`, `build_table_items`, `AppContext`.
+- `tests/test_setup_menu_engine.py`: `MenuItem`, `MenuSeparator`, `interactive_menu`.
+- `tests/test_setup_diagnostics.py`: diagnóstico de entorno y smart-fix.
+- `tests/test_setup_install_flow.py`: flujos de instalación y check de dependencias.
+- `tests/test_setup_ui_io_render.py`: render incremental, cálculo de columnas, wrap.
+- `tests/test_setup_models_ui.py`: gestor de modelos y descarga.
+- `tests/test_app_config.py`: configuración estática de la aplicación.
+- `tests/test_lms_download_manager.py`: máquina de estado de descargas.
+- `tests/test_lms_models.py`, `tests/test_lms_menu_helpers.py`: wrappers lmstudio SDK.
+- `tests/test_preprocess.py`: validación del preprocesado de imágenes.
 
 ## Configuración avanzada de LM Studio
 

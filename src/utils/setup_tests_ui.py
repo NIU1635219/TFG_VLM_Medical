@@ -2,11 +2,41 @@
 
 from __future__ import annotations
 
+import os
 import shutil
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .menu_kit import AppContext, UIKit
 
 
-def run_tests_menu(*, ctx: dict[str, Any]) -> None:
+# ---------------------------------------------------------------------------
+# Utilidades de sistema puras
+# ---------------------------------------------------------------------------
+
+
+def list_test_files() -> list[str]:
+    """Escanea la carpeta ``tests/`` y devuelve los archivos de prueba.
+
+    Returns:
+        list[str]: Lista ordenada de nombres de archivo que empiezan por
+        ``test_`` y terminan en ``.py``.  Lista vacía si la carpeta no existe.
+    """
+    test_dir = "tests"
+    if not os.path.exists(test_dir):
+        return []
+    files = [
+        f for f in os.listdir(test_dir)
+        if f.startswith("test_") and f.endswith(".py")
+    ]
+    return sorted(files)
+
+
+# ---------------------------------------------------------------------------
+# Menú de tests
+# ---------------------------------------------------------------------------
+
+def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
     """
     Despliega el submenú para ejecución de tests y gestión de pruebas.
 
@@ -18,56 +48,46 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
     - Ejecutar 'Schema Tester' (inferencia + validación por esquema Pydantic).
 
     Args:
-        ctx (dict): Contexto de aplicación.
+        kit (UIKit): Interfaz de UI de terminal.
+        app (AppContext): Contexto de dominio de la aplicación.
     """
-    Style = ctx["Style"]
-    MenuItem = ctx["MenuItem"]
-    print_banner = ctx["print_banner"]
-    log = ctx["log"]
-    run_cmd = ctx["run_cmd"]
-    wait_for_any_key = ctx["wait_for_any_key"]
-    interactive_menu = ctx["interactive_menu"]
-    list_test_files = ctx["list_test_files"]
-    get_installed_lms_models = ctx["get_installed_lms_models"]
-    clear_screen_ansi = ctx["clear_screen_ansi"]
-    time_module = ctx["time"]
+    from . import setup_models_ui
 
     # ------------------------------------------------------------------
-    # Helpers reutilizables (reducen duplicación entre smoke / schema /
-    # specific-test / etc.)
+    # Helpers reutilizables
     # ------------------------------------------------------------------
 
     def _make_header(subtitle: str):
         """Devuelve una función de encabezado reutilizable."""
         def _hdr() -> None:
-            print_banner()
-            print(f"{Style.BOLD} {subtitle} {Style.ENDC}")
+            app.print_banner()
+            kit.subtitle(subtitle)
         return _hdr
 
     def _select_model(menu_id: str, subtitle: str) -> str | None:
         """
-        Muestra un selector de modelo LM Studio reutilizable.
+        Muestra un selector de modelo LM Studio.
 
         Returns:
-            Etiqueta del modelo seleccionado, o None si se cancela / no hay modelos.
+            Etiqueta del modelo seleccionado, o ``None`` si se cancela.
         """
-        installed = get_installed_lms_models()
+        installed = app.get_installed_lms_models()
         if not installed:
-            log(
+            kit.log(
                 "No hay modelos disponibles en LM Studio. "
                 "Carga uno desde 'Manage/Pull LM Studio Models...'.",
                 "warning",
             )
-            wait_for_any_key("Press any key to return to tests menu...")
+            kit.wait("Press any key to return to tests menu...")
             return None
 
         opts = [
-            MenuItem(tag, description="Usa este modelo para la inferencia.")
+            kit.MenuItem(tag, description="Usa este modelo para la inferencia.")
             for tag in installed
         ]
-        opts.append(MenuItem("Cancel", lambda: None, description="Vuelve al menú anterior."))
+        opts.append(kit.MenuItem("Cancel", lambda: None, description="Vuelve al menú anterior."))
 
-        sel = interactive_menu(
+        sel = kit.menu(
             opts,
             header_func=_make_header(subtitle),
             menu_id=menu_id,
@@ -77,8 +97,8 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
             return None
         tag = sel.label.strip()
         if not tag:
-            log("No model selected.", "warning")
-            wait_for_any_key("Press any key to return to tests menu...")
+            kit.log("No model selected.", "warning")
+            kit.wait("Press any key to return to tests menu...")
             return None
         return tag
 
@@ -87,50 +107,42 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
     # ------------------------------------------------------------------
 
     def run_smoke_test_in_process(model_tag: str) -> int:
-        """
-        Ejecuta smoke test sin subprocess para mantener navegación de menú estable.
-
-        Args:
-            model_tag (str): Etiqueta del modelo.
-
-        Returns:
-            int: Código de salida del smoke test.
-        """
+        """Ejecuta smoke test sin subprocess."""
         try:
             from src.scripts.test_inference import main as smoke_test_main
         except Exception as error:
-            log(f"Could not import smoke test script: {error}", "error")
+            kit.log(f"Could not import smoke test script: {error}", "error")
             return 1
         try:
             return int(smoke_test_main(model_path=model_tag, interactive=False))
         except Exception as error:
-            log(f"Smoke test crashed: {error}", "error")
+            kit.log(f"Smoke test crashed: {error}", "error")
             return 1
 
     def run_all_unit_tests() -> None:
         """Ejecuta todos los tests unitarios."""
-        log("Running All Unit Tests...", "step")
-        run_cmd("uv run python -m pytest tests/")
-        wait_for_any_key()
+        kit.log("Running All Unit Tests...", "step")
+        kit.run_cmd("uv run python -m pytest tests/")
+        kit.wait()
 
     def run_specific_test() -> None:
         """Ejecuta un test específico."""
         while True:
-            files = list_test_files()
+            files = app.list_test_files()
             if not files:
-                log("No tests found in tests/ folder.", "warning")
-                time_module.sleep(1)
+                kit.log("No tests found in tests/ folder.", "warning")
+                app.time_module.sleep(1)
                 return
 
             test_opts = [
-                MenuItem(f, description="Ejecuta solo este archivo de tests con pytest.")
+                kit.MenuItem(f, description="Ejecuta solo este archivo de tests con pytest.")
                 for f in files
             ]
             test_opts.append(
-                MenuItem("Cancel", lambda: None, description="Vuelve al menú anterior sin ejecutar pruebas.")
+                kit.MenuItem("Cancel", lambda: None, description="Vuelve al menú anterior sin ejecutar pruebas.")
             )
 
-            selection = interactive_menu(
+            selection = kit.menu(
                 test_opts,
                 header_func=_make_header("SELECT TEST FILE"),
                 menu_id="run_specific_test_selector",
@@ -141,18 +153,15 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
                 return
 
             fname = selection.label
-            clear_screen_ansi()
-            log(f"Running {fname}...", "step")
-            run_cmd(f"uv run python -m pytest tests/{fname}")
-            wait_for_any_key("Finished. Press any key to return to test selector...")
+            kit.clear()
+            kit.log(f"Running {fname}...", "step")
+            kit.run_cmd(f"uv run python -m pytest tests/{fname}")
+            kit.wait("Finished. Press any key to return to test selector...")
 
     def run_schema_tester_wrapper() -> None:
-        """
-        Schema Tester: seleccionar modelo → esquema → ejecutar inferencia
-        sobre 5 imágenes aleatorias y validar contra el esquema.
-        """
+        """Schema Tester: modelo → esquema → inferencia sobre 5 imágenes."""
         from src.inference.schemas import SCHEMA_REGISTRY
-        from src.scripts.interactive_schema_tester import (
+        from src.scripts.test_schema import (
             find_images,
             format_schema_info,
             format_schema_menu_description,
@@ -160,7 +169,7 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
         )
 
         while True:
-            # ─ PASO 1: Seleccionar modelo ────────────────────────────
+            # ─ PASO 1: Seleccionar modelo ─────────────────────────────
             model_tag = _select_model(
                 menu_id="schema_tester_model_selector",
                 subtitle="SCHEMA TESTER · SELECT MODEL",
@@ -168,16 +177,16 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
             if model_tag is None:
                 return
 
-            # ─ PASO 2: Seleccionar esquema ───────────────────────────
+            # ─ PASO 2: Seleccionar esquema ────────────────────────────
             schema_items = [
-                MenuItem(name, description=format_schema_menu_description(name, cls))
+                kit.MenuItem(name, description=format_schema_menu_description(name, cls))
                 for name, cls in SCHEMA_REGISTRY.items()
             ]
             schema_items.append(
-                MenuItem("Cancel", lambda: None, description="Vuelve a la selección de modelo.")
+                kit.MenuItem("Cancel", lambda: None, description="Vuelve a la selección de modelo.")
             )
 
-            schema_sel = interactive_menu(
+            schema_sel = kit.menu(
                 schema_items,
                 header_func=_make_header("SCHEMA TESTER · SELECT SCHEMA"),
                 menu_id="schema_tester_schema_selector",
@@ -189,43 +198,44 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
             schema_name = schema_sel.label
             schema_cls = SCHEMA_REGISTRY[schema_name]
 
-            # ─ PASO 3: Inferencia automática ─────────────────────────
+            # ─ PASO 3: Inferencia automática ──────────────────────────
             images = find_images()
             if not images:
-                log("No se encontraron imágenes en los directorios del proyecto.", "warning")
-                wait_for_any_key("Press any key to return to model selector...")
+                kit.log("No se encontraron imágenes en los directorios del proyecto.", "warning")
+                kit.wait("Press any key to return to model selector...")
                 continue
 
-            clear_screen_ansi()
-            print_banner()
-            print(f"{Style.BOLD} SCHEMA TESTER · {schema_name} {Style.ENDC}\n")
+            kit.clear()
+            app.print_banner()
+            kit.subtitle(f"SCHEMA TESTER · {schema_name}")
+            print()
             _tw = max(60, shutil.get_terminal_size(fallback=(120, 30)).columns - 4)
             for line in format_schema_info(schema_name, schema_cls, text_width=_tw).splitlines():
                 print(f"  {line}")
             print()
-            log(
+            kit.log(
                 f"Modelo: {model_tag} · max 5 imágenes de {len(images)} disponibles...",
                 "step",
             )
             try:
                 ok, fail, invalid = run_batch(model_tag, schema_name, schema_cls, images)
                 if fail > 0 or invalid > 0:
-                    log(
+                    kit.log(
                         f"Schema Tester completado: {ok} válidas, "
                         f"{invalid} inválidas, {fail} errores.",
                         "warning",
                     )
                 else:
-                    log(
+                    kit.log(
                         f"Schema Tester completado: {ok}/{ok} inferencias válidas.",
                         "success",
                     )
             except Exception as error:
-                log(f"Schema Tester terminó con error: {error}", "error")
-            wait_for_any_key("Press any key to return to model selector...")
+                kit.log(f"Schema Tester terminó con error: {error}", "error")
+            kit.wait("Press any key to return to model selector...")
 
     def run_smoke_test_wrapper() -> None:
-        """Lanza smoke test y mantiene retorno al selector de modelo."""
+        """Lanza smoke test con selector de modelo."""
         while True:
             model_tag = _select_model(
                 menu_id="run_smoke_model_selector",
@@ -234,39 +244,39 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
             if model_tag is None:
                 return
 
-            clear_screen_ansi()
-            log(f"Launching Inference with {model_tag}...", "step")
+            kit.clear()
+            kit.log(f"Launching Inference with {model_tag}...", "step")
             result_code = run_smoke_test_in_process(model_tag)
             if result_code != 0:
-                log("Smoke test failed (Exit Code 1). Check output above.", "error")
-            wait_for_any_key("Press any key to return to model selector...")
+                kit.log("Smoke test failed (Exit Code 1). Check output above.", "error")
+            kit.wait("Press any key to return to model selector...")
 
     # ------------------------------------------------------------------
     # Menú principal de tests
     # ------------------------------------------------------------------
 
     options = [
-        MenuItem(
+        kit.MenuItem(
             " Manage/Pull LM Studio Models...",
-            ctx["manage_models_menu_ui"],
+            lambda: setup_models_ui.manage_models_menu_ui(kit, app),
             description="Descarga, carga o descarga de memoria modelos mediante LM Studio CLI.",
         ),
-        MenuItem(
+        kit.MenuItem(
             " Run All Unit Tests (pytest)",
             run_all_unit_tests,
             description="Ejecuta todos los tests dentro de la carpeta tests/.",
         ),
-        MenuItem(
+        kit.MenuItem(
             " Run Specific Test File...",
             run_specific_test,
             description="Abre un selector para ejecutar un único archivo de test.",
         ),
-        MenuItem(
+        kit.MenuItem(
             " Run Smoke Test (Inference Demo)",
             run_smoke_test_wrapper,
             description="Lanza una inferencia rápida para validar flujo modelo+imagen.",
         ),
-        MenuItem(
+        kit.MenuItem(
             " Run Schema Tester (VLM Interactive)",
             run_schema_tester_wrapper,
             description=(
@@ -274,7 +284,7 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
                 "aleatorias y valida automáticamente que las respuestas cumplan el esquema."
             ),
         ),
-        MenuItem(
+        kit.MenuItem(
             " Return to Main Menu",
             lambda: "BACK",
             description="Vuelve al menú principal.",
@@ -282,7 +292,7 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
     ]
 
     while True:
-        choice = interactive_menu(
+        choice = kit.menu(
             options,
             header_func=_make_header("TEST & MODEL MANAGER"),
             multi_select=False,
@@ -296,7 +306,7 @@ def run_tests_menu(*, ctx: dict[str, Any]) -> None:
             choice = choice[0] if len(choice) > 0 else None
 
         if choice and hasattr(choice, "action") and callable(choice.action):
-            clear_screen_ansi()
+            kit.clear()
             res = choice.action()
             if res == "BACK":
                 break

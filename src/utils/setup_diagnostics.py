@@ -5,51 +5,61 @@ from __future__ import annotations
 import os
 import shutil
 import time
-from typing import Any
+from typing import TYPE_CHECKING
 
-from .setup_ui_io import IncrementalPanelRenderer, get_ui_width, render_title_banner, wrap_plain_text
+from .setup_install_flow import check_uv  # sin circular: setup_install_flow no importa setup_diagnostics a nivel de módulo
+
+if TYPE_CHECKING:
+    from .menu_kit import AppContext, UIKit
 
 
-def _dynamic_ui_width() -> int:
+# ---------------------------------------------------------------------------
+# DiagnosticIssue
+# ---------------------------------------------------------------------------
+
+class DiagnosticIssue:
     """
-    Calcula ancho de UI adaptado al terminal actual sin tope fijo de 86.
-    
-    Returns:
-        int: Ancho calculado.
+    Representa un problema detectado durante el diagnóstico del entorno.
+
+    Almacena la descripción del problema, la función que lo soluciona y el
+    nombre de la solución para mostrar en la interfaz de usuario.
     """
-    try:
-        cols = int(shutil.get_terminal_size(fallback=(120, 30)).columns)
-    except Exception:
-        cols = 120
-    max_width = max(60, cols - 4)
-    return get_ui_width(shutil_module=shutil, max_width=max_width)
+
+    def __init__(self, description: str, fix_func, fix_name: str) -> None:
+        self.description = description
+        self.name = description          # alias usado en tests
+        self.fix_func = fix_func
+        self.fix_name = fix_name
+        self.label = fix_name
+        self.action = fix_func
+        self.children: list = []
+        self.is_selected: bool = False
 
 
-def perform_diagnostics(ctx: dict[str, Any]):
+# ---------------------------------------------------------------------------
+# Diagnóstico del entorno
+# ---------------------------------------------------------------------------
+
+def perform_diagnostics(kit: "UIKit", app: "AppContext"):
     """
     Ejecuta un análisis completo del estado del sistema y dependencias.
-    
-    Verifica:
-    - Existencia de carpetas críticas.
-    - Instalación de herramientas (uv, lms).
-    - Importación de librerías requeridas.
-    - Espacio en disco disponible.
-    
+
+    Verifica carpetas críticas, herramientas (uv, lms), librerías requeridas
+    y espacio en disco.
+
     Args:
-        ctx (dict): Contexto de ejecución.
-        
+        kit (UIKit): Interfaz de UI de terminal.
+        app (AppContext): Contexto de dominio de la aplicación.
+
     Returns:
-        tuple[list, list]: (Reporte tabular, Lista de objetos DiagnosticIssue detectados).
+        tuple[list, list]: (Reporte tabular, Lista de DiagnosticIssue detectados).
     """
-    DiagnosticIssue = ctx["DiagnosticIssue"]
-    fix_folders = ctx["fix_folders"]
-    fix_uv = ctx["fix_uv"]
-    fix_libs = ctx["fix_libs"]
-    check_uv = ctx["check_uv"]
-    check_lms = ctx["check_lms"]
-    log = ctx["log"]
-    REQUIRED_LIBS = ctx["REQUIRED_LIBS"]
-    LIB_IMPORT_MAP = ctx["LIB_IMPORT_MAP"]
+    fix_folders = app.fix_folders
+    fix_uv = app.fix_uv
+    fix_libs = app.fix_libs
+    check_lms = app.check_lms
+    REQUIRED_LIBS = app.REQUIRED_LIBS
+    LIB_IMPORT_MAP = app.LIB_IMPORT_MAP
 
     report = []
     issues = []
@@ -94,7 +104,7 @@ def perform_diagnostics(ctx: dict[str, Any]):
         issues.append(
             DiagnosticIssue(
                 "LM Studio CLI not found",
-                lambda: log("Install LM Studio and ensure lms is on PATH", "warning"),
+                lambda: kit.log("Install LM Studio and ensure lms is on PATH", "warning"),
                 "Install LM Studio CLI",
             )
         )
@@ -117,72 +127,20 @@ def perform_diagnostics(ctx: dict[str, Any]):
     return report, issues
 
 
-def print_report_table(report, *, style: Any, width: int | None = None):
+def smart_fix_menu(kit: "UIKit", app: "AppContext", issues: list, report: list | None = None) -> bool:
     """
-    Imprime una tabla formateada con los resultados del diagnóstico.
-    
+    Despliega un menú interactivo para aplicar correcciones automáticas.
+
     Args:
-        report (list): Lista de tuplas (Componente, Valor, Estado).
-        style: Objeto de estilos ANSI.
-        width (int, optional): Ancho de UI a usar para alinear con el banner.
-    """
-    ui_width = int(width) if isinstance(width, int) and width > 0 else _dynamic_ui_width()
-    result_col = 6
-    content_budget = max(32, ui_width - result_col - 6)
-    component_col = max(16, int(content_budget * 0.45))
-    value_col = max(16, content_budget - component_col)
-
-    top = "┌" + "─" * (component_col + 2) + "┬" + "─" * (value_col + 2) + "┬" + "─" * result_col + "┐"
-    mid = "├" + "─" * (component_col + 2) + "┼" + "─" * (value_col + 2) + "┼" + "─" * result_col + "┤"
-    bottom = "└" + "─" * (component_col + 2) + "┴" + "─" * (value_col + 2) + "┴" + "─" * result_col + "┘"
-
-    print(f"\n{style.HEADER}{top}{style.ENDC}")
-    print(
-        f"{style.HEADER}│ {'Component':<{component_col}} │ {'Status/Value':<{value_col}} │ {'Res':<{result_col - 2}} │{style.ENDC}"
-    )
-    print(f"{style.HEADER}{mid}{style.ENDC}")
-
-    for name, value, status in report:
-        color = style.OKGREEN if status == "OK" else (style.WARNING if status == "WARN" else style.FAIL)
-        display_name = str(name).replace("cv2", "OpenCV").replace("llama_cpp", "LlamaCPP")
-        value_text = str(value)
-
-        name_lines = wrap_plain_text(display_name, component_col)
-        value_lines = wrap_plain_text(value_text, value_col)
-        row_count = max(len(name_lines), len(value_lines))
-
-        for row_idx in range(row_count):
-            left = name_lines[row_idx] if row_idx < len(name_lines) else ""
-            right = value_lines[row_idx] if row_idx < len(value_lines) else ""
-            if row_idx == 0:
-                res_text = f"{color}{status:<{result_col - 2}}{style.ENDC}"
-            else:
-                res_text = " " * (result_col - 2)
-
-            print(f"│ {left:<{component_col}} │ {right:<{value_col}} │ {res_text} │")
-
-    print(f"{style.HEADER}{bottom}{style.ENDC}")
-
-
-def smart_fix_menu(issues, report, ctx: dict[str, Any]) -> bool:
-    """
-    Despliega un menú interactivo para aplicar correcciones automáticas (Smart Fix).
-    
-    Args:
+        kit (UIKit): Interfaz de UI de terminal.
+        app (AppContext): Contexto de dominio.
         issues (list): Lista de problemas detectados (DiagnosticIssue).
-        report (list): Reporte del diagnóstico previo para mostrar contexto.
-        ctx (dict): Contexto de la aplicación.
-        
-    Returns:
-        bool: True si se aplicaron correcciones (sugiere re-ejecutar diagnóstico), False si no.
-    """
-    style = ctx["Style"]
-    interactive_menu = ctx["interactive_menu"]
-    print_report_table_fn = ctx["print_report_table"]
-    clear_screen_ansi = ctx["clear_screen_ansi"]
-    log = ctx["log"]
+        report (list | None): Reporte del diagnóstico previo para contexto.
 
-    seen_funcs = set()
+    Returns:
+        bool: True si se aplicaron correcciones.
+    """
+    seen_funcs: set = set()
     display_options = []
     for issue in issues:
         func_key = issue.fix_func
@@ -192,20 +150,17 @@ def smart_fix_menu(issues, report, ctx: dict[str, Any]) -> bool:
             display_options.append(issue)
             seen_funcs.add(func_key)
 
-    def draw_header():
-        """
-        Renderiza el encabezado del menú de correcciones automáticas.
-        """
+    def draw_header() -> None:
+        """Renderiza el encabezado del menú de correcciones."""
+        w = kit.width()
         if report:
-            width = _dynamic_ui_width()
-            render_title_banner(title="SYSTEM DIAGNOSTICS (CACHED)", style=style, width=width)
-            print_report_table_fn(report)
-        width = _dynamic_ui_width()
-        render_title_banner(title=f"DIAGNOSTIC ISSUES DETECTED ({len(issues)})", style=style, width=width)
+            kit.banner("SYSTEM DIAGNOSTICS (CACHED)", width=w)
+            kit.table(report, width=w)
+        kit.banner(f"DIAGNOSTIC ISSUES DETECTED ({len(issues)})", width=w)
         for item in issues:
-            print(f" {style.FAIL}●{style.ENDC} {item.description}")
+            print(f" {kit.style.FAIL}●{kit.style.ENDC} {item.description}")
 
-    selected_fixes = interactive_menu(
+    selected_fixes = kit.menu(
         display_options,
         header_func=draw_header,
         multi_select=True,
@@ -215,88 +170,68 @@ def smart_fix_menu(issues, report, ctx: dict[str, Any]) -> bool:
     )
 
     if selected_fixes:
-        clear_screen_ansi()
-        print(f"\n{style.BOLD} APPLYING FIXES... {style.ENDC}")
+        kit.clear()
+        print(f"\n{kit.style.BOLD} APPLYING FIXES... {kit.style.ENDC}")
         time.sleep(0.5)
 
         fixes_list = selected_fixes if isinstance(selected_fixes, list) else [selected_fixes]
         for fix in list(fixes_list):
             fix.action()
 
-        log("All fixes applied. Refreshing diagnostics...", "success")
+        kit.log("All fixes applied. Refreshing diagnostics...", "success")
         time.sleep(1.0)
         return True
 
     return False
 
 
-def run_diagnostics_ui(ctx: dict[str, Any]) -> None:
+def run_diagnostics_ui(kit: "UIKit", app: "AppContext") -> None:
     """
     Controlador principal de la interfaz de diagnósticos.
-    
-    Ejecuta el ciclo de diagnóstico -> reporte -> smart fix -> re-diagnóstico.
-    
-    Args:
-        ctx (dict): Contexto de aplicación.
-    """
-    style = ctx["Style"]
-    clear_screen = ctx["clear_screen"]
-    wait_for_any_key = ctx["wait_for_any_key"]
-    perform_diagnostics_fn = ctx["perform_diagnostics"]
-    print_report_table_fn = ctx["print_report_table"]
-    smart_fix_menu_fn = ctx["smart_fix_menu"]
-    read_key_fn = ctx.get("read_key")
 
-    def _show_diagnostics_summary(*, report, issues) -> bool:
-        """Renderiza el resumen de diagnóstico y permite resize en tiempo real.
+    Ejecuta el ciclo diagnóstico → reporte → smart fix → re-diagnóstico.
+
+    Args:
+        kit (UIKit): Interfaz de UI de terminal.
+        app (AppContext): Contexto de dominio.
+    """
+
+    def _show_diagnostics_summary(*, report: list, issues: list) -> bool:
+        """Renderiza el resumen de diagnóstico con resize en tiempo real.
 
         Returns:
-            bool: True si el usuario confirma abrir Smart Fix (solo cuando hay issues).
+            bool: ``True`` si el usuario confirma abrir Smart Fix.
         """
 
         def _render_static() -> None:
-            """
-            Renderiza el resumen estático de diagnóstico.
-            """
-            width = _dynamic_ui_width()
+            w = kit.width()
             print()
-            render_title_banner(title="SYSTEM DIAGNOSTICS & VERIFICATION", style=style, width=width)
-            try:
-                print_report_table_fn(report, width=width)
-            except TypeError:
-                print_report_table_fn(report)
+            kit.banner("SYSTEM DIAGNOSTICS & VERIFICATION", width=w)
+            kit.table(report, width=w)
 
-        panel = IncrementalPanelRenderer(clear_screen_fn=clear_screen, render_static_fn=_render_static)
+        panel = kit.IncrementalPanelRenderer(
+            clear_screen_fn=kit.clear,
+            render_static_fn=_render_static,
+        )
 
-        if read_key_fn is None:
-            clear_screen()
-            _render_static()
-            if issues:
-                print(f"\n{style.FAIL}Issues found! Entering Smart Fix Menu...{style.ENDC}")
-                time.sleep(1)
-                return True
-            print(f"\n{style.OKGREEN}System looks healthy!{style.ENDC}")
-            wait_for_any_key()
-            return False
+        _last_w: int | None = None
 
         while True:
-            dynamic_lines: list[str] = []
-            width = _dynamic_ui_width()
-            divider = "─" * width
+            w = kit.width()
+            if w != _last_w:
+                div = kit.divider(w)
+                dynamic_lines: list[str] = ["", div]
+                if issues:
+                    dynamic_lines.append(f"{kit.style.FAIL}Issues found: {len(issues)}{kit.style.ENDC}")
+                    dynamic_lines.append(f"{kit.style.DIM}[ENTER] abrir Smart Fix · [ESC] volver{kit.style.ENDC}")
+                else:
+                    dynamic_lines.append(f"{kit.style.OKGREEN}System looks healthy!{kit.style.ENDC}")
+                    dynamic_lines.append(f"{kit.style.DIM}[ENTER/ESC] volver{kit.style.ENDC}")
+                dynamic_lines.append(div)
+                panel.render(dynamic_lines)
+                _last_w = w
 
-            dynamic_lines.append("")
-            dynamic_lines.append(divider)
-            if issues:
-                dynamic_lines.append(f"{style.FAIL}Issues found: {len(issues)}{style.ENDC}")
-                dynamic_lines.append(f"{style.DIM}[ENTER] abrir Smart Fix · [ESC] volver{style.ENDC}")
-            else:
-                dynamic_lines.append(f"{style.OKGREEN}System looks healthy!{style.ENDC}")
-                dynamic_lines.append(f"{style.DIM}[ENTER/ESC] volver{style.ENDC}")
-            dynamic_lines.append(divider)
-
-            panel.render(dynamic_lines)
-
-            key = read_key_fn()
+            key = kit.read_key()
             if key is None:
                 time.sleep(0.05)
                 continue
@@ -309,13 +244,13 @@ def run_diagnostics_ui(ctx: dict[str, Any]) -> None:
             time.sleep(0.01)
 
     while True:
-        report, issues = perform_diagnostics_fn()
+        report, issues = perform_diagnostics(kit, app)
 
         if issues:
             open_smart_fix = _show_diagnostics_summary(report=report, issues=issues)
             if not open_smart_fix:
                 break
-            should_rerun = smart_fix_menu_fn(issues, report)
+            should_rerun = smart_fix_menu(kit, app, issues, report)
             if should_rerun:
                 continue
             break

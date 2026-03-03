@@ -2,47 +2,48 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .menu_kit import AppContext, UIKit
 
 
-def reinstall_library_menu(*, ctx: dict[str, Any]) -> None:
+def reinstall_library_menu(kit: "UIKit", app: "AppContext") -> None:
     """
     Despliega el menú para la reinstalación manual de librerías y herramientas.
-    
-    Permite seleccionar dependencias individuales para forzar su reinstalación limpia
-    mediante `uv`.
-    
+
+    Permite seleccionar dependencias individuales para forzar su reinstalación
+    limpia mediante ``uv``.
+
     Args:
-        ctx (dict): Contexto de aplicación.
+        kit (UIKit): Interfaz de UI de terminal.
+        app (AppContext): Contexto de dominio de la aplicación.
     """
-    Style = ctx["Style"]
-    MenuItem = ctx["MenuItem"]
-    REQUIRED_LIBS = ctx["REQUIRED_LIBS"]
-    print_banner = ctx["print_banner"]
-    interactive_menu = ctx["interactive_menu"]
-    clear_screen_ansi = ctx["clear_screen_ansi"]
-    fix_uv = ctx["fix_uv"]
-    fix_libs = ctx["fix_libs"]
-    log = ctx["log"]
-    restart_program = ctx["restart_program"]
-    wait_for_any_key = ctx["wait_for_any_key"]
 
     def header() -> None:
-        """
-        Imprime el encabezado del menú.
-        """
-        print_banner()
-        print(f"{Style.BOLD} REINSTALL LIBRARIES {Style.ENDC}")
+        app.print_banner()
+        kit.subtitle("REINSTALL LIBRARIES")
         print(" Select libraries to force re-install (clean install).")
 
-    core_children = [MenuItem(lib, description=f"Reinstala la librería '{lib}'.") for lib in REQUIRED_LIBS]
-
-    opts = [
-        MenuItem("Reinstall Core Dependencies", children=core_children, description="Selecciona una o varias dependencias para reinstalar."),
-        MenuItem("Reinstall 'uv' Tool", lambda: fix_uv(), description="Reinstala la herramienta uv en el entorno actual."),
+    core_children = [
+        kit.MenuItem(lib, description=f"Reinstala la librería '{lib}'.")
+        for lib in app.REQUIRED_LIBS
     ]
 
-    selected = interactive_menu(
+    opts = [
+        kit.MenuItem(
+            "Reinstall Core Dependencies",
+            children=core_children,
+            description="Selecciona una o varias dependencias para reinstalar.",
+        ),
+        kit.MenuItem(
+            "Reinstall 'uv' Tool",
+            lambda: app.fix_uv(),
+            description="Reinstala la herramienta uv en el entorno actual.",
+        ),
+    ]
+
+    selected = kit.menu(
         opts,
         header_func=header,
         multi_select=True,
@@ -52,24 +53,22 @@ def reinstall_library_menu(*, ctx: dict[str, Any]) -> None:
     )
 
     if selected:
-        clear_screen_ansi()
+        kit.clear()
 
         selected_core_libs = [s.label for s in selected if s in core_children]
         other_tasks = [s for s in selected if s not in core_children and callable(s.action)]
 
         if selected_core_libs:
-            fix_libs(selected_core_libs)
+            app.fix_libs(selected_core_libs)
 
         for task in other_tasks:
-            log(f"Ejecutando {task.label}...", "step")
+            kit.log(f"Ejecutando {task.label}...", "step")
             task.action()
 
-        restart_needed = False
-        if selected_core_libs:
-            restart_needed = True
+        restart_needed = bool(selected_core_libs)
 
         if restart_needed:
-            restart_program()
+            app.restart_program()
 
-        log("Operaciones completadas.", "success")
-        wait_for_any_key("Press any key to continue...")
+        kit.log("Operaciones completadas.", "success")
+        kit.wait("Press any key to continue...")

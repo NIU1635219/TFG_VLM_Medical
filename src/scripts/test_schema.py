@@ -247,6 +247,7 @@ def run_batch(
     images: list[str],
     *,
     max_images: int = MAX_SAMPLE_IMAGES,
+    enable_thinking: bool | None = None,
 ) -> tuple[int, int, int]:
     """
     Ejecuta inferencia sobre una muestra aleatoria de imágenes y valida los
@@ -275,6 +276,10 @@ def run_batch(
     print(f"Esquema : {schema_name}")
     print(f"Imágenes: {len(sample)} (de {len(images)} disponibles)")
     print(f"Prompt  : {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
+    if enable_thinking is True:
+        print("Thinking: ON  (razonamiento extendido)")
+    elif enable_thinking is False:
+        print("Thinking: OFF (respuesta directa)")
     print("-" * 60)
 
     loader = VLMLoader(model_path=model_id, verbose=False)
@@ -289,7 +294,7 @@ def run_batch(
             rel = img_path
         print(f"\n  ▶ [{i}/{len(sample)}] {rel}")
         try:
-            result = loader.inference(image_path=img_path, prompt=prompt, schema=schema_cls)
+            result = loader.inference(image_path=img_path, prompt=prompt, schema=schema_cls, enable_thinking=enable_thinking)
             _print_result(img_path, result, i, len(sample))
             valid, reason = _validate_result(result, schema_cls)
             if valid:

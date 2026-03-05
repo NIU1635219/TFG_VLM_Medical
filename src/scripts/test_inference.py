@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import unicodedata
@@ -18,11 +17,6 @@ except ImportError:
     lms = None
 
 try:
-    import msvcrt
-except ImportError:
-    msvcrt = None
-
-try:
     from PIL import Image
 except ImportError:
     Image = None
@@ -31,6 +25,12 @@ except ImportError:
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from src.inference.vlm_runner import VLMLoader, GenericObjectDetection
+from src.utils.lms_models import (
+    get_installed_lms_models as _lms_get_installed_models,
+    get_installed_models as _lms_cli_installed_models,
+    list_loaded_llm_model_keys as _lms_loaded_model_keys,
+    parse_lms_table_models as parse_lms_ls_output,
+)
 
 PROMPT = (
     "Identifica el animal principal de la imagen y responde en español. "
@@ -98,216 +98,25 @@ KEYWORDS_BY_LABEL = {
 }
 
 
-def parse_lms_ls_output(raw_output: str) -> List[str]:
-    """
-    Analiza la salida cruda del comando 'lms ls' y extrae identificadores de modelos.
-    
-    Args:
-        raw_output (str): Salida del comando ejecutado en terminal.
-        
-    Returns:
-        List[str]: Lista de identificadores de modelos encontrados.
-    """
-    lines = [line.strip() for line in raw_output.splitlines() if line.strip()]
-    if not lines:
-        return []
-
-    models: List[str] = []
-    for line in lines:
-        upper = line.upper()
-        if "MODEL" in upper and "SIZE" in upper:
-            continue
-
-        parts = line.split()
-        if not parts:
-            continue
-
-        candidate = parts[0].strip()
-        if candidate and candidate.lower() not in {"id", "model", "name"}:
-            models.append(candidate)
-
-    return models
-
-
-def _extract_model_key(item) -> str | None:
-    """
-    Extrae la clave o ID de un objeto de modelo de forma segura.
-    
-    Soporta extracción desde cadenas, diccionarios u objetos con atributos.
-    
-    Args:
-        item: Objeto del cual extraer el identificador.
-        
-    Returns:
-        str | None: El identificador encontrado o None si no se pudo extraer.
-    """
-    if item is None:
-        return None
-    if isinstance(item, str):
-        text = item.strip()
-        return text or None
-    if isinstance(item, dict):
-        for key_name in ("key", "id", "model"):
-            value = item.get(key_name)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return None
-    for attr_name in ("key", "id", "model"):
-        value = getattr(item, attr_name, None)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
-
-def _get_models_from_sdk() -> List[str]:
-    """
-    Obtiene la lista de modelos cargados usando el SDK de LM Studio.
-    
-    Returns:
-        List[str]: Lista de identificadores de modelos cargados.
-    """
-    if lms is None:
-        return []
-
-    try:
-        list_fn = getattr(lms, "list_loaded_models", None)
-        if not callable(list_fn):
-            return []
-
-        response = list_fn()
-
-        keys: List[str] = []
-
-        def collect(items):
-            if items is None:
-                return
-            if isinstance(items, (list, tuple)):
-                for entry in items:
-                    key = _extract_model_key(entry)
-                    if key:
-                        keys.append(key)
-                return
-            if isinstance(items, dict):
-                if "data" in items:
-                    collect(items.get("data"))
-                    return
-                if "models" in items:
-                    collect(items.get("models"))
-                    return
-                key = _extract_model_key(items)
-                if key:
-                    keys.append(key)
-                return
-
-            key = _extract_model_key(items)
-            if key:
-                keys.append(key)
-
-            data_attr = getattr(items, "data", None)
-            if data_attr is not None:
-                collect(data_attr)
-            models_attr = getattr(items, "models", None)
-            if models_attr is not None:
-                collect(models_attr)
-
-        collect(response)
-        return list(dict.fromkeys(keys))
-    except Exception:
-        return []
-
-
 def get_installed_models() -> List[str]:
     """
-    Obtiene la lista de modelos disponibles en LM Studio.
-    
-    Intenta primero usar el SDK y, si falla o no devuelve nada, usa la CLI (`lms ls`).
-    
+    Obtiene la lista de modelos disponibles en LM Studio (incluidas todas las variantes).
+
+    Usa ``get_installed_lms_models`` como fuente primaria (vía ``lms ls --json``).
+    Cae a los modelos cargados en SDK y, por último, al CLI ``lms ls`` básico.
+
     Returns:
-        List[str]: Lista de identificadores de modelos disponibles.
+        List[str]: Lista de identificadores de modelos (con sufijo ``@variante``).
     """
-    sdk_models = _get_models_from_sdk()
-    if sdk_models:
-        return sdk_models
+    installed = _lms_get_installed_models()
+    if installed:
+        return installed
 
-    try:
-        result = subprocess.check_output(["lms", "ls"], text=True, stderr=subprocess.STDOUT)
-        return parse_lms_ls_output(result)
-    except Exception:
-        return []
+    loaded = list(_lms_loaded_model_keys())
+    if loaded:
+        return loaded
 
-
-def select_model_interactive(installed_models: List[str]) -> str:
-    """
-    Muestra un menú interactivo para seleccionar un modelo de la lista.
-    
-    Si hay modelos instalados, permite elegir uno usando las flechas.
-    También ofrece la opción de introducir manualmente el tag del modelo.
-    
-    Args:
-        installed_models (List[str]): Lista de modelos detectados.
-        
-    Returns:
-        str: El identificador del modelo seleccionado o None si se cancela.
-    """
-    print("\n=== SELECCIÓN DE MODELO LM STUDIO ===")
-
-    if installed_models:
-        options = installed_models + ["Introducir tag manualmente"]
-
-        if os.name == "nt" and msvcrt:
-            selected_idx = 0
-            while True:
-                os.system("cls")
-                print("=== SELECCIÓN DE MODELO LM STUDIO ===")
-                print("Modelos instalados (flechas + ENTER, ESC para cancelar):\n")
-
-                for idx, option in enumerate(options):
-                    pointer = "👉" if idx == selected_idx else "  "
-                    print(f"{pointer} {option}")
-
-                key = msvcrt.getch()
-                if key in (b"\xe0", b"\x00"):
-                    key2 = msvcrt.getch()
-                    if key2 == b"H":  # UP
-                        selected_idx = (selected_idx - 1) % len(options)
-                    elif key2 == b"P":  # DOWN
-                        selected_idx = (selected_idx + 1) % len(options)
-                    continue
-
-                if key in (b"\r", b"\n"):
-                    selected = options[selected_idx]
-                    if selected == "Introducir tag manualmente":
-                        break
-                    print(f"👉 Seleccionado: {selected}")
-                    return selected
-
-                if key == b"\x1b":  # ESC
-                    return ""
-
-        # Fallback no-Windows o terminal sin msvcrt
-        print("Modelos instalados (detectados con API local o `lms ls`):")
-        for idx, model_name in enumerate(installed_models, start=1):
-            print(f"  {idx}. {model_name}")
-        print("  0. Introducir tag manualmente")
-
-        while True:
-            selected = input(f"\nSelecciona una opción (0-{len(installed_models)}): ").strip()
-            if not selected:
-                continue
-            if selected == "0":
-                break
-            try:
-                selected_idx = int(selected) - 1
-                if 0 <= selected_idx < len(installed_models):
-                    selected_model = installed_models[selected_idx]
-                    print(f"👉 Seleccionado: {selected_model}")
-                    return selected_model
-                print("❌ Selección inválida.")
-            except ValueError:
-                print("❌ Introduce un número válido.")
-
-    manual_tag = input("Introduce el id/tag del modelo cargado en LM Studio: ").strip()
-    return manual_tag
+    return _lms_cli_installed_models()
 
 
 def _download_bytes_from_url(image_url: str) -> bytes:
@@ -558,7 +367,7 @@ def validate_response(label: str, response_payload: str | Dict[str, object] | Ge
     )
 
 
-def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
+def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]], *, enable_thinking: bool | None = None) -> int:
     """
     Ejecuta un test de humo para validar que el modelo puede procesar imágenes.
     
@@ -571,6 +380,10 @@ def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
     """
     print("\n=== TAREA 4: SMOKE TEST VLM (LM STUDIO) ===")
     print(f"👉 Modelo objetivo: {model_tag}")
+    if enable_thinking is True:
+        print("💡 Modo thinking: ON  (razonamiento extendido)")
+    elif enable_thinking is False:
+        print("💡 Modo thinking: OFF (respuesta directa)")
 
     print("\n1. Inicializando VLMLoader...")
     loader = VLMLoader(model_path=model_tag, verbose=True)
@@ -591,7 +404,7 @@ def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
 
             print(f"\n--- Caso: {case_id.upper()} ({label.upper()}) ---")
             print(f"Imagen: {image_path}")
-            response = loader.inference(image_path, PROMPT)
+            response = loader.inference(image_path, PROMPT, enable_thinking=enable_thinking)
             print("Respuesta estructurada del modelo:")
             if isinstance(response, GenericObjectDetection):
                 print(response.model_dump_json(indent=2, ensure_ascii=False))
@@ -616,13 +429,12 @@ def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
     return 1
 
 
-def resolve_model(model_arg: str | None, interactive: bool) -> str:
+def resolve_model(model_arg: str | None) -> str:
     """
     Resuelve el modelo objetivo para el test de humo.
     
     Args:
         model_arg (str | None): Etiqueta del modelo proporcionada por el usuario.
-        interactive (bool): Indica si se debe mostrar un menú interactivo.
         
     Returns:
         str: Etiqueta del modelo seleccionado.
@@ -632,16 +444,10 @@ def resolve_model(model_arg: str | None, interactive: bool) -> str:
 
     installed_models = get_installed_models()
 
-    if interactive:
-        selected = select_model_interactive(installed_models)
-        if not selected:
-            raise RuntimeError("No se seleccionó ningún modelo.")
-        return selected
-
     if not installed_models:
         raise RuntimeError(
             "No se detectaron modelos disponibles en LM Studio. "
-            "Carga uno en LM Studio o usa --interactive/--model_path."
+            "Carga uno en LM Studio o usa --model_path."
         )
 
     selected_model = installed_models[0]
@@ -649,21 +455,20 @@ def resolve_model(model_arg: str | None, interactive: bool) -> str:
     return selected_model
 
 
-def main(model_path: str | None = None, interactive: bool = False) -> int:
+def main(model_path: str | None = None, *, enable_thinking: bool | None = None) -> int:
     """
     Ejecuta el test de humo para validar que el modelo puede procesar imágenes.
     
     Args:
         model_path (str | None): Ruta al modelo a probar.
-        interactive (bool): Indica si se debe mostrar un menú interactivo.
         
     Returns:
         int: Cantidad de casos de prueba exitosos.
     """
     try:
-        model_tag = resolve_model(model_path, interactive)
+        model_tag = resolve_model(model_path)
         test_cases = ensure_test_images()
-        return run_smoke_test(model_tag, test_cases)
+        return run_smoke_test(model_tag, test_cases, enable_thinking=enable_thinking)
     except Exception as error:
         print(f"\n❌ ERROR CRÍTICO: {error}")
         import traceback
@@ -680,10 +485,5 @@ if __name__ == "__main__":
         default=None,
         help="ID/tag del modelo disponible en LM Studio (compatibilidad con scripts existentes)",
     )
-    parser.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Activa selección interactiva del modelo.",
-    )
     arguments = parser.parse_args()
-    sys.exit(main(model_path=arguments.model_path, interactive=arguments.interactive))
+    sys.exit(main(model_path=arguments.model_path))

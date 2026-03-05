@@ -109,29 +109,6 @@ def get_sys_info(refresh=False):
     return dict(info)
 
 
-def check_lms():
-    """
-    Verifica si la interfaz de línea de comandos de LM Studio ('lms') está instalada.
-    
-    Returns:
-        bool: True si 'lms' está disponible en el PATH, False en caso contrario.
-    """
-    return lms_models.check_lms()
-
-
-def get_lms_server_status():
-    """
-    Obtiene el estado actual del servidor local de LM Studio.
-    
-    Ejecuta el comando `lms server status` para comprobar si el servidor
-    está en ejecución.
-    
-    Returns:
-        str: El estado del servidor (ej. 'running', 'stopped', 'error').
-    """
-    return lms_models.get_server_status()
-
-
 def ensure_lms_server_running():
     """
     Asegura que el servidor de LM Studio esté en ejecución.
@@ -142,7 +119,7 @@ def ensure_lms_server_running():
     """
     global LMS_SERVER_STARTED_BY_THIS_SESSION
 
-    is_running, detail = get_lms_server_status()
+    is_running, detail = lms_models.get_server_status()
 
     if is_running:
         _kit.log("LM Studio server ya estaba activo.", "info")
@@ -156,7 +133,7 @@ def ensure_lms_server_running():
 
     for _ in range(12):
         time.sleep(0.5)
-        running, _ = get_lms_server_status()
+        running, _ = lms_models.get_server_status()
         if running:
             LMS_SERVER_STARTED_BY_THIS_SESSION = True
             _kit.log("LM Studio server iniciado automáticamente para esta sesión.", "success")
@@ -349,7 +326,7 @@ _app = AppContext(
     fix_folders=fix_folders,
     fix_uv=fix_uv,
     fix_libs=fix_libs,
-    check_lms=check_lms,
+    check_lms=lms_models.check_lms,
     restart_program=restart_program,
     get_installed_lms_models=get_installed_lms_models,
     list_test_files=list_test_files,

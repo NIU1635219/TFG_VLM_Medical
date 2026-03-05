@@ -763,7 +763,7 @@ def manage_models_menu_ui(kit: "UIKit", app: "AppContext") -> None:
         print()
 
     while True:
-        local_models = lms_models.list_local_llm_models()
+        local_models = lms_models.list_installed_variants_flat()
         loaded_keys = lms_models.list_loaded_llm_model_keys()
 
         columns = [

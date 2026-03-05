@@ -19,9 +19,9 @@ MODELS_REGISTRY: dict[str, dict] = {
         "name": "https://huggingface.co/openbmb/MiniCPM-V-4_5-gguf",
         "description": "MiniCPM-V 4.5 (8B) - SOTA OpenBMB",
     },
-    "qwen3_vl_8b": {
-        "name": "https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct-GGUF",
-        "description": "Qwen3-VL 8B (SOTA Razonamiento 2026)",
+    "qwen3_5_9b": {
+        "name": "https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF",
+        "description": "Qwen3.5 9B (LM Studio Community · thinking/non-thinking)",
     },
     "internvl3_5_8b": {
         "name": "https://huggingface.co/bartowski/OpenGVLab_InternVL3_5-8B-GGUF",
@@ -30,10 +30,6 @@ MODELS_REGISTRY: dict[str, dict] = {
     "internvl3_5_14b": {
         "name": "https://huggingface.co/bartowski/OpenGVLab_InternVL3_5-14B-GGUF",
         "description": "InternVL 3.5 (14B) - OpenGVLab (GGUF)",
-    },
-    "qwen3_vl_8b_thinking": {
-        "name": "https://huggingface.co/Qwen/Qwen3-VL-8B-Thinking-GGUF",
-        "description": "Qwen3-VL 8B Thinking (GGUF)",
     },
 }
 

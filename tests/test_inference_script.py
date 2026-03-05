@@ -5,6 +5,7 @@ from src.inference.vlm_runner import GenericObjectDetection
 from src.scripts.test_inference import (
     TEST_CASES,
     contains_any_keyword,
+    get_installed_models,
     normalize_text,
     parse_lms_ls_output,
     parse_structured_response,
@@ -105,14 +106,14 @@ def test_parse_structured_response_accepts_typed_payload():
 def test_resolve_model_non_interactive_uses_first_detected(monkeypatch):
     """Prueba que, en modo no interactivo, se seleccione el primer modelo disponible."""
     monkeypatch.setattr("src.scripts.test_inference.get_installed_models", lambda: ["model-a", "model-b"])
-    assert resolve_model(model_arg=None, interactive=False) == "model-a"
+    assert resolve_model(model_arg=None) == "model-a"
 
 
 def test_resolve_model_non_interactive_fails_without_models(monkeypatch):
     """Valida que se lance error si no hay modelos y no se permite interacción."""
     monkeypatch.setattr("src.scripts.test_inference.get_installed_models", lambda: [])
     with pytest.raises(RuntimeError):
-        resolve_model(model_arg=None, interactive=False)
+        resolve_model(model_arg=None)
 
 
 def test_test_cases_has_multiple_images_and_neutral_names():
@@ -141,7 +142,7 @@ def test_run_smoke_test_preloads_once_and_unloads_once(monkeypatch):
         def preload_model(self):
             calls["preload"] += 1
 
-        def inference(self, image_path, prompt):
+        def inference(self, image_path, prompt, *, enable_thinking=None):
             calls["inference"] += 1
             return '{"polyp_detected": false, "confidence_score": 90, "justification": "Se ve un gato"}'
 
@@ -173,7 +174,7 @@ def test_run_smoke_test_unloads_even_if_inference_fails(monkeypatch):
         def preload_model(self):
             calls["preload"] += 1
 
-        def inference(self, image_path, prompt):
+        def inference(self, image_path, prompt, *, enable_thinking=None):
             raise RuntimeError("boom")
 
         def unload_model(self):
@@ -203,7 +204,7 @@ def test_run_smoke_test_executes_model_load_unload_cycle(monkeypatch):
         def preload_model(self):
             self.load_model()
 
-        def inference(self, image_path, prompt):
+        def inference(self, image_path, prompt, *, enable_thinking=None):
             calls["inference"] += 1
             return '{"polyp_detected": false, "confidence_score": 90, "justification": "Se ve un perro"}'
 
@@ -219,3 +220,39 @@ def test_run_smoke_test_executes_model_load_unload_cycle(monkeypatch):
     assert calls["load"] == 1
     assert calls["inference"] == 1
     assert calls["unload"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Tests: get_installed_models (variant-aware listing)
+# ---------------------------------------------------------------------------
+
+def test_get_installed_models_delegates_to_lms_variant_listing(monkeypatch):
+    """get_installed_models devuelve las variantes de _lms_get_installed_models cuando hay resultados."""
+    variant_keys = ["qwen/qwen3.5-9b@q4_k_m", "qwen/qwen3.5-9b@q8_0", "opengvlab_internvl3_5-14b"]
+    monkeypatch.setattr("src.scripts.test_inference._lms_get_installed_models", lambda: variant_keys)
+    result = get_installed_models()
+    assert result == variant_keys
+
+
+def test_get_installed_models_falls_back_when_lms_returns_empty(monkeypatch):
+    """Si _lms_get_installed_models devuelve vacío, se usa el fallback (modelos cargados vía SDK)."""
+    monkeypatch.setattr("src.scripts.test_inference._lms_get_installed_models", lambda: [])
+    monkeypatch.setattr("src.scripts.test_inference._lms_loaded_model_keys", lambda: ["loaded-model"])
+    result = get_installed_models()
+    assert result == ["loaded-model"]
+
+
+def test_resolve_model_uses_variant_key_from_installed(monkeypatch):
+    """resolve_model selecciona el primer modelo con sufijo @variante en modo automático."""
+    monkeypatch.setattr(
+        "src.scripts.test_inference.get_installed_models",
+        lambda: ["opengvlab_internvl3_5-8b@q4_k_m", "opengvlab_internvl3_5-8b@q8_0"],
+    )
+    result = resolve_model(model_arg=None)
+    assert result == "opengvlab_internvl3_5-8b@q4_k_m"
+
+
+def test_resolve_model_passes_through_explicit_variant_arg():
+    """Si se pasa un model_arg con sufijo @variante, se devuelve tal cual sin consultar la lista."""
+    result = resolve_model(model_arg="qwen/qwen3.5-9b@q8_0")
+    assert result == "qwen/qwen3.5-9b@q8_0"

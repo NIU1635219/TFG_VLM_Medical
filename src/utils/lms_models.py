@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -17,16 +18,6 @@ except ImportError:
 # ==========================================================
 # SDK availability / shared normalization helpers
 # ==========================================================
-
-def sdk_available() -> bool:
-    """
-    Indica si el SDK oficial de LM Studio (`lmstudio`) está disponible.
-    
-    Returns:
-        bool: True si el módulo `lmstudio` se importó correctamente.
-    """
-    return lms is not None
-
 
 def _normalize_model_ref(model_ref: str) -> str:
     """
@@ -67,7 +58,7 @@ def _extract_quantization(name: str, fallback: str | None = None) -> str | None:
     text = (name or "").strip()
     if not text:
         return fallback
-    match = re.search(r"(Q\d(?:_K)?(?:_[MSL])?|IQ\d(?:_[MSL])?)", text, re.IGNORECASE)
+    match = re.search(r"(Q\d+(?:_K)?(?:_[MSL01])?|IQ\d+(?:_[MSL]|_XS)?)", text, re.IGNORECASE)
     if not match:
         return fallback
     return match.group(1).upper()
@@ -161,22 +152,6 @@ def get_installed_models() -> list[str]:
         return []
 
 
-def get_loaded_models() -> list[str]:
-    """
-    Obtiene la lista de modelos actualmente cargados en memoria vía `lms ps`.
-    
-    Returns:
-        list[str]: Lista de identificadores de modelos cargados.
-    """
-    if not check_lms():
-        return []
-    try:
-        result = _run_lms_command(["lms", "ps"], check=True)
-        return parse_lms_table_models(result.stdout)
-    except Exception:
-        return []
-
-
 def get_server_status() -> tuple[bool, str]:
     """
     Consulta el estado del servidor LM Studio (`lms server status`).
@@ -245,25 +220,6 @@ def _cli_get_model(model_tag: str) -> bool:
         return False
     try:
         _run_lms_command(["lms", "get", model_tag], check=True)
-        return True
-    except Exception:
-        return False
-
-
-def _cli_load_model(model_tag: str) -> bool:
-    """
-    Carga un modelo usando el CLI (`lms load`) como respaldo.
-    
-    Args:
-        model_tag (str): Tag del modelo a cargar.
-        
-    Returns:
-        bool: True si la carga fue exitosa.
-    """
-    if not check_lms():
-        return False
-    try:
-        _run_lms_command(["lms", "load", model_tag], check=True)
         return True
     except Exception:
         return False
@@ -356,27 +312,6 @@ def list_loaded_llm_model_keys() -> set[str]:
     return loaded_keys
 
 
-def load_model(model_key: str) -> bool:
-    """
-    Carga un modelo en memoria.
-    
-    Prioriza el SDK `lms.llm()`, con fallback al CLI `lms load`.
-    
-    Args:
-        model_key (str): Clave del modelo a cargar.
-        
-    Returns:
-        bool: True si tuvo éxito.
-    """
-    if lms is None:
-        return _cli_load_model(model_key)
-    try:
-        lms.llm(model_key)
-        return True
-    except Exception:
-        return _cli_load_model(model_key)
-
-
 def unload_model(model_key: str) -> bool:
     """
     Descarga un modelo de la memoria.
@@ -416,26 +351,6 @@ def unload_model(model_key: str) -> bool:
         return True
     except Exception:
         return _cli_unload_model(model_key)
-
-
-def preload_model(model_key: str) -> bool:
-    """
-    Realiza un calentamiento (warmup) del modelo cargado mediante una inferencia trivial.
-    
-    Args:
-        model_key (str): Clave del modelo.
-        
-    Returns:
-        bool: True si el modelo respondió correctamente.
-    """
-    if lms is None:
-        return False
-    try:
-        handle = lms.llm(model_key)
-        handle.respond("Warmup mínimo. Responde solo: ok.")
-        return True
-    except Exception:
-        return False
 
 
 # ==========================================================
@@ -685,20 +600,159 @@ def remove_local_model(model_key: str) -> tuple[bool, str]:
         return False, str(error)
 
 
-def get_installed_lms_models() -> list[str]:
-    """Devuelve la lista de modelos LM Studio instalados localmente.
+# ==========================================================
+# lms ls --json / --variants  helpers
+# ==========================================================
 
-    Intenta primero el SDK local (``list_local_llm_models``) y cae al CLI
-    (``get_installed_models``) como fallback.
+def _cli_ls_json() -> list[dict[str, Any]]:
+    """
+    Ejecuta ``lms ls --json`` y devuelve la lista de objetos parseados.
 
     Returns:
-        list[str]: Identificadores de los modelos instalados.
+        list[dict]: Registros del JSON de LM Studio, o lista vacía si falla.
     """
-    local_models = list_local_llm_models()
-    if local_models:
-        return [
-            str(item.get("model_key", "")).strip()
-            for item in local_models
-            if item.get("model_key")
-        ]
+    if not check_lms():
+        return []
+    try:
+        result = _run_lms_command(["lms", "ls", "--json"])
+        if result.returncode != 0:
+            return []
+        return json.loads(result.stdout or "[]")
+    except Exception:
+        return []
+
+
+def list_downloaded_models_with_variants() -> list[dict[str, Any]]:
+    """
+    Devuelve todos los modelos LLM descargados con sus variantes explícitas.
+
+    Usa exclusivamente ``lms ls --json`` como fuente de datos.
+
+    Cada entrada del resultado contiene:
+
+    - ``model_key``       – clave maestra (ej. ``qwen/qwen3.5-9b``)
+    - ``display_name``    – nombre legible
+    - ``architecture``    – arquitectura (ej. ``qwen35``)
+    - ``params``          – tamaño de parámetros (ej. ``9B``)
+    - ``quantization``    – nombre de cuantización (ej. ``Q4_K_M``)
+    - ``size_bytes``      – tamaño en disco
+    - ``vision``          – bool, si el modelo soporta visión
+    - ``variants``        – lista de keys de todas las variantes descargadas
+    - ``selected_variant``– variante activa según LM Studio
+    - ``max_context``     – longitud máxima de contexto en tokens
+
+    Returns:
+        list[dict]: Una entrada por modelo (no por variante).
+    """
+    raw = _cli_ls_json()
+    if not raw:
+        return []
+
+    # Filtramos embeddings; sólo LLMs
+    llm_records = [r for r in raw if isinstance(r, dict) and r.get("type") == "llm"]
+
+    # Agrupamos por model_key para consolidar variantes
+    seen: dict[str, dict[str, Any]] = {}
+    for rec in llm_records:
+        key = str(rec.get("modelKey") or rec.get("model_key") or "").strip()
+        if not key:
+            continue
+
+        # Las variantes ya vienen en el campo ``variants`` si LM Studio las detectó
+        variants: list[str] = rec.get("variants") or []
+        selected: str = str(rec.get("selectedVariant") or rec.get("selected_variant") or key).strip()
+
+        # Si el modelo aún no fue visto, inicializamos su entrada
+        if key not in seen:
+            quant_obj = rec.get("quantization") or {}
+            seen[key] = {
+                "model_key": key,
+                "display_name": str(rec.get("displayName") or rec.get("display_name") or key),
+                "architecture": str(rec.get("architecture") or ""),
+                "params": str(rec.get("paramsString") or rec.get("params") or ""),
+                "quantization": str(quant_obj.get("name") or "") if isinstance(quant_obj, dict) else "",
+                "size_bytes": rec.get("sizeBytes") or rec.get("size_bytes"),
+                "vision": bool(rec.get("vision", False)),
+                "variants": list(variants) if variants else [key],
+                "selected_variant": selected,
+                "max_context": rec.get("maxContextLength") or rec.get("max_context"),
+            }
+        else:
+            # Modelo ya registrado con su grupo de variantes: no sobreescribir
+            entry = seen[key]
+            if variants:
+                # Actualizar la lista de variantes si el registro siguiente la trae más completa
+                all_v = list(dict.fromkeys(entry["variants"] + variants))
+                entry["variants"] = all_v
+
+    return list(seen.values())
+
+
+def list_installed_variants_flat() -> list[dict[str, Any]]:
+    """
+    Devuelve una entrada por variante instalada con cuantización correctamente resuelta.
+
+    Para cada modelo de ``list_downloaded_models_with_variants`` expande el campo
+    ``variants`` en entradas individuales, propagando el campo ``quantization``
+    del JSON (campo `quantization.name`).  Si la variante tiene sufijo ``@q…``
+    se extrae la cuantización del propio key; en caso contrario se usa el valor
+    del JSON.
+
+    Returns:
+        list[dict]: Una entrada por variante con claves ``model_key``,
+        ``display_name``, ``quantization``, ``size_bytes``, ``architecture``,
+        ``vision``.
+    """
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in list_downloaded_models_with_variants():
+        quant_from_json = str(entry.get("quantization") or "")
+        variants = entry.get("variants") or [entry.get("model_key", "")]
+        for variant_key in variants:
+            v = str(variant_key).strip()
+            if not v or v in seen:
+                continue
+            seen.add(v)
+            quant = _extract_quantization(v) or quant_from_json
+            result.append({
+                "model_key": v,
+                "display_name": entry.get("display_name", v),
+                "quantization": quant or "",
+                "size_bytes": entry.get("size_bytes"),
+                "architecture": entry.get("architecture", ""),
+                "vision": entry.get("vision", False),
+            })
+    return result
+
+
+def get_installed_lms_models() -> list[str]:
+    """
+    Devuelve la lista plana de variantes de modelos LLM instaladas en LM Studio.
+
+    Usa ``list_downloaded_models_with_variants()`` para obtener la información
+    completa y luego expande el campo ``variants`` de cada modelo.  Si un
+    modelo no tiene variantes explícitas, se devuelve su ``model_key`` directamente.
+
+    Returns:
+        list[str]: Identificadores de variante (ej. ``qwen/qwen3.5-9b@q4_k_m``,
+            ``opengvlab_internvl3_5-14b``, …).  Sin duplicados, orden estable.
+    """
+    models = list_downloaded_models_with_variants()
+    if models:
+        seen_keys: set[str] = set()
+        result: list[str] = []
+        for entry in models:
+            variants = entry.get("variants") or []
+            if variants:
+                for v in variants:
+                    v_key = str(v).strip()
+                    if v_key and v_key not in seen_keys:
+                        seen_keys.add(v_key)
+                        result.append(v_key)
+            else:
+                k = str(entry.get("model_key") or "").strip()
+                if k and k not in seen_keys:
+                    seen_keys.add(k)
+                    result.append(k)
+        return result
     return get_installed_models()

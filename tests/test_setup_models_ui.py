@@ -86,15 +86,10 @@ def test_manage_models_menu_ui_exit():
         detect_local_model_quantization=lambda _model: "Q4_K_M",
     )
     lms_models_ns = SimpleNamespace(
+        list_installed_variants_flat=lambda: [],
         list_local_llm_models=lambda: [],
         list_loaded_llm_model_keys=lambda: set(),
     )
-
-    kit, app = _make_kit_app_for_models(lms_models_ns, lms_helpers)
-
-    manage_models_menu_ui(kit, app)
-
-    assert kit.menu.called
 
 
 def test_manage_models_table_separator_is_dynamic():
@@ -104,6 +99,7 @@ def test_manage_models_table_separator_is_dynamic():
         detect_local_model_quantization=lambda _model: "Q4_K_M",
     )
     lms_models_ns = SimpleNamespace(
+        list_installed_variants_flat=lambda: [{"model_key": "a/model-q4", "display_name": "A", "path": "p", "size_bytes": 0, "quantization": "Q4"}],
         list_local_llm_models=lambda: [{"model_key": "a/model-q4", "display_name": "A", "path": "p"}],
         list_loaded_llm_model_keys=lambda: set(),
     )

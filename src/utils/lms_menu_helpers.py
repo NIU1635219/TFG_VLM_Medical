@@ -119,38 +119,6 @@ def is_model_installed(model_tag: Any, installed_models: list[Any]) -> bool:
     return contains_equivalent_model(target, installed_normalized)
 
 
-def resolve_model_tag(model_ref: Any, models_registry: dict[str, dict[str, Any]]) -> str:
-    """
-    Resuelve el nombre legible de un modelo desde un registro.
-    
-    Args:
-        model_ref (Any): Clave o referencia del modelo.
-        models_registry (dict): Registro de metadatos de modelos.
-        
-    Returns:
-        str: Nombre del modelo resuelto o la referencia original.
-    """
-    if model_ref in models_registry:
-        return str(models_registry[model_ref].get("name", "")).strip()
-    return str(model_ref or "").strip()
-
-
-def resolve_model_description(model_ref: Any, models_registry: dict[str, dict[str, Any]]) -> str:
-    """
-    Obtiene la descripción de un modelo desde el registro.
-    
-    Args:
-        model_ref (Any): Referencia del modelo.
-        models_registry (dict): Registro de modelos.
-        
-    Returns:
-        str: Descripción del modelo o 'Custom/Detected model' si no está en registro.
-    """
-    if model_ref in models_registry:
-        return str(models_registry[model_ref].get("description", "Registry model"))
-    return "Custom/Detected model"
-
-
 def bytes_to_gb(value_bytes: Any) -> float:
     """
     Convierte un valor de bytes a Gigabytes (GB).
@@ -343,7 +311,7 @@ def extract_quantization_from_text(value: Any) -> str:
     if not text:
         return "unknown"
 
-    match = re.search(r"(Q\d(?:_K)?(?:_[MSL])?|IQ\d(?:_[MSL])?)", text, re.IGNORECASE)
+    match = re.search(r"(Q\d+(?:_K)?(?:_[MSL01])?|IQ\d+(?:_[MSL]|_XS)?)", text, re.IGNORECASE)
     if not match:
         return "unknown"
 
@@ -353,15 +321,22 @@ def extract_quantization_from_text(value: Any) -> str:
 def detect_local_model_quantization(model_entry: dict[str, Any]) -> str:
     """
     Infiere la cuantización de una entrada de modelo local.
-    
-    Busca patrones de cuantización en model_key, display_name y path.
-    
+
+    Comprueba primero el campo ``quantization`` (propagado por
+    ``list_installed_variants_flat`` desde el JSON de LM Studio).
+    Si no está presente, busca patrones de cuantización en model_key,
+    display_name y path.
+
     Args:
         model_entry (dict): Entrada de modelo local.
-        
+
     Returns:
         str: Cuantización detectada o 'unknown'.
     """
+    direct = str(model_entry.get("quantization") or "").strip()
+    if direct:
+        return direct.upper()
+
     candidates = [
         model_entry.get("model_key"),
         model_entry.get("display_name"),

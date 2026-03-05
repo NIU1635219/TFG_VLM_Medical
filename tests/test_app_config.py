@@ -9,7 +9,7 @@ class TestModelsRegistry:
         assert isinstance(MODELS_REGISTRY, dict)
 
     def test_contains_expected_models(self):
-        expected = {"minicpm_v_2_6_8b", "minicpm_v_4_5_8b", "qwen3_vl_8b", "internvl3_5_8b"}
+        expected = {"minicpm_v_2_6_8b", "minicpm_v_4_5_8b", "qwen3_5_9b", "internvl3_5_8b"}
         assert expected.issubset(set(MODELS_REGISTRY.keys()))
 
     def test_each_entry_has_name_and_description(self):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from .menu_kit import AppContext, UIKit
@@ -64,6 +64,56 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             kit.subtitle(subtitle)
         return _hdr
 
+    def _select_thinking_mode(
+        model_tag: str,
+        menu_id: str,
+        subtitle: str,
+    ) -> "bool | None | Literal['BACK']":
+        """Muestra selector de modo thinking si el modelo lo soporta.
+
+        Returns:
+            True  → thinking ON
+            False → thinking OFF
+            None  → Auto (no se especifica al modelo)
+            "BACK" → el usuario quiere volver al paso anterior
+        """
+        from src.inference.vlm_runner import is_thinking_capable
+        if not is_thinking_capable(model_tag):
+            return None
+
+        items = [
+            kit.MenuItem(
+                "Thinking ON  (razonamiento extendido)",
+                description="El modelo razona internamente antes de responder. Más lento pero más preciso.",
+            ),
+            kit.MenuItem(
+                "Thinking OFF  (respuesta directa)",
+                description="El modelo responde sin cadena de razonamiento. Más rápido.",
+            ),
+            kit.MenuItem(
+                "Auto  (configuración por defecto del modelo)",
+                description="No se especifica ningún parámetro; el modelo usa su comportamiento nativo.",
+            ),
+            kit.MenuItem(
+                "← Volver al selector de modelo",
+                lambda: None,
+                description="Cancela y vuelve a elegir modelo.",
+            ),
+        ]
+        sel = kit.menu(
+            items,
+            header_func=_make_header(subtitle),
+            menu_id=menu_id,
+            nav_hint_text="↑/↓ elegir modo · ENTER confirmar · ESC volver al selector de modelo",
+        )
+        if not sel or "Volver" in sel.label:
+            return "BACK"
+        if "ON" in sel.label.upper() and "THINKING" in sel.label.upper() and "OFF" not in sel.label.upper():
+            return True
+        if "OFF" in sel.label.upper():
+            return False
+        return None  # Auto
+
     def _select_model(menu_id: str, subtitle: str) -> str | None:
         """
         Muestra un selector de modelo LM Studio.
@@ -106,7 +156,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
     # Acciones de menú
     # ------------------------------------------------------------------
 
-    def run_smoke_test_in_process(model_tag: str) -> int:
+    def run_smoke_test_in_process(model_tag: str, *, enable_thinking: bool | None = None) -> int:
         """Ejecuta smoke test sin subprocess."""
         try:
             from src.scripts.test_inference import main as smoke_test_main
@@ -114,7 +164,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             kit.log(f"Could not import smoke test script: {error}", "error")
             return 1
         try:
-            return int(smoke_test_main(model_path=model_tag, interactive=False))
+            return int(smoke_test_main(model_path=model_tag, enable_thinking=enable_thinking))
         except Exception as error:
             kit.log(f"Smoke test crashed: {error}", "error")
             return 1
@@ -159,7 +209,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             kit.wait("Finished. Press any key to return to test selector...")
 
     def run_schema_tester_wrapper() -> None:
-        """Schema Tester: modelo → esquema → inferencia sobre 5 imágenes."""
+        """Schema Tester: modelo → thinking → esquema → inferencia sobre 5 imágenes."""
         from src.inference.schemas import SCHEMA_REGISTRY
         from src.scripts.test_schema import (
             find_images,
@@ -169,7 +219,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
         )
 
         while True:
-            # ─ PASO 1: Seleccionar modelo ─────────────────────────────
+            # ─ PASO 1: Seleccionar modelo ─────────────────────
             model_tag = _select_model(
                 menu_id="schema_tester_model_selector",
                 subtitle="SCHEMA TESTER · SELECT MODEL",
@@ -177,7 +227,16 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             if model_tag is None:
                 return
 
-            # ─ PASO 2: Seleccionar esquema ────────────────────────────
+            # ─ PASO 2: Seleccionar modo thinking (si aplica) ────
+            thinking_mode = _select_thinking_mode(
+                model_tag,
+                menu_id="schema_tester_thinking_selector",
+                subtitle="SCHEMA TESTER · SELECT THINKING MODE",
+            )
+            if thinking_mode == "BACK":
+                continue
+
+            # ─ PASO 3: Seleccionar esquema ────────────────────
             schema_items = [
                 kit.MenuItem(name, description=format_schema_menu_description(name, cls))
                 for name, cls in SCHEMA_REGISTRY.items()
@@ -198,7 +257,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             schema_name = schema_sel.label
             schema_cls = SCHEMA_REGISTRY[schema_name]
 
-            # ─ PASO 3: Inferencia automática ──────────────────────────
+            # ─ PASO 4: Inferencia automática ──────────────────────────
             images = find_images()
             if not images:
                 kit.log("No se encontraron imágenes en los directorios del proyecto.", "warning")
@@ -218,7 +277,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                 "step",
             )
             try:
-                ok, fail, invalid = run_batch(model_tag, schema_name, schema_cls, images)
+                ok, fail, invalid = run_batch(model_tag, schema_name, schema_cls, images, enable_thinking=thinking_mode)
                 if fail > 0 or invalid > 0:
                     kit.log(
                         f"Schema Tester completado: {ok} válidas, "
@@ -235,7 +294,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             kit.wait("Press any key to return to model selector...")
 
     def run_smoke_test_wrapper() -> None:
-        """Lanza smoke test con selector de modelo."""
+        """Lanza smoke test con selector de modelo (y thinking si procede)."""
         while True:
             model_tag = _select_model(
                 menu_id="run_smoke_model_selector",
@@ -244,9 +303,17 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             if model_tag is None:
                 return
 
+            thinking_mode = _select_thinking_mode(
+                model_tag,
+                menu_id="run_smoke_thinking_selector",
+                subtitle="SELECT THINKING MODE",
+            )
+            if thinking_mode == "BACK":
+                continue
+
             kit.clear()
             kit.log(f"Launching Inference with {model_tag}...", "step")
-            result_code = run_smoke_test_in_process(model_tag)
+            result_code = run_smoke_test_in_process(model_tag, enable_thinking=thinking_mode)
             if result_code != 0:
                 kit.log("Smoke test failed (Exit Code 1). Check output above.", "error")
             kit.wait("Press any key to return to model selector...")

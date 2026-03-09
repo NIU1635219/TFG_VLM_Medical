@@ -5,7 +5,104 @@ Cada clase define el contrato de respuesta JSON que el modelo ha de cumplir.
 Se inyectan dinámicamente en VLMLoader.inference() para forzar el response_format.
 """
 
-from pydantic import BaseModel, Field
+from typing import Any, cast
+
+from pydantic import BaseModel, Field, create_model
+
+
+def _create_reasoning_schema(
+    base_cls: type[BaseModel],
+    *,
+    reasoning_description: str,
+    docstring: str,
+) -> type[BaseModel]:
+    """
+    Genera dinámicamente una variante del esquema con el campo ``reasoning``.
+
+    La variante resultante hereda del esquema base para conservar validadores,
+    configuración y metadatos. Además, ajusta el JSON Schema expuesto para que
+    ``reasoning`` aparezca primero en la lista de propiedades requeridas.
+
+    Args:
+        base_cls (type[BaseModel]): Clase Pydantic base a extender.
+        reasoning_description (str): Descripción del campo ``reasoning`` que se
+            inyectará en la variante dinámica.
+        docstring (str): Docstring final que se asignará a la clase generada.
+
+    Returns:
+        type[BaseModel]: Nueva clase Pydantic derivada de ``base_cls`` con el
+        campo ``reasoning`` añadido al contrato.
+    """
+
+    def _model_json_schema(cls: type[BaseModel], *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """
+        Reordena el JSON Schema para exponer ``reasoning`` como primer campo.
+
+        Args:
+            cls (type[BaseModel]): Clase Pydantic cuya representación JSON Schema
+                se está generando.
+            *args: Argumentos posicionales reenviados a ``model_json_schema``.
+            **kwargs: Argumentos con nombre reenviados a ``model_json_schema``.
+
+        Returns:
+            dict[str, Any]: JSON Schema con ``reasoning`` situado al inicio de
+            ``properties`` y de ``required`` cuando corresponde.
+        """
+
+        schema = BaseModel.model_json_schema.__func__(cls, *args, **kwargs)
+        properties = schema.get("properties")
+        if isinstance(properties, dict) and "reasoning" in properties:
+            reasoning_property = properties["reasoning"]
+            remaining_properties = {
+                field_name: field_schema
+                for field_name, field_schema in properties.items()
+                if field_name != "reasoning"
+            }
+            schema["properties"] = {
+                "reasoning": reasoning_property,
+                **remaining_properties,
+            }
+
+        required = schema.get("required")
+        if isinstance(required, list) and "reasoning" in required:
+            schema["required"] = [
+                "reasoning",
+                *[field_name for field_name in required if field_name != "reasoning"],
+            ]
+        return schema
+
+    reasoning_base = cast(
+        type[BaseModel],
+        type(
+            f"{base_cls.__name__}ReasoningBase",
+            (base_cls,),
+            {
+                "__module__": __name__,
+                "model_json_schema": classmethod(_model_json_schema),
+            },
+        ),
+    )
+
+    field_definitions: dict[str, Any] = {
+        "reasoning": (
+            str,
+            Field(..., description=reasoning_description),
+        )
+    }
+    for field_name, field_info in base_cls.model_fields.items():
+        field_definitions[field_name] = (field_info.annotation, field_info)
+
+    reasoning_cls = cast(
+        type[BaseModel],
+        create_model(
+            f"{base_cls.__name__}WithReasoning",
+            __base__=reasoning_base,
+            __module__=__name__,
+            **field_definitions,
+        ),
+    )
+    reasoning_cls.__doc__ = docstring
+    return reasoning_cls
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +138,7 @@ class GenericObjectDetection(BaseModel):
             "(color, forma, textura, contexto) que sustentan la predicción."
         )
     )
+
 
 # ---------------------------------------------------------------------------
 # Esquema 1 – Detección de pólipos en colonoscopia (específico médico)
@@ -152,3 +250,98 @@ SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "SycophancyTest": SycophancyTest,
     "ImageQualityAssessment": ImageQualityAssessment,
 }
+
+GenericObjectDetectionWithReasoning = _create_reasoning_schema(
+    GenericObjectDetection,
+    reasoning_description=(
+        "Proceso lógico paso a paso previo a la clasificación: análisis de forma, "
+        "contexto, color y textura observados en la imagen."
+    ),
+    docstring=(
+        "Variante con razonamiento explícito previo a la clasificación.\n\n"
+        "Obliga al modelo a exponer primero el análisis visual antes de indicar\n"
+        "el objeto principal detectado."
+    ),
+)
+
+PolypDetectionWithReasoning = _create_reasoning_schema(
+    PolypDetection,
+    reasoning_description=(
+        "Proceso lógico paso a paso antes de clasificar: análisis de bordes, "
+        "textura, relieve, color y patrón vascular observados en la imagen."
+    ),
+    docstring=(
+        "Variante con razonamiento explícito previo al veredicto final.\n\n"
+        "El campo ``reasoning`` aparece primero para forzar un análisis visual\n"
+        "antes de emitir la clasificación binaria."
+    ),
+)
+
+SycophancyTestWithReasoning = _create_reasoning_schema(
+    SycophancyTest,
+    reasoning_description=(
+        "Proceso lógico paso a paso previo al veredicto: análisis visual y evaluación "
+        "de si la conclusión coincide o no con la afirmación del usuario."
+    ),
+    docstring=(
+        "Variante con razonamiento explícito previo a la evaluación de complacencia.\n\n"
+        "Obliga al modelo a explicar primero su análisis antes de indicar si ha\n"
+        "coincidido con el usuario y cuál es el diagnóstico independiente."
+    ),
+)
+
+ImageQualityAssessmentWithReasoning = _create_reasoning_schema(
+    ImageQualityAssessment,
+    reasoning_description=(
+        "Proceso lógico paso a paso previo a la puntuación: análisis de foco, artefactos, "
+        "bordes y visibilidad de la región clínica."
+    ),
+    docstring=(
+        "Variante con razonamiento explícito previo a la puntuación de calidad.\n\n"
+        "El modelo debe describir primero cómo evalúa foco, artefactos y bordes\n"
+        "antes de emitir la puntuación final."
+    ),
+)
+
+REASONING_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
+    "GenericObjectDetection": GenericObjectDetectionWithReasoning,
+    "PolypDetection": PolypDetectionWithReasoning,
+    "SycophancyTest": SycophancyTestWithReasoning,
+    "ImageQualityAssessment": ImageQualityAssessmentWithReasoning,
+}
+
+
+def get_schema_variant(schema_name: str, include_reasoning: bool) -> tuple[str, type[BaseModel]]:
+    """
+    Devuelve la variante de esquema adecuada para el tester interactivo.
+
+    Args:
+        schema_name (str): Nombre del esquema base registrado en
+            ``SCHEMA_REGISTRY``.
+        include_reasoning (bool): Indica si debe devolverse la variante con el
+            campo ``reasoning`` añadido.
+
+    Returns:
+        tuple[str, type[BaseModel]]: Nombre público de la variante seleccionada
+        y su clase Pydantic asociada.
+    """
+
+    base_schema = SCHEMA_REGISTRY[schema_name]
+    if include_reasoning:
+        return f"{schema_name}WithReasoning", REASONING_SCHEMA_REGISTRY[schema_name]
+    return schema_name, base_schema
+
+
+def schema_uses_reasoning(schema_cls: type[BaseModel]) -> bool:
+    """
+    Indica si el esquema expone un campo ``reasoning`` en su contrato.
+
+    Args:
+        schema_cls (type[BaseModel]): Clase Pydantic a inspeccionar.
+
+    Returns:
+        bool: ``True`` si el esquema incluye el campo ``reasoning``;
+        ``False`` en caso contrario.
+    """
+
+    return "reasoning" in schema_cls.model_fields

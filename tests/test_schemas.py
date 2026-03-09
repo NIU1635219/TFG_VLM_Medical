@@ -1,14 +1,22 @@
 """Tests para src/inference/schemas.py — esquemas Pydantic de inferencia VLM médica."""
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from src.inference.schemas import (
     GenericObjectDetection,
+    GenericObjectDetectionWithReasoning,
     PolypDetection,
+    PolypDetectionWithReasoning,
     SycophancyTest,
+    SycophancyTestWithReasoning,
     ImageQualityAssessment,
+    ImageQualityAssessmentWithReasoning,
+    REASONING_SCHEMA_REGISTRY,
     SCHEMA_REGISTRY,
+    _create_reasoning_schema,
+    get_schema_variant,
+    schema_uses_reasoning,
 )
 
 
@@ -49,20 +57,115 @@ class TestGenericObjectDetection:
 
 class TestPolypDetection:
     def test_valid_polyp_detected_true(self):
-        obj = PolypDetection(polyp_detected=True, confidence_score=90, justification="Se aprecia forma redondeada.")
+        obj = PolypDetection(
+            polyp_detected=True,
+            confidence_score=90,
+            justification="La morfología sobreelevada y la textura focal son compatibles con pólipo.",
+        )
         assert obj.polyp_detected is True
 
     def test_valid_polyp_detected_false(self):
-        obj = PolypDetection(polyp_detected=False, confidence_score=10, justification="Mucosa normal.")
+        obj = PolypDetection(
+            polyp_detected=False,
+            confidence_score=10,
+            justification="No se identifican hallazgos sugestivos de pólipo.",
+        )
         assert obj.polyp_detected is False
 
     def test_confidence_score_range_enforced(self):
         with pytest.raises(ValidationError):
-            PolypDetection(polyp_detected=True, confidence_score=150, justification="bad")
+            PolypDetection(
+                polyp_detected=True,
+                confidence_score=150,
+                justification="bad",
+            )
 
     def test_missing_justification_raises(self):
         with pytest.raises(ValidationError):
-            PolypDetection(polyp_detected=True, confidence_score=80)
+            PolypDetection(
+                polyp_detected=True,
+                confidence_score=80,
+            )
+
+
+class TestReasoningSchemaVariants:
+    def test_reasoning_registry_contains_all_base_schemas(self):
+        expected = {"GenericObjectDetection", "PolypDetection", "SycophancyTest", "ImageQualityAssessment"}
+        assert expected == set(REASONING_SCHEMA_REGISTRY.keys())
+
+    def test_get_schema_variant_returns_base_schema(self):
+        schema_name, schema_cls = get_schema_variant("PolypDetection", include_reasoning=False)
+        assert schema_name == "PolypDetection"
+        assert schema_cls is PolypDetection
+
+    def test_get_schema_variant_returns_reasoning_schema(self):
+        schema_name, schema_cls = get_schema_variant("PolypDetection", include_reasoning=True)
+        assert schema_name == "PolypDetectionWithReasoning"
+        assert schema_cls is PolypDetectionWithReasoning
+
+    def test_schema_uses_reasoning_detects_variants(self):
+        assert schema_uses_reasoning(PolypDetection) is False
+        assert schema_uses_reasoning(PolypDetectionWithReasoning) is True
+
+    def test_reasoning_variant_declares_reasoning_field(self):
+        assert "reasoning" in GenericObjectDetectionWithReasoning.model_fields
+
+    def test_reasoning_variant_json_schema_declares_reasoning_first(self):
+        property_names = list(GenericObjectDetectionWithReasoning.model_json_schema()["properties"].keys())
+        assert property_names[0] == "reasoning"
+
+    def test_reasoning_variant_requires_reasoning(self):
+        with pytest.raises(ValidationError):
+            PolypDetectionWithReasoning(
+                polyp_detected=True,
+                confidence_score=80,
+                justification="Hallazgo compatible.",
+            )
+
+    def test_reasoning_variants_are_pydantic_models(self):
+        for cls in (
+            GenericObjectDetectionWithReasoning,
+            PolypDetectionWithReasoning,
+            SycophancyTestWithReasoning,
+            ImageQualityAssessmentWithReasoning,
+        ):
+            assert issubclass(cls, BaseModel)
+
+    def test_reasoning_variant_preserves_base_field_metadata(self):
+        for schema_name, base_cls in SCHEMA_REGISTRY.items():
+            reasoning_cls = REASONING_SCHEMA_REGISTRY[schema_name]
+            assert set(base_cls.model_fields.keys()).issubset(reasoning_cls.model_fields.keys())
+
+            for field_name, base_field in base_cls.model_fields.items():
+                reasoning_field = reasoning_cls.model_fields[field_name]
+                assert base_field.annotation == reasoning_field.annotation
+                assert base_field.description == reasoning_field.description
+                assert base_field.metadata == reasoning_field.metadata
+
+    def test_reasoning_variant_preserves_validators_and_config(self):
+        class DemoSchema(BaseModel):
+            model_config = ConfigDict(title="DemoSchemaTitle", extra="forbid")
+
+            score: int = Field(ge=1, le=10, description="Synthetic score field.")
+
+            @field_validator("score")
+            @classmethod
+            def reject_value_two(cls, value: int) -> int:
+                if value == 2:
+                    raise ValueError("score 2 is not allowed")
+                return value
+
+        DemoSchemaWithReasoning = _create_reasoning_schema(
+            DemoSchema,
+            reasoning_description="Synthetic reasoning.",
+            docstring="Synthetic schema with reasoning.",
+        )
+
+        assert DemoSchemaWithReasoning.model_config.get("extra") == "forbid"
+        assert DemoSchemaWithReasoning.model_json_schema().get("title") == "DemoSchemaTitle"
+
+        with pytest.raises(ValidationError):
+            DemoSchemaWithReasoning(reasoning="step by step", score=2)
 
 
 # ---------------------------------------------------------------------------

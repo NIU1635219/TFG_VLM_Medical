@@ -5,7 +5,6 @@ import io
 import json
 import mimetypes
 import os
-import re
 from pathlib import Path
 from typing import Any, Protocol, Type, TypeVar, cast
 
@@ -24,26 +23,6 @@ T = TypeVar("T", bound=BaseModel)
 
 # Alias de retro-compatibilidad (usado por tests y scripts heredados)
 VLMStructuredResponse = GenericObjectDetection
-
-# ---------------------------------------------------------------------------
-# Detección de capacidad de thinking
-# ---------------------------------------------------------------------------
-
-_THINKING_CAPABLE_PATTERNS: list[str] = [
-    r"qwen3[\._\-]?5",
-    r"qwq",
-    r"deepseek[\._\-]r\d",
-    r"\bthinking\b",
-    r"marco[\._\-]?o\d",
-    r"sky[\._\-]t1",
-]
-
-
-def is_thinking_capable(model_tag: str) -> bool:
-    """Detecta si un modelo soporta el modo thinking basándose en su identificador."""
-    tag_lower = str(model_tag).lower()
-    return any(re.search(pat, tag_lower) for pat in _THINKING_CAPABLE_PATTERNS)
-
 
 try:
     from PIL import Image
@@ -461,7 +440,6 @@ class VLMLoader:
         payload: Any,
         temperature: float,
         schema: type[BaseModel] | None = None,
-        enable_thinking: bool | None = None,
     ) -> Any:
         """
         Ejecuta la inferencia intentando usar la configuración más estricta posible, con fallback.
@@ -475,16 +453,23 @@ class VLMLoader:
             temperature (float): Temperatura para la generación.
             schema (type[BaseModel] | None): Clase Pydantic a usar como ``response_format``.
                 Si es None se utiliza ``GenericObjectDetection``.
-            enable_thinking (bool | None): Si se especifica, activa o desactiva el modo de
-                razonamiento extendido del modelo (ej. Qwen3.5) pasando
-                ``chatTemplateKwargs: {"enable_thinking": ...}`` en la config de LM Studio.
-                ``None`` omite el parámetro (comportamiento por defecto del modelo).
-
         Returns:
             Any: La respuesta cruda del modelo.
         """
 
         def unsupported_kwarg(error: TypeError, keyword: str) -> bool:
+            """
+            Detecta si un ``TypeError`` proviene de un argumento no soportado.
+
+            Args:
+                error (TypeError): Excepción capturada durante la llamada al SDK.
+                keyword (str): Nombre del argumento que se quiere comprobar.
+
+            Returns:
+                bool: ``True`` si el error indica que ``keyword`` no está
+                soportado por la versión actual del SDK.
+            """
+
             error_text = str(error)
             return "unexpected keyword argument" in error_text and keyword in error_text
 
@@ -492,8 +477,6 @@ class VLMLoader:
         target_schema = schema if schema is not None else GenericObjectDetection
 
         base_config: dict[str, Any] = {"temperature": temperature}
-        if enable_thinking is not None:
-            base_config["chatTemplateKwargs"] = {"enable_thinking": enable_thinking}
 
         kwargs: dict[str, Any] = {
             "response_format": target_schema,
@@ -559,7 +542,20 @@ class VLMLoader:
             self.model_tag = loaded_models[0]
 
         def _try_load(fn: Any) -> Any:
-            """Intenta cargar el modelo con config (contextLength), con fallback sin config."""
+            """
+            Intenta cargar el modelo con configuración explícita y fallback simple.
+
+            Args:
+                fn (Any): Función o callable del SDK capaz de cargar un modelo.
+
+            Returns:
+                Any: Manejador del modelo cargado por LM Studio.
+
+            Raises:
+                Exception: Propaga cualquier error distinto del ``TypeError`` de
+                compatibilidad que activa el fallback sin configuración.
+            """
+
             if load_config:
                 try:
                     return fn(self.model_tag, config=load_config)
@@ -655,7 +651,6 @@ class VLMLoader:
         prompt: str,
         schema: Type[T] = GenericObjectDetection,  # type: ignore[assignment]
         temperature: float = 0.7,
-        enable_thinking: bool | None = None,
     ) -> T:
         """
         Ejecuta una inferencia multimodal (VLM) sobre una imagen con esquema dinámico.
@@ -671,22 +666,12 @@ class VLMLoader:
             # Detección básica
             result: PolypDetection = loader.inference("imagen.jpg", prompt, schema=PolypDetection)
 
-            # Modo thinking (Qwen3.5 y similares)
-            result2 = loader.inference("imagen.jpg", prompt, enable_thinking=True)
-
-            # Modo non-thinking explícito
-            result3 = loader.inference("imagen.jpg", prompt, enable_thinking=False)
-
         Args:
             image_path (str | Path): Ruta al archivo de imagen (local).
             prompt (str): Pregunta o instrucción para el modelo.
             schema (Type[T]): Clase Pydantic que define el contrato de respuesta JSON.
                 Por defecto usa ``GenericObjectDetection`` para compatibilidad hacia atrás.
             temperature (float, optional): Creatividad de la respuesta (0.0 a 2.0). Default 0.7.
-            enable_thinking (bool | None, optional): Activa/desactiva el modo de razonamiento
-                extendido del modelo (``True`` = thinking, ``False`` = non-thinking).
-                ``None`` (por defecto) deja que el modelo use su configuración estándar.
-                Útil para modelos Qwen3.5 y otros que soporten ``chatTemplateKwargs``.
 
         Returns:
             T: Instancia de la clase ``schema`` con los datos validados.
@@ -721,13 +706,6 @@ class VLMLoader:
         self.load_model()
         assert self._loaded_model is not None
 
-        # Guarda el modo thinking: solo se aplica chatTemplateKwargs a modelos que lo soportan.
-        # La guía advierte que usar reasoning/thinking en modelos no compatibles causa errores.
-        if enable_thinking is not None and not is_thinking_capable(self.model_tag):
-            effective_thinking: bool | None = None
-        else:
-            effective_thinking = enable_thinking
-
         # Genera el prompt con instrucciones de salida JSON basadas en el esquema
         structured_text = self._build_structured_instruction(prompt, schema=schema)
 
@@ -742,7 +720,6 @@ class VLMLoader:
                 multimodal_input,
                 temperature_value,
                 schema=schema,
-                enable_thinking=effective_thinking,
             )
         except Exception as image_error:
             try:
@@ -751,7 +728,6 @@ class VLMLoader:
                     structured_text,
                     temperature_value,
                     schema=schema,
-                    enable_thinking=effective_thinking,
                 )
             except Exception as fallback_error:
                 raise RuntimeError(

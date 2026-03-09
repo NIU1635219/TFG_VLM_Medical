@@ -641,3 +641,68 @@ def test_setup_reinstall_ui_empty_selection_list_behaves_like_cancel():
 
     setup_reinstall_ui.reinstall_library_menu(*_make_kit_app(ctx))
     assert calls == {"fix_libs": 0, "fix_uv": 0, "restart": 0, "wait": 0}
+
+
+def test_setup_tests_ui_schema_tester_selects_reasoning_variant(monkeypatch):
+    """El Schema Tester debe elegir el modo reasoning a nivel de schema y no vía thinking nativo."""
+    menu_calls = {"tests": 0, "schema_model": 0, "schema_selector": 0, "schema_mode": 0}
+    run_batch_calls = []
+    waits = {"count": 0}
+
+    def interactive_menu(options, **kwargs):
+        menu_id = kwargs.get("menu_id")
+        if menu_id == "tests_manager_menu":
+            menu_calls["tests"] += 1
+            if menu_calls["tests"] == 1:
+                return next(item for item in options if item.label == " Run Schema Tester (VLM Interactive)")
+            return None
+        if menu_id == "schema_tester_model_selector":
+            menu_calls["schema_model"] += 1
+            if menu_calls["schema_model"] == 1:
+                return next(item for item in options if item.label == "model-a")
+            if menu_calls["schema_model"] == 2:
+                return next(item for item in options if item.label == "Cancel")
+            raise AssertionError("schema_tester_model_selector llamado más veces de lo esperado")
+        if menu_id == "schema_tester_schema_selector":
+            menu_calls["schema_selector"] += 1
+            if menu_calls["schema_selector"] > 1:
+                raise AssertionError("schema_tester_schema_selector llamado más veces de lo esperado")
+            return next(item for item in options if item.label == "PolypDetection")
+        if menu_id == "schema_tester_reasoning_selector":
+            menu_calls["schema_mode"] += 1
+            if menu_calls["schema_mode"] > 1:
+                raise AssertionError("schema_tester_reasoning_selector llamado más veces de lo esperado")
+            return next(item for item in options if item.label == "Con razonamiento")
+        raise AssertionError(f"Unexpected menu_id: {menu_id}")
+
+    import src.scripts.test_schema as schema_script
+    monkeypatch.setattr(schema_script, "find_images", lambda: ["a.jpg"])
+    monkeypatch.setattr(schema_script, "format_schema_info", lambda *args, **kwargs: "Schema info")
+    monkeypatch.setattr(
+        schema_script,
+        "run_batch",
+        lambda model_tag, schema_name, schema_cls, images: run_batch_calls.append(
+            (model_tag, schema_name, schema_cls.__name__, list(images))
+        ) or (1, 0, 0),
+    )
+
+    ctx = {
+        "Style": _DummyStyle,
+        "MenuItem": _MenuItem,
+        "print_banner": lambda: None,
+        "log": lambda *args, **kwargs: None,
+        "run_cmd": lambda *_: None,
+        "wait_for_any_key": lambda *args, **kwargs: waits.__setitem__("count", waits["count"] + 1),
+        "interactive_menu": interactive_menu,
+        "list_test_files": lambda: [],
+        "get_installed_lms_models": lambda: ["model-a"],
+        "clear_screen_ansi": lambda: None,
+        "manage_models_menu_ui": lambda: None,
+        "time": SimpleNamespace(sleep=lambda *_: None),
+    }
+
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
+
+    assert run_batch_calls == [("model-a", "PolypDetectionWithReasoning", "PolypDetectionWithReasoning", ["a.jpg"])]
+    assert menu_calls["schema_mode"] == 1
+    assert waits["count"] == 1

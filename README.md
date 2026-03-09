@@ -212,9 +212,32 @@ Controles de teclado:
     - subida como `prepare_image(...)`
     - fallback a `data URL` base64 si aplica
 - Respuesta estructurada con `VLMStructuredResponse`:
+    - `object_detected: str`
     - `polyp_detected: bool`
     - `confidence_score: int`
     - `justification: str`
+
+El Schema Tester ofrece ahora dos variantes por esquema: base y con razonamiento.
+La variante con razonamiento añade el campo `reasoning` como primer elemento del
+JSON para forzar el análisis previo al veredicto, sin depender del thinking nativo
+del modelo, que no es compatible con la salida estructurada.
+
+Esta variante no se implementa duplicando manualmente cada clase Pydantic. En
+`src/inference/schemas.py` cada esquema base se define una sola vez y la versión
+con razonamiento se genera dinámicamente con `pydantic.create_model(...)`. El
+helper interno `_create_reasoning_schema(...)` reutiliza los campos del esquema
+base, inserta `reasoning` como primer campo y conserva el resto de restricciones,
+tipos y descripciones. De este modo:
+
+- el contrato base sigue siendo simple y reutilizable;
+- el modo con razonamiento mantiene `reasoning` en primera posición del JSON;
+- no hay duplicación de campos entre `Schema` y `SchemaWithReasoning`;
+- el selector del Schema Tester solo decide qué variante pedir al modelo.
+
+La resolución de la variante activa se centraliza en `get_schema_variant(...)`,
+que devuelve el esquema base o su versión `WithReasoning` según la opción elegida
+en el menú. Esto permite que la inferencia estructurada siga usando exactamente el
+mismo flujo en `VLMLoader`, cambiando únicamente el `response_format` solicitado.
 
 ### Ejemplo rápido de uso
 

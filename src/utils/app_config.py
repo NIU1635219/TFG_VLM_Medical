@@ -11,10 +11,6 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 
 MODELS_REGISTRY: dict[str, dict] = {
-    "minicpm_v_2_6_8b": {
-        "name": "https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf",
-        "description": "MiniCPM-V 2.6 (8B) - Versión Estable Compatible",
-    },
     "minicpm_v_4_5_8b": {
         "name": "https://huggingface.co/openbmb/MiniCPM-V-4_5-gguf",
         "description": "MiniCPM-V 4.5 (8B) - SOTA OpenBMB",

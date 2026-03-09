@@ -142,7 +142,7 @@ def test_run_smoke_test_preloads_once_and_unloads_once(monkeypatch):
         def preload_model(self):
             calls["preload"] += 1
 
-        def inference(self, image_path, prompt, *, enable_thinking=None):
+        def inference(self, image_path, prompt):
             calls["inference"] += 1
             return '{"polyp_detected": false, "confidence_score": 90, "justification": "Se ve un gato"}'
 
@@ -174,7 +174,7 @@ def test_run_smoke_test_unloads_even_if_inference_fails(monkeypatch):
         def preload_model(self):
             calls["preload"] += 1
 
-        def inference(self, image_path, prompt, *, enable_thinking=None):
+        def inference(self, image_path, prompt):
             raise RuntimeError("boom")
 
         def unload_model(self):
@@ -204,7 +204,7 @@ def test_run_smoke_test_executes_model_load_unload_cycle(monkeypatch):
         def preload_model(self):
             self.load_model()
 
-        def inference(self, image_path, prompt, *, enable_thinking=None):
+        def inference(self, image_path, prompt):
             calls["inference"] += 1
             return '{"polyp_detected": false, "confidence_score": 90, "justification": "Se ve un perro"}'
 

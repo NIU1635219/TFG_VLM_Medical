@@ -367,7 +367,7 @@ def validate_response(label: str, response_payload: str | Dict[str, object] | Ge
     )
 
 
-def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]], *, enable_thinking: bool | None = None) -> int:
+def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
     """
     Ejecuta un test de humo para validar que el modelo puede procesar imágenes.
     
@@ -380,10 +380,6 @@ def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]], *, enable_t
     """
     print("\n=== TAREA 4: SMOKE TEST VLM (LM STUDIO) ===")
     print(f"👉 Modelo objetivo: {model_tag}")
-    if enable_thinking is True:
-        print("💡 Modo thinking: ON  (razonamiento extendido)")
-    elif enable_thinking is False:
-        print("💡 Modo thinking: OFF (respuesta directa)")
 
     print("\n1. Inicializando VLMLoader...")
     loader = VLMLoader(model_path=model_tag, verbose=True)
@@ -404,7 +400,7 @@ def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]], *, enable_t
 
             print(f"\n--- Caso: {case_id.upper()} ({label.upper()}) ---")
             print(f"Imagen: {image_path}")
-            response = loader.inference(image_path, PROMPT, enable_thinking=enable_thinking)
+            response = loader.inference(image_path, PROMPT)
             print("Respuesta estructurada del modelo:")
             if isinstance(response, GenericObjectDetection):
                 print(response.model_dump_json(indent=2, ensure_ascii=False))
@@ -455,7 +451,7 @@ def resolve_model(model_arg: str | None) -> str:
     return selected_model
 
 
-def main(model_path: str | None = None, *, enable_thinking: bool | None = None) -> int:
+def main(model_path: str | None = None) -> int:
     """
     Ejecuta el test de humo para validar que el modelo puede procesar imágenes.
     
@@ -468,7 +464,7 @@ def main(model_path: str | None = None, *, enable_thinking: bool | None = None) 
     try:
         model_tag = resolve_model(model_path)
         test_cases = ensure_test_images()
-        return run_smoke_test(model_tag, test_cases, enable_thinking=enable_thinking)
+        return run_smoke_test(model_tag, test_cases)
     except Exception as error:
         print(f"\n❌ ERROR CRÍTICO: {error}")
         import traceback

@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, mock_open, patch
-from src.inference.vlm_runner import VLMLoader, GenericObjectDetection, is_thinking_capable
+from src.inference.vlm_runner import VLMLoader, GenericObjectDetection
 
 # Constants
 FAKE_MODEL_TAG = "fake-model:latest"
@@ -64,19 +64,6 @@ def test_load_model_passes_custom_context_window(mock_lms_sdk):
     loader.load_model(n_ctx=16384)
     call_args = mock_lms.Client.return_value.llm.model.call_args
     assert call_args.kwargs.get("config", {}).get("contextLength") == 16384
-
-
-def test_is_thinking_capable_detects_model_patterns():
-    """Verifica que is_thinking_capable detecta los patrones conocidos correctamente."""
-    assert is_thinking_capable("qwen3.5-9b@q8_0")
-    assert is_thinking_capable("lmstudio-community/Qwen3.5-9B-GGUF")
-    assert is_thinking_capable("qwq-32b@q4_k_m")
-    assert is_thinking_capable("deepseek-r1-8b")
-    assert is_thinking_capable("my-thinking-model")
-    assert not is_thinking_capable("qwen2.5-7b")
-    assert not is_thinking_capable("model-a")
-    assert not is_thinking_capable("llama-3.2-vision")
-    assert not is_thinking_capable("minicpm-v-2.6")
 
 
 def test_load_model_raises_if_sdk_fails(loader, mock_lms_sdk):
@@ -222,47 +209,16 @@ def test_inference_raises_when_json_is_invalid(loader, mock_lms_sdk):
             loader.inference(FAKE_IMAGE_PATH, "Prompt")
 
 
-def test_inference_enables_thinking_for_capable_model(mock_lms_sdk):
-    """Verifica que chatTemplateKwargs se pase cuando el modelo soporta thinking."""
-    _mock_lms, mock_model = mock_lms_sdk
-    mock_model.respond.return_value = '{"object_detected": "polyp", "confidence_score": 90, "justification": "Detectado."}'
-
-    thinking_loader = VLMLoader(model_path="lmstudio-community/Qwen3.5-9B-GGUF")
-    thinking_loader._loaded_model = mock_model
-
-    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
-        thinking_loader.inference(FAKE_IMAGE_PATH, "Prompt", enable_thinking=True)
-
-    call_config = mock_model.respond.call_args_list[0].kwargs.get("config", {})
-    assert call_config.get("chatTemplateKwargs") == {"enable_thinking": True}
-
-
-def test_inference_skips_thinking_for_non_capable_model(mock_lms_sdk):
-    """Verifica que chatTemplateKwargs NO se pase a un modelo que no soporta thinking,
-    aunque el caller solicite enable_thinking=True (comportamiento seguro según la guía)."""
-    _mock_lms, mock_model = mock_lms_sdk
-    mock_model.respond.return_value = '{"object_detected": "polyp", "confidence_score": 85, "justification": "Detectado."}'
-
-    non_thinking_loader = VLMLoader(model_path="llava-v1.6-mistral-7b")
-    non_thinking_loader._loaded_model = mock_model
-
-    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
-        non_thinking_loader.inference(FAKE_IMAGE_PATH, "Prompt", enable_thinking=True)
-
-    call_config = mock_model.respond.call_args_list[0].kwargs.get("config", {})
-    assert "chatTemplateKwargs" not in call_config
-
-
-def test_inference_disables_thinking_for_capable_model(mock_lms_sdk):
-    """Verifica que enable_thinking=False pasa chatTemplateKwargs con False para modelos thinking."""
+def test_inference_does_not_send_native_thinking_config(mock_lms_sdk):
+    """La inferencia estructurada no debe activar chatTemplateKwargs de thinking nativo."""
     _mock_lms, mock_model = mock_lms_sdk
     mock_model.respond.return_value = '{"object_detected": "polyp", "confidence_score": 88, "justification": "Detectado."}'
 
-    thinking_loader = VLMLoader(model_path="qwq-32b@q4_k_m")
-    thinking_loader._loaded_model = mock_model
+    loader = VLMLoader(model_path="any-model")
+    loader._loaded_model = mock_model
 
     with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
-        thinking_loader.inference(FAKE_IMAGE_PATH, "Prompt", enable_thinking=False)
+        loader.inference(FAKE_IMAGE_PATH, "Prompt")
 
     call_config = mock_model.respond.call_args_list[0].kwargs.get("config", {})
-    assert call_config.get("chatTemplateKwargs") == {"enable_thinking": False}
+    assert "chatTemplateKwargs" not in call_config

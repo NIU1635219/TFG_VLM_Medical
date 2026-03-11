@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from src.inference.schemas import (
     GenericObjectDetection,
     GenericObjectDetectionWithReasoning,
+    PolypClassification,
+    PolypClassificationWithReasoning,
     PolypDetection,
     PolypDetectionWithReasoning,
     SycophancyTest,
@@ -88,9 +90,40 @@ class TestPolypDetection:
             )
 
 
+class TestPolypClassification:
+    def test_valid_histology_class(self):
+        obj = PolypClassification(
+            predicted_class="AD",
+            confidence_score=87,
+            justification="Patrón compatible con adenoma.",
+        )
+        assert obj.predicted_class == "AD"
+
+    def test_rejects_invalid_histology_class(self):
+        with pytest.raises(ValidationError):
+            PolypClassification(
+                predicted_class="INVALID",
+                confidence_score=70,
+                justification="bad",
+            )
+
+    def test_missing_justification_raises(self):
+        with pytest.raises(ValidationError):
+            PolypClassification(
+                predicted_class="HP",
+                confidence_score=64,
+            )
+
+
 class TestReasoningSchemaVariants:
     def test_reasoning_registry_contains_all_base_schemas(self):
-        expected = {"GenericObjectDetection", "PolypDetection", "SycophancyTest", "ImageQualityAssessment"}
+        expected = {
+            "GenericObjectDetection",
+            "PolypDetection",
+            "PolypClassification",
+            "SycophancyTest",
+            "ImageQualityAssessment",
+        }
         assert expected == set(REASONING_SCHEMA_REGISTRY.keys())
 
     def test_get_schema_variant_returns_base_schema(self):
@@ -126,6 +159,7 @@ class TestReasoningSchemaVariants:
         for cls in (
             GenericObjectDetectionWithReasoning,
             PolypDetectionWithReasoning,
+            PolypClassificationWithReasoning,
             SycophancyTestWithReasoning,
             ImageQualityAssessmentWithReasoning,
         ):
@@ -239,7 +273,13 @@ class TestSchemaRegistry:
         assert isinstance(SCHEMA_REGISTRY, dict)
 
     def test_contains_all_schemas(self):
-        expected = {"GenericObjectDetection", "PolypDetection", "SycophancyTest", "ImageQualityAssessment"}
+        expected = {
+            "GenericObjectDetection",
+            "PolypDetection",
+            "PolypClassification",
+            "SycophancyTest",
+            "ImageQualityAssessment",
+        }
         assert expected == set(SCHEMA_REGISTRY.keys())
 
     def test_values_are_pydantic_models(self):
@@ -250,5 +290,6 @@ class TestSchemaRegistry:
     def test_registry_classes_match_imported(self):
         assert SCHEMA_REGISTRY["GenericObjectDetection"] is GenericObjectDetection
         assert SCHEMA_REGISTRY["PolypDetection"] is PolypDetection
+        assert SCHEMA_REGISTRY["PolypClassification"] is PolypClassification
         assert SCHEMA_REGISTRY["SycophancyTest"] is SycophancyTest
         assert SCHEMA_REGISTRY["ImageQualityAssessment"] is ImageQualityAssessment

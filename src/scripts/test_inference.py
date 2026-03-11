@@ -92,8 +92,8 @@ TEST_CASES = [
 ]
 
 KEYWORDS_BY_LABEL = {
-    "cat": ["gato", "gata", "gatito", "gatita", "cat", "kitty", "feline", "felino"],
-    "dog": ["perro", "perra", "perrito", "perrita", "dog", "canine", "canino", "cachorro"],
+    "cat": ["gato", "gata", "gatito", "gatita", "cat", "kitty", "feline", "felino", "felis"],
+    "dog": ["perro", "perra", "perrito", "perrita", "dog", "canine", "canino", "cachorro", "canis"],
     "none": [],
 }
 

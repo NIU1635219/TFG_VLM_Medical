@@ -2,6 +2,11 @@ import pytest
 from unittest.mock import MagicMock, mock_open, patch
 from src.inference.vlm_runner import VLMLoader, GenericObjectDetection
 
+try:
+    from PIL import Image as PILImage
+except ImportError:
+    PILImage = None
+
 # Constants
 FAKE_MODEL_TAG = "fake-model:latest"
 FAKE_IMAGE_PATH = "data/raw/fake_image.jpg"
@@ -73,6 +78,17 @@ def test_load_model_raises_if_sdk_fails(loader, mock_lms_sdk):
     mock_lms.llm.side_effect = RuntimeError("boom")
     mock_lms.llm.load.side_effect = RuntimeError("boom-fallback")
     with pytest.raises(RuntimeError):
+        loader.load_model()
+
+
+def test_load_model_reports_server_unavailable(loader, mock_lms_sdk):
+    """Expone un mensaje claro si LM Studio no está accesible."""
+    mock_lms, _mock_model = mock_lms_sdk
+    mock_lms.Client.side_effect = ConnectionError("[WinError 10061] No connection could be made")
+    mock_lms.llm.side_effect = ConnectionError("connection refused")
+    mock_lms.llm.load.side_effect = ConnectionError("connection refused")
+
+    with pytest.raises(RuntimeError, match="LM Studio no está accesible"):
         loader.load_model()
 
 
@@ -222,3 +238,21 @@ def test_inference_does_not_send_native_thinking_config(mock_lms_sdk):
 
     call_config = mock_model.respond.call_args_list[0].kwargs.get("config", {})
     assert "chatTemplateKwargs" not in call_config
+
+
+@pytest.mark.skipif(PILImage is None, reason="Pillow no está disponible")
+def test_prepare_image_source_for_lms_preserves_high_resolution_until_1_8mp(tmp_path):
+    """Redimensiona por píxeles máximos, manteniendo relación de aspecto útil."""
+    image_path = tmp_path / "large_input.jpg"
+    source_image = PILImage.new("RGB", (3000, 1000), color="white")
+    source_image.save(image_path)
+
+    loader = VLMLoader(model_path=FAKE_MODEL_TAG)
+    prepared = loader._prepare_image_source_for_lms(str(image_path))
+
+    prepared_image = PILImage.open(prepared)
+    width, height = prepared_image.size
+
+    assert width * height <= 1_800_000
+    assert width > height
+    assert width > 2000

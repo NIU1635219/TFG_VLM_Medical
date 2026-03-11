@@ -5,7 +5,7 @@ Cada clase define el contrato de respuesta JSON que el modelo ha de cumplir.
 Se inyectan dinámicamente en VLMLoader.inference() para forzar el response_format.
 """
 
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, create_model
 
@@ -171,6 +171,38 @@ class PolypDetection(BaseModel):
     )
 
 
+class PolypClassification(BaseModel):
+    """
+    Esquema de clasificación histológica estricta para el experimento zero-shot.
+
+    Obliga al modelo a emitir una clase cerrada entre adenoma, hiperplásico,
+    ASS o desconocido, junto con una confianza porcentual y una justificación
+    clínica breve basada en los rasgos visuales observados.
+    """
+
+    predicted_class: Literal["AD", "HP", "ASS", "UNKNOWN"] = Field(
+        description=(
+            "Clase histológica predicha en zero-shot: AD (adenoma), HP "
+            "(hiperplásico), ASS (adenoma serrado sésil) o UNKNOWN si la imagen "
+            "no permite una decisión fiable."
+        )
+    )
+    confidence_score: int = Field(
+        ge=0,
+        le=100,
+        description=(
+            "Puntuación de confianza en la clasificación expresada como porcentaje "
+            "(0-100). 0 = ninguna certeza, 100 = certeza absoluta."
+        ),
+    )
+    justification: str = Field(
+        description=(
+            "Justificación clínica breve: patrón de superficie, vascularización, "
+            "relieve, color y demás rasgos endoscópicos que sustentan la clase predicha."
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Esquema 2 – Test de complacencia (sycophancy test)
 # ---------------------------------------------------------------------------
@@ -247,6 +279,7 @@ class ImageQualityAssessment(BaseModel):
 SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "GenericObjectDetection": GenericObjectDetection,
     "PolypDetection": PolypDetection,
+    "PolypClassification": PolypClassification,
     "SycophancyTest": SycophancyTest,
     "ImageQualityAssessment": ImageQualityAssessment,
 }
@@ -274,6 +307,19 @@ PolypDetectionWithReasoning = _create_reasoning_schema(
         "Variante con razonamiento explícito previo al veredicto final.\n\n"
         "El campo ``reasoning`` aparece primero para forzar un análisis visual\n"
         "antes de emitir la clasificación binaria."
+    ),
+)
+
+PolypClassificationWithReasoning = _create_reasoning_schema(
+    PolypClassification,
+    reasoning_description=(
+        "Proceso lógico paso a paso antes de clasificar: análisis de patrón glandular, "
+        "borde, textura, color, vascularización y demás rasgos endoscópicos."
+    ),
+    docstring=(
+        "Variante con razonamiento explícito previo a la clasificación histológica.\n\n"
+        "El campo ``reasoning`` aparece primero para forzar el análisis visual\n"
+        "antes de elegir entre AD, HP, ASS o UNKNOWN."
     ),
 )
 
@@ -306,6 +352,7 @@ ImageQualityAssessmentWithReasoning = _create_reasoning_schema(
 REASONING_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "GenericObjectDetection": GenericObjectDetectionWithReasoning,
     "PolypDetection": PolypDetectionWithReasoning,
+    "PolypClassification": PolypClassificationWithReasoning,
     "SycophancyTest": SycophancyTestWithReasoning,
     "ImageQualityAssessment": ImageQualityAssessmentWithReasoning,
 }

@@ -706,3 +706,323 @@ def test_setup_tests_ui_schema_tester_selects_reasoning_variant(monkeypatch):
     assert run_batch_calls == [("model-a", "PolypDetectionWithReasoning", "PolypDetectionWithReasoning", ["a.jpg"])]
     assert menu_calls["schema_mode"] == 1
     assert waits["count"] == 1
+
+
+def test_setup_tests_ui_telemetry_probe_runs_with_selected_schema(monkeypatch):
+    menu_calls = {"tests": 0, "model": 0, "schema": 0, "mode": 0}
+    telemetry_calls = []
+    waits = {"count": 0}
+
+    def interactive_menu(options, **kwargs):
+        menu_id = kwargs.get("menu_id")
+        if menu_id == "tests_manager_menu":
+            menu_calls["tests"] += 1
+            if menu_calls["tests"] == 1:
+                return next(item for item in options if item.label == " Run Telemetry Probe (TTFT/TPS)")
+            return None
+        if menu_id == "telemetry_probe_model_selector":
+            menu_calls["model"] += 1
+            if menu_calls["model"] == 1:
+                return next(item for item in options if item.label == "model-a")
+            return next(item for item in options if item.label == "Cancel")
+        if menu_id == "telemetry_probe_schema_selector":
+            menu_calls["schema"] += 1
+            return next(item for item in options if item.label == "PolypDetection")
+        if menu_id == "telemetry_probe_reasoning_selector":
+            menu_calls["mode"] += 1
+            return next(item for item in options if item.label == "Sin razonamiento")
+        raise AssertionError(f"Unexpected menu_id: {menu_id}")
+
+    import src.scripts.test_schema as schema_script
+    import src.scripts.test_telemetry as telemetry_script
+
+    monkeypatch.setattr(schema_script, "find_images", lambda: ["a.jpg", "b.jpg"])
+    monkeypatch.setattr(
+        telemetry_script,
+        "run_telemetry_batch",
+        lambda **kwargs: telemetry_calls.append(kwargs) or {
+            "model_id": kwargs["model_id"],
+            "schema_name": kwargs["schema_name"],
+            "sample_size": 2,
+            "ok": 2,
+            "fail": 0,
+            "records": [],
+            "ttft": {"avg": 0.4, "min": 0.3, "max": 0.5},
+            "prompt_tokens_per_second": {"avg": 120.0, "min": 110.0, "max": 130.0},
+            "tps": {"avg": 20.0, "min": 19.0, "max": 21.0},
+            "generation_duration": {"avg": 0.8, "min": 0.7, "max": 0.9},
+            "reasoning_tokens": {"avg": 12.0, "min": 10.0, "max": 14.0},
+            "vram_usage_mb": {"avg": 512.0, "min": 500.0, "max": 524.0},
+            "gpu_layers": {"avg": 28.0, "min": 28.0, "max": 28.0},
+            "prompt_tokens": {"avg": 110.0, "min": 100.0, "max": 120.0},
+            "completion_tokens": {"avg": 45.0, "min": 40.0, "max": 50.0},
+            "total_tokens": {"avg": 155.0, "min": 140.0, "max": 170.0},
+            "total_duration": {"avg": 1.1, "min": 1.0, "max": 1.2},
+            "static_model_info": {
+                "resolved_model_id": "model-a",
+                "architecture": "qwen3_vl",
+                "quantization": "Q8_0",
+                "total_params": 9000000000,
+                "stop_reason": "eos",
+            },
+            "prompt": "demo",
+            "telemetry_availability": {},
+            "notes": {"ttft": None, "tps": None, "resources": None},
+        },
+    )
+
+    ctx = {
+        "Style": _DummyStyle,
+        "MenuItem": _MenuItem,
+        "print_banner": lambda: None,
+        "log": lambda *args, **kwargs: None,
+        "run_cmd": lambda *_: None,
+        "wait_for_any_key": lambda *args, **kwargs: waits.__setitem__("count", waits["count"] + 1),
+        "interactive_menu": interactive_menu,
+        "list_test_files": lambda: [],
+        "get_installed_lms_models": lambda: ["model-a"],
+        "clear_screen_ansi": lambda: None,
+        "manage_models_menu_ui": lambda: None,
+        "time": SimpleNamespace(sleep=lambda *_: None),
+    }
+
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
+
+    assert telemetry_calls[0]["model_id"] == "model-a"
+    assert telemetry_calls[0]["schema_name"] == "PolypDetection"
+    assert waits["count"] == 1
+
+
+def test_setup_tests_ui_telemetry_probe_warns_when_tps_is_unavailable(monkeypatch):
+    menu_calls = {"tests": 0, "model": 0, "schema": 0, "mode": 0}
+    warnings = []
+
+    def interactive_menu(options, **kwargs):
+        menu_id = kwargs.get("menu_id")
+        if menu_id == "tests_manager_menu":
+            menu_calls["tests"] += 1
+            if menu_calls["tests"] == 1:
+                return next(item for item in options if item.label == " Run Telemetry Probe (TTFT/TPS)")
+            return None
+        if menu_id == "telemetry_probe_model_selector":
+            menu_calls["model"] += 1
+            if menu_calls["model"] == 1:
+                return next(item for item in options if item.label == "model-a")
+            return next(item for item in options if item.label == "Cancel")
+        if menu_id == "telemetry_probe_schema_selector":
+            menu_calls["schema"] += 1
+            return next(item for item in options if item.label == "PolypDetection")
+        if menu_id == "telemetry_probe_reasoning_selector":
+            menu_calls["mode"] += 1
+            return next(item for item in options if item.label == "Sin razonamiento")
+        raise AssertionError(f"Unexpected menu_id: {menu_id}")
+
+    import src.scripts.test_schema as schema_script
+    import src.scripts.test_telemetry as telemetry_script
+
+    monkeypatch.setattr(schema_script, "find_images", lambda: ["a.jpg"])
+    monkeypatch.setattr(
+        telemetry_script,
+        "run_telemetry_batch",
+        lambda **kwargs: {
+            "model_id": kwargs["model_id"],
+            "schema_name": kwargs["schema_name"],
+            "sample_size": 1,
+            "ok": 1,
+            "fail": 0,
+            "records": [
+                {
+                    "image_path": "a.jpg",
+                    "status": "ok",
+                    "ttft_seconds": 0.4,
+                    "prompt_tokens_per_second": 120.0,
+                    "tokens_per_second": None,
+                    "generation_duration_seconds": 0.7,
+                    "prompt_tokens": 100,
+                    "completion_tokens": 40,
+                    "reasoning_tokens": 11,
+                    "stop_reason": "eos",
+                    "vram_usage_mb": 256.0,
+                    "gpu_layers": 24,
+                    "total_duration_seconds": 1.1,
+                }
+            ],
+            "ttft": {"avg": 0.4, "min": 0.4, "max": 0.4},
+            "prompt_tokens_per_second": {"avg": 120.0, "min": 120.0, "max": 120.0},
+            "tps": {"avg": None, "min": None, "max": None},
+            "generation_duration": {"avg": 0.7, "min": 0.7, "max": 0.7},
+            "reasoning_tokens": {"avg": 11.0, "min": 11.0, "max": 11.0},
+            "vram_usage_mb": {"avg": 256.0, "min": 256.0, "max": 256.0},
+            "gpu_layers": {"avg": 24.0, "min": 24.0, "max": 24.0},
+            "prompt_tokens": {"avg": 100.0, "min": 100.0, "max": 100.0},
+            "completion_tokens": {"avg": 40.0, "min": 40.0, "max": 40.0},
+            "total_tokens": {"avg": 140.0, "min": 140.0, "max": 140.0},
+            "total_duration": {"avg": 1.1, "min": 1.1, "max": 1.1},
+            "static_model_info": {
+                "resolved_model_id": "model-a",
+                "architecture": None,
+                "quantization": None,
+                "total_params": None,
+                "stop_reason": "eos",
+            },
+            "telemetry_availability": {"ttft_records": 1, "tps_records": 0, "total_duration_records": 1, "ok_records": 1},
+            "notes": {"ttft": None, "tps": "LM Studio no devolvio predicted_tokens_per_sec en response.stats; TPS no disponible en esta ejecucion.", "resources": None},
+            "prompt": "demo",
+        },
+    )
+
+    def log(msg, level="info"):
+        if level == "warning":
+            warnings.append(msg)
+
+    ctx = {
+        "Style": _DummyStyle,
+        "MenuItem": _MenuItem,
+        "print_banner": lambda: None,
+        "log": log,
+        "run_cmd": lambda *_: None,
+        "wait_for_any_key": lambda *args, **kwargs: None,
+        "interactive_menu": interactive_menu,
+        "list_test_files": lambda: [],
+        "get_installed_lms_models": lambda: ["model-a"],
+        "clear_screen_ansi": lambda: None,
+        "manage_models_menu_ui": lambda: None,
+        "time": SimpleNamespace(sleep=lambda *_: None),
+    }
+
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
+
+    assert any("TPS no disponible" in msg for msg in warnings)
+
+
+def test_setup_tests_ui_batch_runner_exports_results(monkeypatch):
+    menu_calls = {"tests": 0, "model": 0, "schema": 0, "mode": 0, "format": 0, "size": 0}
+    batch_calls = []
+    waits = {"count": 0}
+    logs = []
+
+    def interactive_menu(options, **kwargs):
+        menu_id = kwargs.get("menu_id")
+        if menu_id == "tests_manager_menu":
+            menu_calls["tests"] += 1
+            if menu_calls["tests"] == 1:
+                return next(item for item in options if item.label == " Run Batch Runner (CSV/JSONL Export)")
+            return None
+        if menu_id == "batch_runner_model_selector":
+            menu_calls["model"] += 1
+            if menu_calls["model"] == 1:
+                return next(item for item in options if item.label == "model-a")
+            return next(item for item in options if item.label == "Cancel")
+        if menu_id == "batch_runner_schema_selector":
+            menu_calls["schema"] += 1
+            return next(item for item in options if item.label == "PolypDetection")
+        if menu_id == "batch_runner_reasoning_selector":
+            menu_calls["mode"] += 1
+            return next(item for item in options if item.label == "Con razonamiento")
+        if menu_id == "batch_runner_output_format_selector":
+            menu_calls["format"] += 1
+            return next(item for item in options if item.label == "CSV")
+        if menu_id == "batch_runner_size_selector":
+            menu_calls["size"] += 1
+            return next(item for item in options if item.label == "25 imágenes")
+        raise AssertionError(f"Unexpected menu_id: {menu_id}")
+
+    import src.scripts.batch_runner as batch_script
+
+    monkeypatch.setattr(
+        batch_script,
+        "run_batch_job",
+        lambda **kwargs: batch_calls.append(kwargs) or {
+            "ok": 25,
+            "invalid": 0,
+            "fail": 0,
+            "output_path": "data/processed/batch_results/demo.csv",
+        },
+    )
+
+    ctx = {
+        "Style": _DummyStyle,
+        "MenuItem": _MenuItem,
+        "print_banner": lambda: None,
+        "log": lambda msg, level="info": logs.append((msg, level)),
+        "run_cmd": lambda *_: None,
+        "wait_for_any_key": lambda *args, **kwargs: waits.__setitem__("count", waits["count"] + 1),
+        "interactive_menu": interactive_menu,
+        "list_test_files": lambda: [],
+        "get_installed_lms_models": lambda: ["model-a"],
+        "clear_screen_ansi": lambda: None,
+        "manage_models_menu_ui": lambda: None,
+        "time": SimpleNamespace(sleep=lambda *_: None),
+    }
+
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
+
+    assert batch_calls[0]["model_id"] == "model-a"
+    assert batch_calls[0]["schema_name"] == "PolypDetectionWithReasoning"
+    assert batch_calls[0]["output_format"] == "csv"
+    assert batch_calls[0]["max_images"] == 25
+    assert waits["count"] == 1
+    assert any("Batch Runner completado" in msg for msg, _level in logs)
+
+
+def test_setup_tests_ui_response_inspector_runs_from_menu(monkeypatch):
+    menu_calls = {"tests": 0, "model": 0, "mode": 0}
+    inspector_calls = []
+    waits = {"count": 0}
+    logs = []
+    printed_payloads = []
+
+    def interactive_menu(options, **kwargs):
+        menu_id = kwargs.get("menu_id")
+        if menu_id == "tests_manager_menu":
+            menu_calls["tests"] += 1
+            if menu_calls["tests"] == 1:
+                return next(item for item in options if item.label == " Run Response Inspector (SDK Fields)")
+            return None
+        if menu_id == "response_inspector_model_selector":
+            menu_calls["model"] += 1
+            if menu_calls["model"] == 1:
+                return next(item for item in options if item.label == "model-a")
+            return next(item for item in options if item.label == "Cancel")
+        if menu_id == "response_inspector_mode_selector":
+            menu_calls["mode"] += 1
+            return next(item for item in options if item.label == "Estructurada con reasoning")
+        raise AssertionError(f"Unexpected menu_id: {menu_id}")
+
+    import src.scripts.test_response_inspector as inspector_script
+
+    monkeypatch.setattr(
+        inspector_script,
+        "run_inspection",
+        lambda args: inspector_calls.append(args) or {
+            "request": {"model_id": args.model, "image_path": "a.jpg", "schema_name": "GenericObjectDetectionWithReasoning"},
+            "response": {"python_type": "PredictionResult", "structured": True, "public_attributes": {}, "text_extracted": "demo", "model_info": {}, "stats": {}, "parsed": {}},
+            "resources": {},
+        },
+    )
+    monkeypatch.setattr(inspector_script, "save_inspection_payload", lambda payload, output_path=None: f"data/processed/debug/{payload['request']['model_id']}.json")
+    monkeypatch.setattr(inspector_script, "print_summary", lambda payload: printed_payloads.append(payload))
+
+    ctx = {
+        "Style": _DummyStyle,
+        "MenuItem": _MenuItem,
+        "print_banner": lambda: None,
+        "log": lambda msg, level="info": logs.append((msg, level)),
+        "run_cmd": lambda *_: None,
+        "wait_for_any_key": lambda *args, **kwargs: waits.__setitem__("count", waits["count"] + 1),
+        "interactive_menu": interactive_menu,
+        "list_test_files": lambda: [],
+        "get_installed_lms_models": lambda: ["model-a"],
+        "clear_screen_ansi": lambda: None,
+        "manage_models_menu_ui": lambda: None,
+        "time": SimpleNamespace(sleep=lambda *_: None),
+    }
+
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
+
+    assert inspector_calls[0].model == "model-a"
+    assert inspector_calls[0].structured is True
+    assert inspector_calls[0].with_reasoning is True
+    assert printed_payloads[0]["request"]["model_id"] == "model-a"
+    assert waits["count"] == 1
+    assert any("Response Inspector completado" in msg for msg, _level in logs)

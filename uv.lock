@@ -2098,6 +2098,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pytest" },
     { name = "rarfile" },
+    { name = "requests" },
     { name = "tqdm" },
 ]
 
@@ -2113,6 +2114,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.11.9" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "rarfile", specifier = ">=4.2" },
+    { name = "requests", specifier = ">=2.32.5" },
     { name = "tqdm", specifier = ">=4.67.3" },
 ]
 

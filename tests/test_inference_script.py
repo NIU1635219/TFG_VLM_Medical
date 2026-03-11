@@ -62,6 +62,15 @@ def test_validate_response_dog_via_object_detected_field():
     assert ok is True
 
 
+def test_validate_response_dog_accepts_taxonomic_name_canis():
+    """Regresión: nombres taxonómicos válidos como 'Canis' no deben marcarse como fallo."""
+    ok, _ = validate_response(
+        "dog",
+        '{"object_detected": "Canis", "confidence_score": 95, "justification": "El animal tiene pelaje claro y morfología compatible con un cánido doméstico."}',
+    )
+    assert ok is True
+
+
 
     """Confirma que `validate_response` distinga aciertos y fallos basándose en keywords."""
     ok, _ = validate_response(

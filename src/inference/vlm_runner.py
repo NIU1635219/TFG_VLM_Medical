@@ -3,12 +3,22 @@
 import base64
 import io
 import json
+import dataclasses
+import math
 import mimetypes
 import os
+import re
+import time
 from pathlib import Path
-from typing import Any, Protocol, Type, TypeVar, cast
+from typing import Any, Generic, Literal, Protocol, Type, TypeVar, cast, overload
+from urllib.parse import urlparse, urlunparse
 
 from pydantic import BaseModel, ValidationError
+
+try:
+    import requests
+except ImportError:
+    requests = None
 
 from src.inference.schemas import (
     GenericObjectDetection,
@@ -23,6 +33,38 @@ T = TypeVar("T", bound=BaseModel)
 
 # Alias de retro-compatibilidad (usado por tests y scripts heredados)
 VLMStructuredResponse = GenericObjectDetection
+
+
+@dataclasses.dataclass(frozen=True)
+class InferenceTelemetry:
+    """Métricas de rendimiento extraídas de una inferencia individual."""
+
+    total_duration_seconds: float
+    ttft_seconds: float | None
+    generation_duration_seconds: float | None
+    prompt_tokens_per_second: float | None
+    tokens_per_second: float | None
+    reasoning_tokens: int | None
+    stop_reason: str | None
+    model_id: str | None
+    vram_usage_mb: float | None
+    total_params: int | str | None
+    architecture: str | None
+    quantization: str | None
+    gpu_layers: int | None
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    total_tokens: int | None
+    stats: dict[str, Any]
+    resources: dict[str, Any]
+
+
+@dataclasses.dataclass(frozen=True)
+class InferenceResult(Generic[T]):
+    """Respuesta tipada del modelo junto con sus métricas de telemetría."""
+
+    data: T
+    telemetry: InferenceTelemetry
 
 try:
     from PIL import Image
@@ -115,9 +157,16 @@ class VLMLoader:
         if self.api_token:
             kwargs["api_token"] = self.api_token
 
-        if self.server_api_host:
-            return client_cls(self.server_api_host, **kwargs)
-        return client_cls(**kwargs)
+        try:
+            if self.server_api_host:
+                return client_cls(self.server_api_host, **kwargs)
+            return client_cls(**kwargs)
+        except Exception as error:
+            if self._is_lmstudio_connection_issue(error):
+                raise RuntimeError(
+                    self._build_lmstudio_connection_message("crear el cliente de LM Studio", error)
+                ) from error
+            raise
 
     def _ensure_lms_available(self) -> None:
         """
@@ -131,6 +180,50 @@ class VLMLoader:
                 "La librería 'lmstudio-python' no está instalada. "
                 "Instala y activa LM Studio SDK para continuar."
             )
+
+    def _is_lmstudio_connection_issue(self, error: BaseException) -> bool:
+        """
+        Detecta si una excepción apunta a un servidor LM Studio inaccesible.
+
+        Args:
+            error (BaseException): Error capturado durante una operación con el SDK.
+
+        Returns:
+            bool: ``True`` si el mensaje parece corresponder a un problema de
+            conexión con el servidor LM Studio.
+        """
+        error_text = str(error).lower()
+        patterns = (
+            "connection refused",
+            "actively refused",
+            "failed to establish a new connection",
+            "max retries exceeded",
+            "could not connect",
+            "cannot connect",
+            "server is not running",
+            "winerror 10061",
+            "errno 111",
+        )
+        return any(pattern in error_text for pattern in patterns)
+
+    def _build_lmstudio_connection_message(self, operation: str, error: BaseException) -> str:
+        """
+        Genera un mensaje claro cuando LM Studio no está accesible.
+
+        Args:
+            operation (str): Acción que se estaba ejecutando.
+            error (BaseException): Error original detectado.
+
+        Returns:
+            str: Mensaje listo para elevar al usuario final.
+        """
+        target_host = self.server_api_host or "localhost:1234"
+        return (
+            f"No se pudo {operation} porque LM Studio no está accesible en {target_host}. "
+            "Verifica que la aplicación esté abierta, que el servidor local esté encendido "
+            "y que el host configurado sea correcto. "
+            f"Detalle original: {error}"
+        )
 
     def _extract_model_key(self, model_obj: Any) -> str | None:
         """
@@ -332,6 +425,287 @@ class VLMLoader:
 
         return extract(response).strip()
 
+    def _object_to_dict(self, value: Any) -> dict[str, Any]:
+        """Convierte objetos del SDK o respuestas REST a un diccionario serializable."""
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return dict(value)
+
+        if not isinstance(value, type) and dataclasses.is_dataclass(value):
+            try:
+                dumped = dataclasses.asdict(cast(Any, value))
+                if isinstance(dumped, dict):
+                    return dumped
+            except Exception:
+                pass
+
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            dumped = model_dump()
+            if isinstance(dumped, dict):
+                return dumped
+
+        to_dict = getattr(value, "dict", None)
+        if callable(to_dict):
+            dumped = to_dict()
+            if isinstance(dumped, dict):
+                return dumped
+
+        value_dict = getattr(value, "__dict__", None)
+        if isinstance(value_dict, dict):
+            return {key: nested for key, nested in value_dict.items() if not key.startswith("_")}
+
+        collected: dict[str, Any] = {}
+        for attr_name in dir(value):
+            if attr_name.startswith("_"):
+                continue
+            try:
+                attr_value = getattr(value, attr_name)
+            except Exception:
+                continue
+            if callable(attr_value):
+                continue
+            if isinstance(attr_value, Path):
+                collected[attr_name] = str(attr_value)
+            elif isinstance(attr_value, (str, int, float, bool, type(None), dict, list, tuple, set)):
+                collected[attr_name] = attr_value
+
+        if collected:
+            return collected
+
+        return {}
+
+    def _extract_numeric_value(self, payload: dict[str, Any], aliases: tuple[str, ...]) -> float | None:
+        """Extrae un valor numérico desde varios alias posibles."""
+        for alias in aliases:
+            if alias not in payload:
+                continue
+            value = payload.get(alias)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                try:
+                    return float(value.strip())
+                except ValueError:
+                    continue
+        return None
+
+    def _extract_string_value(self, payload: dict[str, Any], aliases: tuple[str, ...]) -> str | None:
+        """Extrae un valor de texto desde varios alias posibles."""
+        for alias in aliases:
+            value = payload.get(alias)
+            if isinstance(value, str):
+                normalized = value.strip()
+                if normalized:
+                    return normalized
+        return None
+
+    def _extract_quantization_value(self, *candidates: object) -> str | None:
+        """Extrae la cuantización desde textos como model_key o path cuando no viene por REST."""
+        pattern = re.compile(r"(Q\d+(?:_K)?(?:_[MSL01])?|IQ\d+(?:_[MSL]|_XS)?)", re.IGNORECASE)
+        for candidate in candidates:
+            if not isinstance(candidate, str):
+                continue
+            match = pattern.search(candidate)
+            if match:
+                return match.group(1).upper()
+        return None
+
+    def _build_rest_api_base(self) -> str:
+        """Resuelve la base REST de LM Studio terminando en `/v1`."""
+        host = self.server_api_host or "http://localhost:1234"
+        if not host.startswith(("http://", "https://")):
+            host = f"http://{host}"
+
+        parsed = urlparse(host)
+        path = parsed.path.rstrip("/")
+        if not path:
+            path = "/v1"
+        elif not path.endswith("/v1"):
+            path = f"{path}/v1"
+
+        return urlunparse(parsed._replace(path=path, params="", query="", fragment=""))
+
+    def _fetch_model_resources(self) -> dict[str, Any]:
+        """Consulta `/v1/models` para obtener telemetría de recursos del modelo activo."""
+        if requests is None:
+            return {}
+
+        headers: dict[str, str] = {}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+
+        try:
+            response = requests.get(
+                f"{self._build_rest_api_base()}/models",
+                headers=headers,
+                timeout=5,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            return {}
+
+        data = payload.get("data")
+        if not isinstance(data, list) or not data:
+            return {}
+
+        normalized_tag = self.model_tag.lower()
+        target_model: dict[str, Any] | None = None
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id", "")).strip().lower()
+            if item_id and item_id == normalized_tag:
+                target_model = item
+                break
+
+        if target_model is None:
+            target_model = next((item for item in data if isinstance(item, dict)), None)
+        if target_model is None:
+            return {}
+
+        metadata = cast(dict[str, Any], target_model.get("metadata") or {}) if isinstance(target_model.get("metadata"), dict) else {}
+        stats = cast(dict[str, Any], target_model.get("stats") or {}) if isinstance(target_model.get("stats"), dict) else {}
+        vram_usage_bytes = stats.get("vram_usage_bytes")
+        gpu_layers = stats.get("gpu_layers")
+
+        return {
+            "model_id": target_model.get("id") or self.model_tag,
+            "vram_usage_mb": (float(vram_usage_bytes) / (1024.0 ** 2)) if isinstance(vram_usage_bytes, (int, float)) else None,
+            "total_params": metadata.get("total_params"),
+            "architecture": metadata.get("architecture"),
+            "quantization": metadata.get("quantization"),
+            "gpu_layers": int(gpu_layers) if isinstance(gpu_layers, (int, float)) else None,
+        }
+
+    def _estimate_reasoning_tokens(self, validated: BaseModel) -> int | None:
+        """Cuenta tokens aproximados a partir del campo ``reasoning`` del schema validado."""
+        reasoning_value = getattr(validated, "reasoning", None)
+        if not isinstance(reasoning_value, str):
+            return None
+
+        normalized_reasoning = reasoning_value.strip()
+        if not normalized_reasoning:
+            return 0
+
+        return len(re.findall(r"\S+", normalized_reasoning))
+
+    def _extract_inference_telemetry(self, response: Any, wall_duration_seconds: float) -> InferenceTelemetry:
+        """Extrae telemetría fiable desde `response.stats` y `/v1/models`."""
+        stats_payload = self._object_to_dict(getattr(response, "stats", None))
+        if not stats_payload:
+            result_payload = self._object_to_dict(getattr(response, "result", None))
+            stats_payload = self._object_to_dict(result_payload.get("stats")) if result_payload else {}
+        model_info_payload = self._object_to_dict(getattr(response, "model_info", None))
+
+        prompt_tokens_value = self._extract_numeric_value(
+            stats_payload,
+            (
+                "prompt_tokens_count",
+                "prompt_tokens",
+                "input_tokens",
+            ),
+        )
+        completion_tokens_value = self._extract_numeric_value(
+            stats_payload,
+            (
+                "predicted_tokens_count",
+                "completion_tokens",
+                "total_output_tokens",
+            ),
+        )
+        prompt_tokens_per_second = self._extract_numeric_value(
+            stats_payload,
+            (
+                "prompt_tokens_per_second",
+                "prompt_tokens_per_sec",
+            ),
+        )
+        tokens_per_second = self._extract_numeric_value(
+            stats_payload,
+            (
+                "tokens_per_second",
+                "predicted_tokens_per_sec",
+            ),
+        )
+        ttft_seconds = self._extract_numeric_value(
+            stats_payload,
+            (
+                "time_to_first_token_sec",
+                "time_to_first_token_seconds",
+                "time_to_first_token",
+            ),
+        )
+        total_duration_ms = self._extract_numeric_value(stats_payload, ("total_duration_ms",))
+        total_duration_seconds = (total_duration_ms / 1000.0) if total_duration_ms is not None else wall_duration_seconds
+
+        generation_seconds: float | None = None
+        if completion_tokens_value is not None and tokens_per_second and tokens_per_second > 0:
+            generation_seconds = completion_tokens_value / tokens_per_second
+        elif ttft_seconds is not None and total_duration_seconds >= ttft_seconds:
+            residual = total_duration_seconds - ttft_seconds
+            if residual > 0:
+                generation_seconds = residual
+
+        prompt_tokens = int(prompt_tokens_value) if prompt_tokens_value is not None else None
+        completion_tokens = int(completion_tokens_value) if completion_tokens_value is not None else None
+        total_tokens_value = self._extract_numeric_value(stats_payload, ("total_tokens_count", "total_tokens"))
+        total_tokens = int(total_tokens_value) if total_tokens_value is not None else None
+        if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+            total_tokens = prompt_tokens + completion_tokens
+
+        resources = self._fetch_model_resources()
+        stop_reason = self._extract_string_value(stats_payload, ("stop_reason",))
+        total_params = resources.get("total_params") or model_info_payload.get("total_params") or model_info_payload.get("params_string")
+        if not isinstance(total_params, (int, str)):
+            total_params = None
+
+        model_id = cast(str | None, resources.get("model_id"))
+        if model_id is None:
+            model_id = self._extract_string_value(model_info_payload, ("model_key", "id", "display_name")) or self.model_tag
+
+        architecture = cast(str | None, resources.get("architecture"))
+        if architecture is None:
+            architecture = self._extract_string_value(model_info_payload, ("architecture",))
+
+        quantization = cast(str | None, resources.get("quantization"))
+        if quantization is None:
+            quantization = self._extract_quantization_value(
+                model_info_payload.get("path"),
+                model_info_payload.get("model_key"),
+                model_info_payload.get("display_name"),
+            )
+
+        gpu_layers = cast(int | None, resources.get("gpu_layers"))
+        if gpu_layers is None:
+            gpu_layers_value = self._extract_numeric_value(stats_payload, ("num_gpu_layers",))
+            gpu_layers = int(gpu_layers_value) if gpu_layers_value is not None else None
+
+        return InferenceTelemetry(
+            total_duration_seconds=total_duration_seconds,
+            ttft_seconds=ttft_seconds,
+            generation_duration_seconds=generation_seconds,
+            prompt_tokens_per_second=prompt_tokens_per_second,
+            tokens_per_second=tokens_per_second,
+            reasoning_tokens=None,
+            stop_reason=stop_reason,
+            model_id=model_id,
+            vram_usage_mb=cast(float | None, resources.get("vram_usage_mb")),
+            total_params=cast(int | str | None, total_params),
+            architecture=architecture,
+            quantization=quantization,
+            gpu_layers=gpu_layers,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            stats=stats_payload,
+            resources=resources,
+        )
+
     def _encode_image_data_url(self, image_path: str) -> str:
         """
         Codifica una imagen local en formato Data URL (base64).
@@ -368,11 +742,18 @@ class VLMLoader:
             return image_path
 
         try:
-            max_dim = 1024
+            max_pixels = 1_800_000
             with Image.open(image_path) as image_obj:
                 clean_image = image_obj.convert("RGB")
-                if max(clean_image.size) > max_dim:
-                    clean_image.thumbnail((max_dim, max_dim))
+                width, height = clean_image.size
+                current_pixels = width * height
+                if current_pixels > max_pixels:
+                    scale = math.sqrt(max_pixels / float(current_pixels))
+                    resized_width = max(1, int(width * scale))
+                    resized_height = max(1, int(height * scale))
+                    resampling_namespace = getattr(Image, "Resampling", None)
+                    resampling = getattr(resampling_namespace, "LANCZOS", getattr(Image, "LANCZOS"))
+                    clean_image = clean_image.resize((resized_width, resized_height), resampling)
 
                 buffer = io.BytesIO()
                 clean_image.save(buffer, format="PNG", optimize=True)
@@ -579,12 +960,28 @@ class VLMLoader:
                     try:
                         model = _try_load(load_fn)
                     except Exception as fallback_error:
+                        for candidate_error in (client_error, primary_error, fallback_error):
+                            if self._is_lmstudio_connection_issue(candidate_error):
+                                raise RuntimeError(
+                                    self._build_lmstudio_connection_message(
+                                        f"cargar el modelo '{self.model_tag}'",
+                                        candidate_error,
+                                    )
+                                ) from fallback_error
                         raise RuntimeError(
                             f"No se pudo cargar el modelo '{self.model_tag}' con LM Studio. "
                             f"Error client: {client_error}. "
                             f"Error principal: {primary_error}. Error fallback: {fallback_error}"
                         ) from fallback_error
                 else:
+                    for candidate_error in (client_error, primary_error):
+                        if self._is_lmstudio_connection_issue(candidate_error):
+                            raise RuntimeError(
+                                self._build_lmstudio_connection_message(
+                                    f"cargar el modelo '{self.model_tag}'",
+                                    candidate_error,
+                                )
+                            ) from primary_error
                     raise RuntimeError(
                         f"No se pudo cargar el modelo '{self.model_tag}' con LM Studio. "
                         f"Error client: {client_error}. Error: {primary_error}"
@@ -613,6 +1010,13 @@ class VLMLoader:
             assert model_handle is not None
             model_handle.respond("Warmup mínimo. Responde solo: ok.")
         except Exception as error:
+            if self._is_lmstudio_connection_issue(error):
+                raise RuntimeError(
+                    self._build_lmstudio_connection_message(
+                        f"precargar el modelo '{self.model_tag}'",
+                        error,
+                    )
+                ) from error
             raise RuntimeError(
                 f"No se pudo precargar el modelo '{self.model_tag}' en LM Studio: {error}"
             ) from error
@@ -645,13 +1049,39 @@ class VLMLoader:
             self._loaded_model = None
 
 
+    @overload
+    def inference(
+        self,
+        image_path: str | Path,
+        prompt: str,
+        schema: Type[T] = GenericObjectDetection,
+        temperature: float = 0.7,
+        *,
+        include_telemetry: Literal[False] = False,
+    ) -> T:
+        ...
+
+    @overload
+    def inference(
+        self,
+        image_path: str | Path,
+        prompt: str,
+        schema: Type[T] = GenericObjectDetection,
+        temperature: float = 0.7,
+        *,
+        include_telemetry: Literal[True],
+    ) -> InferenceResult[T]:
+        ...
+
     def inference(
         self,
         image_path: str | Path,
         prompt: str,
         schema: Type[T] = GenericObjectDetection,  # type: ignore[assignment]
         temperature: float = 0.7,
-    ) -> T:
+        *,
+        include_telemetry: bool = False,
+    ) -> T | InferenceResult[T]:
         """
         Ejecuta una inferencia multimodal (VLM) sobre una imagen con esquema dinámico.
 
@@ -672,9 +1102,12 @@ class VLMLoader:
             schema (Type[T]): Clase Pydantic que define el contrato de respuesta JSON.
                 Por defecto usa ``GenericObjectDetection`` para compatibilidad hacia atrás.
             temperature (float, optional): Creatividad de la respuesta (0.0 a 2.0). Default 0.7.
+            include_telemetry (bool, optional): Si es True, devuelve además métricas
+                de rendimiento y uso del SDK junto al resultado parseado.
 
         Returns:
-            T: Instancia de la clase ``schema`` con los datos validados.
+            T | InferenceResult[T]: Instancia validada del esquema, o un contenedor
+            con el dato validado y la telemetría si ``include_telemetry`` es True.
 
         Raises:
             ValueError: Si path o prompt están vacíos, o temperatura fuera de rango.
@@ -714,6 +1147,7 @@ class VLMLoader:
         model_handle = self._loaded_model
         assert model_handle is not None
 
+        started_at = time.perf_counter()
         try:
             response = self._respond_with_config_compat(
                 model_handle,
@@ -722,6 +1156,10 @@ class VLMLoader:
                 schema=schema,
             )
         except Exception as image_error:
+            if self._is_lmstudio_connection_issue(image_error):
+                raise RuntimeError(
+                    self._build_lmstudio_connection_message("ejecutar la inferencia", image_error)
+                ) from image_error
             try:
                 self._respond_with_config_compat(
                     model_handle,
@@ -730,6 +1168,13 @@ class VLMLoader:
                     schema=schema,
                 )
             except Exception as fallback_error:
+                if self._is_lmstudio_connection_issue(fallback_error):
+                    raise RuntimeError(
+                        self._build_lmstudio_connection_message(
+                            "ejecutar la inferencia",
+                            fallback_error,
+                        )
+                    ) from image_error
                 raise RuntimeError(
                     "Fallo de inferencia en LM Studio: no se pudo procesar la imagen "
                     f"ni ejecutar fallback de texto. Detalle: {fallback_error}"
@@ -740,11 +1185,21 @@ class VLMLoader:
                 "Se verificó fallback de texto, pero esta operación requiere imagen válida."
             ) from image_error
 
+        total_duration_seconds = time.perf_counter() - started_at
+        telemetry = self._extract_inference_telemetry(response, total_duration_seconds)
+
         # Intenta usar .parsed antes de parsear el texto a mano
         parsed_payload = getattr(response, "parsed", None)
         if isinstance(parsed_payload, dict):
             try:
-                return schema.model_validate(parsed_payload)  # type: ignore[return-value]
+                validated = schema.model_validate(parsed_payload)
+                telemetry = dataclasses.replace(
+                    telemetry,
+                    reasoning_tokens=self._estimate_reasoning_tokens(validated),
+                )
+                if include_telemetry:
+                    return InferenceResult(data=validated, telemetry=telemetry)
+                return validated  # type: ignore[return-value]
             except ValidationError as error:
                 raise RuntimeError(
                     f"La respuesta estructurada no cumple el esquema '{schema.__name__}': {error}"
@@ -757,7 +1212,14 @@ class VLMLoader:
 
         try:
             parsed_json = json.loads(response_text)
-            return schema.model_validate(parsed_json)  # type: ignore[return-value]
+            validated = schema.model_validate(parsed_json)
+            telemetry = dataclasses.replace(
+                telemetry,
+                reasoning_tokens=self._estimate_reasoning_tokens(validated),
+            )
+            if include_telemetry:
+                return InferenceResult(data=validated, telemetry=telemetry)
+            return validated  # type: ignore[return-value]
         except json.JSONDecodeError as error:
             raise RuntimeError(f"La respuesta no es JSON válido: {error}") from error
         except ValidationError as error:

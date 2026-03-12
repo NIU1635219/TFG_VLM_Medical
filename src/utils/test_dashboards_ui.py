@@ -55,10 +55,10 @@ def _stringify_payload_value(value: object) -> str:
 def _format_payload_lines(kit: "UIKit", payload: object, width: int) -> list[str]:
     """Convierte un payload en líneas con wrapping conservando claves."""
     if payload is None:
-        return []
+        return[]
 
     if isinstance(payload, dict):
-        lines: list[str] = []
+        lines: list[str] =[]
         for key, value in payload.items():
             value_text = _stringify_payload_value(value)
             key_prefix = f"{key}="
@@ -120,8 +120,8 @@ def _coverage_fragments(availability: dict[str, object]) -> list[str]:
     if ok_records <= 0:
         return []
 
-    fragments: list[str] = []
-    metric_specs = [
+    fragments: list[str] =[]
+    metric_specs =[
         ("TTFT", "ttft_records"),
         ("TPS", "tps_records"),
         ("GPU", "gpu_layer_records"),
@@ -135,7 +135,7 @@ def _coverage_fragments(availability: dict[str, object]) -> list[str]:
 
 def _build_probe_detail_parts(record: dict[str, object], availability: dict[str, object]) -> list[str]:
     """Genera solo las columnas utiles para una inferencia concreta del probe."""
-    parts = [f"TTFT={_format_metric_value(record.get('ttft_seconds'), suffix=' s')}"]
+    parts =[f"TTFT={_format_metric_value(record.get('ttft_seconds'), suffix=' s')}"]
 
     if _telemetry_available(availability, "tps_records"):
         parts.append(f"TPS={_format_metric_value(record.get('tokens_per_second'))}")
@@ -207,10 +207,7 @@ def _status_color(kit: "UIKit", status: str) -> str:
 
 
 def _section_header(kit: "UIKit", title: str, *, width: int | None = None) -> str:
-    """Genera un encabezado de sección con título integrado en la línea divisora.
-
-    Ejemplo: ``  ── Últimas validaciones ─────────────────────────────``
-    """
+    """Genera un encabezado de sección con título integrado en la línea divisora."""
     w = (width if width is not None else max(60, kit.width())) - 4
     fill = max(2, w - len(title) - 5)
     dim = _style_token(kit, "DIM")
@@ -219,30 +216,92 @@ def _section_header(kit: "UIKit", title: str, *, width: int | None = None) -> st
     return f"  {dim}──{endc} {bold}{title}{endc} {dim}{'─' * fill}{endc}"
 
 
-def _append_recent_line(buffer: deque[str], line: str, *, limit: int = 30) -> None:
-    """Mantiene una ventana corta de actividad reciente para el dashboard."""
-    if buffer.maxlen != limit:
-        while len(buffer) >= limit:
-            buffer.popleft()
-    buffer.append(line)
-
-
-def _make_recent_lines(*, limit: int = 30) -> deque[str]:
-    """Crea un buffer homogéneo para actividad reciente en los dashboards."""
+def _make_recent_records(*, limit: int = 5) -> deque[dict[str, object]]:
+    """Crea un buffer para guardar los registros crudos (NO strings formateados)."""
     return deque(maxlen=limit)
 
 
-def _append_recent_record(kit: "UIKit", buffer: deque[str], record: dict[str, object], *, limit: int = 30) -> None:
-    """Añade un registro formateado al buffer de actividad reciente."""
-    lines = _format_recent_status_lines(kit, record, truncate=True)
-    lines.append(_recent_record_separator(kit))
-    if len(lines) >= limit:
-        buffer.clear()
-        buffer.extend(lines[-limit:])
-        return
-    while len(buffer) + len(lines) > limit:
-        buffer.popleft()
-    buffer.extend(lines)
+def _append_recent_record(buffer: deque[dict[str, object]], record: dict[str, object]) -> None:
+    """Añade el diccionario crudo al buffer. El formato se hará en caliente en el render."""
+    buffer.append(record)
+
+
+def _format_recent_status_lines(
+    kit: "UIKit",
+    record: dict[str, object],
+    *,
+    truncate: bool = True,
+) -> list[str]:
+    """Formatea un registro adaptando los anchos al tamaño EXACTO actual del terminal."""
+    status = str(record.get("status") or "unknown")
+    if status == "ok":
+        color = _style_token(kit, "OKGREEN")
+        icon = "✓"
+    elif status == "invalid":
+        color = _style_token(kit, "WARNING")
+        icon = "⚠"
+    else:
+        color = _style_token(kit, "FAIL")
+        icon = "✗"
+    badge = f"{color}{_style_token(kit, 'BOLD')}{icon}{_style_token(kit, 'ENDC')}"
+
+    image_name = str(record.get("image_name") or os.path.basename(str(record.get("image_path") or "N/D")))
+    
+    # --- CÁLCULO DINÁMICO DE ANCHOS DE COLUMNA ---
+    ui_width = kit.width()
+    # Overhead: 2 espacios iniciales + badge (1) + 1 espacio + name_width + 2 espacios + pipe (1) + 2 espacios = 9 fijos
+    content_budget = max(40, ui_width - 10) 
+    
+    # La columna del nombre de la imagen será como máximo 24 chars, o el 35% del presupuesto.
+    name_width = min(24, max(10, int(content_budget * 0.35)))
+    detail_width = max(20, content_budget - name_width)
+    
+    if len(image_name) > name_width:
+        image_name = image_name[:name_width - 1] + "…"
+
+    detail_lines: list[str] =[]
+    payload = cast(dict[str, object] | None, record.get("payload"))
+    if status == "ok":
+        if payload:
+            detail_lines.extend(_format_payload_lines(kit, payload, detail_width))
+        if record.get("ttft_seconds") is not None:
+            detail_lines.append(f"TTFT={_format_metric_value(record.get('ttft_seconds'), suffix=' s')}")
+        if record.get("tokens_per_second") is not None:
+            detail_lines.append(f"TPS={_format_metric_value(record.get('tokens_per_second'))}")
+        if record.get("total_duration_seconds") is not None:
+            detail_lines.append(f"total={_format_metric_value(record.get('total_duration_seconds'), suffix=' s')}")
+        if record.get("response_preview") is not None and not detail_lines:
+            detail_lines.append(str(record.get("response_preview")))
+        if not detail_lines:
+            detail_lines.append("Resultado válido")
+    elif status == "invalid":
+        detail_lines.append(str(record.get("validation_error") or record.get("message") or "JSON inválido"))
+        if payload:
+            detail_lines.extend(_format_payload_lines(kit, payload, detail_width))
+    else:
+        detail_lines.append(str(record.get("error") or "Error desconocido"))
+
+    if truncate:
+        detail_lines = _cap_detail_lines(detail_lines, max_lines=12)
+        
+    dim = _style_token(kit, "DIM")
+    endc = _style_token(kit, "ENDC")
+    
+    base_prefix = (
+        f"  {badge} "
+        f"{_style_token(kit, 'BOLD')}{image_name:<{name_width}}{endc}"
+        f"  {dim}│{endc}  "
+    )
+    cont_prefix = f"  {' ' * 2}{' ' * name_width}  {dim}│{endc}  "
+    
+    if not detail_lines:
+        detail_lines.append("")
+        
+    formatted_lines = [base_prefix + detail_lines[0]]
+    for line in detail_lines[1:]:
+        formatted_lines.append(cont_prefix + line)
+        
+    return formatted_lines
 
 
 def _build_recent_record_lines(
@@ -250,13 +309,15 @@ def _build_recent_record_lines(
     records: list[dict[str, object]],
     *,
     empty_message: str = "  Sin registros.",
+    truncate: bool = True,
 ) -> list[str]:
-    """Convierte registros crudos en líneas de actividad reutilizables para paneles finales."""
+    """Convierte registros crudos en líneas de actividad formateándolos al momento."""
     if not records:
         return [empty_message]
-    lines: list[str] = []
+    lines: list[str] =[]
     for record in records:
-        lines.extend(_format_recent_status_lines(kit, record, truncate=False))
+        # Aquí se formatean usando el ancho exacto que tenga la terminal ahora mismo
+        lines.extend(_format_recent_status_lines(kit, record, truncate=truncate))
         lines.append(_recent_record_separator(kit))
     return lines
 
@@ -296,102 +357,54 @@ def _render_live_dashboard(
     status_line: str,
     metrics_line: str | None = None,
     coverage_line: str | None = None,
-    recent_title: str = "Ultimas imagenes procesadas:",
-    recent_lines: list[str] | None = None,
+    recent_title: str = "Últimas imágenes procesadas:",
+    recent_records: list[dict[str, object]] | None = None, # AHORA RECIBE RECORDS CRUDOS
+    recent_limit: int | None = 5,
     extra_lines: list[str] | None = None,
     force_full: bool | None = None,
 ) -> None:
-    """Compone un frame dinamico homogeneo para ejecuciones largas."""
+    """Compone un frame dinámico homogéneo calculando todos los anchos al vuelo."""
     dim = _style_token(kit, "DIM")
     endc = _style_token(kit, "ENDC")
     section_title = recent_title.rstrip(":")
-    dynamic_lines: list[str] = [
+    
+    dynamic_lines: list[str] =[
         "",
         _section_header(kit, "Progreso"),
         f"  {_build_progress_bar(kit, current, total)}",
         f"  {stats_line}",
         f"  {dim}{status_line}{endc}",
     ]
+    
     if metrics_line:
         dynamic_lines.append(f"  {metrics_line}")
     if coverage_line:
         dynamic_lines.append(f"  {dim}{coverage_line}{endc}")
     if extra_lines:
         dynamic_lines.extend(f"  {line}" for line in extra_lines)
+        
     dynamic_lines.append("")
     dynamic_lines.append(_section_header(kit, section_title))
-    if recent_lines:
-        dynamic_lines.extend(recent_lines)
+    
+    if recent_records:
+        # Truncamos a las últimas entradas si se solicita para evitar listas
+        # excesivamente largas en el panel en vivo.
+        if recent_limit is not None and len(recent_records) > recent_limit:
+            display_records = recent_records[-recent_limit:]
+        else:
+            display_records = recent_records
+        # Se formatean AHORA, usando el kit.width() actual del terminal
+        dynamic_lines.extend(_build_recent_record_lines(kit, display_records))
     else:
         dynamic_lines.append(f"  {dim}Sin actividad todavía.{endc}")
+        
     dynamic_lines.append("")
     dynamic_lines.append(f"  {dim}{'─' * max(2, kit.width() - 4)}{endc}")
+    
     if force_full is None:
         force_full = getattr(kit, "os_module", None) is not None and kit.os_module.name == "nt"
+        
     panel.render(dynamic_lines, force_full=bool(force_full))
-
-
-def _format_recent_status_lines(
-    kit: "UIKit",
-    record: dict[str, object],
-    *,
-    truncate: bool = True,
-) -> list[str]:
-    """Resume un registro reciente para mostrarlo en el dashboard."""
-    status = str(record.get("status") or "unknown")
-    if status == "ok":
-        color = _style_token(kit, "OKGREEN")
-        icon = "✓"
-    elif status == "invalid":
-        color = _style_token(kit, "WARNING")
-        icon = "⚠"
-    else:
-        color = _style_token(kit, "FAIL")
-        icon = "✗"
-    badge = f"{color}{_style_token(kit, 'BOLD')}{icon}{_style_token(kit, 'ENDC')}"
-
-    image_name = str(record.get("image_name") or os.path.basename(str(record.get("image_path") or "N/D")))
-    detail_lines: list[str] = []
-    payload = cast(dict[str, object] | None, record.get("payload"))
-    if status == "ok":
-        detail_width = max(30, min(120, kit.width() - 40))
-        if payload:
-            detail_lines.extend(_format_payload_lines(kit, payload, detail_width))
-        if record.get("ttft_seconds") is not None:
-            detail_lines.append(f"TTFT={_format_metric_value(record.get('ttft_seconds'), suffix=' s')}")
-        if record.get("tokens_per_second") is not None:
-            detail_lines.append(f"TPS={_format_metric_value(record.get('tokens_per_second'))}")
-        if record.get("total_duration_seconds") is not None:
-            detail_lines.append(f"total={_format_metric_value(record.get('total_duration_seconds'), suffix=' s')}")
-        if record.get("response_preview") is not None and not detail_lines:
-            detail_lines.append(str(record.get("response_preview")))
-        if not detail_lines:
-            detail_lines.append("Resultado válido")
-    elif status == "invalid":
-        detail_lines.append(str(record.get("validation_error") or record.get("message") or "JSON inválido"))
-        if payload:
-            detail_width = max(30, min(120, kit.width() - 40))
-            detail_lines.extend(_format_payload_lines(kit, payload, detail_width))
-    else:
-        detail_lines.append(str(record.get("error") or "Error desconocido"))
-
-    if truncate:
-        detail_lines = _cap_detail_lines(detail_lines, max_lines=12)
-    dim = _style_token(kit, "DIM")
-    endc = _style_token(kit, "ENDC")
-    name_width = 24
-    base_prefix = (
-        f"  {badge} "
-        f"{_style_token(kit, 'BOLD')}{image_name:<{name_width}}{endc}"
-        f"  {dim}│{endc}  "
-    )
-    cont_prefix = f"  {' ' * 2}{' ' * name_width}  {dim}│{endc}  "
-    if not detail_lines:
-        detail_lines.append("")
-    formatted_lines = [base_prefix + detail_lines[0]]
-    for line in detail_lines[1:]:
-        formatted_lines.append(cont_prefix + line)
-    return formatted_lines
 
 
 def _build_summary_lines(kit: "UIKit", rows: list[tuple[str, str, str]]) -> list[str]:
@@ -400,7 +413,7 @@ def _build_summary_lines(kit: "UIKit", rows: list[tuple[str, str, str]]) -> list
         return ["  Sin datos."]
     label_width = min(28, max(len(str(name)) for name, _, _ in rows))
     value_width = max(20, min(kit.width() - label_width - 16, 60))
-    lines: list[str] = []
+    lines: list[str] =[]
     dim = _style_token(kit, "DIM")
     endc = _style_token(kit, "ENDC")
     for name, value, status in rows:
@@ -426,12 +439,12 @@ def _build_summary_lines(kit: "UIKit", rows: list[tuple[str, str, str]]) -> list
 
 def _build_named_value_lines(kit: "UIKit", rows: list[tuple[str, object]]) -> list[str]:
     """Convierte pares clave/valor en lineas compactas para paneles finales."""
-    visible_rows = [(str(name), str(value)) for name, value in rows if value not in (None, "")]
+    visible_rows =[(str(name), str(value)) for name, value in rows if value not in (None, "")]
     if not visible_rows:
         return ["  Sin datos."]
     label_width = min(28, max(len(name) for name, _ in visible_rows))
     value_width = max(20, min(kit.width() - label_width - 8, 70))
-    lines: list[str] = []
+    lines: list[str] =[]
     dim = _style_token(kit, "DIM")
     endc = _style_token(kit, "ENDC")
     for name, value in visible_rows:
@@ -484,7 +497,7 @@ def _render_final_sections_screen(
     dynamic_lines: list[str] = [""]
     for title, lines in sections:
         dynamic_lines.append(_section_header(kit, _normalize_final_section_title(title)))
-        dynamic_lines.extend(lines if lines else [f"  {dim}Sin datos.{endc}"])
+        dynamic_lines.extend(lines if lines else[f"  {dim}Sin datos.{endc}"])
         dynamic_lines.append("")
     dynamic_lines.append(f"  {dim}{'─' * max(2, kit.width() - 4)}{endc}")
     panel.render(dynamic_lines, force_full=True)
@@ -497,7 +510,7 @@ def _format_batch_summary_rows(summary: dict[str, object]) -> list[tuple[str, st
     ok_count = _coerce_int(summary.get("ok"))
     invalid_count = _coerce_int(summary.get("invalid"))
     fail_count = _coerce_int(summary.get("fail"))
-    return [
+    return[
         ("Modelo", str(summary.get("model_id") or "N/D"), "OK"),
         ("Esquema", str(summary.get("schema_name") or "N/D"), "OK"),
         ("Muestra", f"{processed} de {sample_size}", "OK"),
@@ -513,7 +526,7 @@ def _format_batch_summary_rows(summary: dict[str, object]) -> list[tuple[str, st
 
 def _format_schema_summary_rows(summary: dict[str, object]) -> list[tuple[str, str, str]]:
     """Prepara filas compactas para el resumen final del schema tester."""
-    return [
+    return[
         ("Modelo", str(summary["model_id"]), "OK"),
         ("Esquema", str(summary["schema_name"]), "OK"),
         ("Muestra", f"{summary['sample_size']} de {summary['total_available']}", "OK"),

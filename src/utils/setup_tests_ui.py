@@ -18,7 +18,7 @@ from .test_dashboards_ui import (
     _format_metric_value,
     _format_schema_summary_rows,
     _make_live_panel,
-    _make_recent_lines,
+    _make_recent_records,
     _rel_probe_path,
     _render_final_sections_screen,
     _render_live_dashboard,
@@ -45,7 +45,7 @@ def list_test_files() -> list[str]:
     test_dir = "tests"
     if not os.path.exists(test_dir):
         return []
-    files = [
+    files =[
         f for f in os.listdir(test_dir)
         if f.startswith("test_") and f.endswith(".py")
     ]
@@ -86,7 +86,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
 
     def _select_schema_reasoning_mode(menu_id: str, subtitle: str) -> bool | str:
         """Muestra selector del modo del schema: con o sin razonamiento."""
-        items = [
+        items =[
             kit.MenuItem(
                 "Con razonamiento",
                 description="Añade el campo reasoning al JSON y obliga a justificar antes del veredicto.",
@@ -117,7 +117,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
         from src.scripts.test_schema import format_schema_menu_description
 
         while True:
-            schema_items = [
+            schema_items =[
                 kit.MenuItem(name, description=format_schema_menu_description(name, cls))
                 for name, cls in SCHEMA_REGISTRY.items()
             ]
@@ -151,7 +151,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
 
     def _select_batch_size() -> int | None | str:
         """Selector del tamaño de muestra para ejecución batch desde la TUI."""
-        items = [
+        items =[
             kit.MenuItem("5 imágenes", description="Smoke rápido para validar el pipeline y el archivo de salida."),
             kit.MenuItem("25 imágenes", description="Muestra intermedia para una primera recogida de resultados."),
             kit.MenuItem("100 imágenes", description="Ejecución amplia para experimentos más serios."),
@@ -176,7 +176,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
 
     def _select_response_inspector_mode() -> tuple[bool, bool] | None:
         """Permite elegir si inspeccionar una respuesta cruda o estructurada."""
-        items = [
+        items =[
             kit.MenuItem(
                 "Cruda (sin schema)",
                 description="Envía una petición multimodal sin response_format para ver la respuesta nativa del SDK.",
@@ -216,7 +216,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             kit.wait("Press any key to return to tests menu...")
             return None
 
-        opts = [
+        opts =[
             kit.MenuItem(tag, description="Usa este modelo para la inferencia.")
             for tag in installed
         ]
@@ -274,7 +274,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                 app.time_module.sleep(1)
                 return
 
-            test_opts = [
+            test_opts =[
                 kit.MenuItem(f, description="Ejecuta solo este archivo de tests con pytest.")
                 for f in files
             ]
@@ -339,8 +339,8 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                 "step",
             )
             try:
-                recent_lines = _make_recent_lines()
-                recent_records: list[dict[str, object]] = []
+                recent_records = _make_recent_records(limit=2)
+                all_records: list[dict[str, object]] = []
                 panel = _make_live_panel(
                     kit,
                     app,
@@ -375,10 +375,8 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                         status_line = f"Estado: preparando ejecución · muestra {total}"
 
                     if event == "image_done" and last_record is not None:
-                        _append_recent_record(kit, recent_lines, last_record)
-                        recent_records.append(dict(last_record))
-                        if len(recent_records) > 5:
-                            recent_records.pop(0)
+                        _append_recent_record(recent_records, last_record)
+                        all_records.append(dict(last_record))
 
                     _render_live_dashboard(
                         kit,
@@ -392,7 +390,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                         status_line=status_line,
                         metrics_line=None,
                         recent_title="Últimas validaciones:",
-                        recent_lines=list(recent_lines),
+                        recent_records=list(recent_records),
                     )
 
                 try:
@@ -424,14 +422,15 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                     subtitle=f"SCHEMA TESTER · {schema_name}",
                     intro=_standard_final_intro(),
                     sections=[
-                        ("Schema utilizado", [f"  {line}" for line in schema_info_lines]),
+                        ("Schema utilizado",[f"  {line}" for line in schema_info_lines]),
                         ("Resumen", _build_summary_lines(kit, summary_rows)),
                         (
                             "Actividad reciente",
                             _build_recent_record_lines(
                                 kit,
-                                recent_records,
+                                all_records,
                                 empty_message="  Sin validaciones recientes.",
+                                truncate=False,
                             ),
                         ),
                     ],
@@ -483,7 +482,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                 "step",
             )
             try:
-                recent_lines = _make_recent_lines()
+                recent_records = _make_recent_records(limit=5)
                 panel = _make_live_panel(
                     kit,
                     app,
@@ -516,7 +515,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                         status_line = f"Estado: preparando ejecución · muestra {total}"
 
                     if event == "image_done" and last_record is not None:
-                        _append_recent_record(kit, recent_lines, last_record)
+                        _append_recent_record(recent_records, last_record)
 
                     _render_live_dashboard(
                         kit,
@@ -533,7 +532,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                         ),
                         coverage_line=f"Cobertura parcial: {coverage_line}" if coverage_line else None,
                         recent_title="Últimas inferencias:",
-                        recent_lines=list(recent_lines),
+                        recent_records=list(recent_records),
                     )
 
                 summary = run_telemetry_batch(
@@ -545,7 +544,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                     on_progress=on_probe_progress,
                 )
                 availability = cast(dict[str, object], summary.get("telemetry_availability") or {})
-                rows = [
+                rows =[
                     ("Modelo", summary["model_id"], "OK"),
                     ("Esquema", summary["schema_name"], "OK"),
                     ("Muestra", str(summary["sample_size"]), "OK"),
@@ -581,11 +580,15 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                 ttft_note = summary.get("notes", {}).get("ttft")
                 tps_note = summary.get("notes", {}).get("tps")
                 coverage_fragments = _coverage_fragments(availability)
+                
+                # Aprovechamos el histórico completo que devuelve la función para la pantalla final
                 detail_lines = _build_recent_record_lines(
                     kit,
                     cast(list[dict[str, object]], summary["records"]),
+                    truncate=False,
                 )
-                note_lines = []
+                
+                note_lines =[]
                 if ttft_note:
                     kit.log(ttft_note, "warning")
                     note_lines.append(f"  TTFT: {ttft_note}")
@@ -601,7 +604,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                     subtitle=f"TELEMETRY PROBE · {schema_name}",
                     intro=_standard_final_intro(),
                     sections=[
-                        ("Resumen", _build_summary_lines(kit, [(str(a), str(b), str(c)) for a, b, c in rows])),
+                        ("Resumen", _build_summary_lines(kit,[(str(a), str(b), str(c)) for a, b, c in rows])),
                         ("Observaciones", note_lines or ["  Sin observaciones adicionales."]),
                         ("Actividad reciente", detail_lines),
                     ],
@@ -634,6 +637,8 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                 continue
             schema_name, _schema_cls = schema_variant
 
+            # El formato de salida es JSONL por defecto; no pedimos selección.
+
             max_images = _select_batch_size()
             if max_images == "BACK":
                 continue
@@ -643,17 +648,16 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             app.print_banner()
             kit.subtitle(f"BATCH RUNNER · {schema_name}")
             kit.log(
-                "Exportando resultados incrementales en JSONL desde data/...",
+                "Exportando resultados incrementales en JSONL desde data...",
                 "step",
             )
             try:
-                recent_lines = _make_recent_lines()
-                recent_records: list[dict[str, object]] = []
+                recent_records = _make_recent_records(limit=5)
                 panel = _make_live_panel(
                     kit,
                     app,
                     subtitle=f"BATCH RUNNER · {schema_name}",
-                    intro="Exportando resultados incrementales en JSONL desde data/...",
+                    intro="Exportando resultados incrementales en JSONL desde data...",
                 )
 
                 def on_batch_progress(payload: dict[str, object]) -> None:
@@ -680,10 +684,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                         status_line = f"Estado: preparando ejecución · muestra {total}"
 
                     if event == "image_done" and last_record is not None:
-                        _append_recent_record(kit, recent_lines, last_record)
-                        recent_records.append(dict(last_record))
-                        if len(recent_records) > 5:
-                            recent_records.pop(0)
+                        _append_recent_record(recent_records, last_record)
 
                     _render_live_dashboard(
                         kit,
@@ -702,7 +703,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                             f"latencia={_format_metric_value(cast(dict[str, object], summary.get('total_duration') or {}).get('avg'), suffix=' s')}"
                         ),
                         recent_title="Últimos registros exportados:",
-                        recent_lines=list(recent_lines),
+                        recent_records=list(recent_records),
                     )
 
                 try:
@@ -731,14 +732,6 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                     intro=_standard_final_intro(),
                     sections=[
                         ("Resumen", _build_summary_lines(kit, _format_batch_summary_rows(summary))),
-                        (
-                            "Actividad reciente",
-                            _build_recent_record_lines(
-                                kit,
-                                recent_records,
-                                empty_message="  Sin registros recientes.",
-                            ),
-                        ),
                     ],
                 )
                 level = "success" if summary["fail"] == 0 and summary["invalid"] == 0 else "warning"
@@ -793,10 +786,10 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                     )
                 )
                 output_path = save_inspection_payload(payload)
-                sections = []
+                sections =[]
                 for title, rows in build_summary_sections(payload):
                     sections.append((title, _build_named_value_lines(kit, rows)))
-                sections.append(("Salida", [f"  Archivo guardado en: {output_path}"]))
+                sections.append(("Salida",[f"  Archivo guardado en: {output_path}"]))
                 _render_final_sections_screen(
                     kit,
                     app,
@@ -820,15 +813,15 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                 return
 
             try:
-                from src.scripts.test_inference import ensure_test_images, run_smoke_test
+                from src.scripts.test_inference import ensure_test_images, run_smoke_test, main as smoke_test_main
             except Exception as error:
                 kit.log(f"Could not import smoke test script: {error}", "error")
                 kit.log("Smoke test failed (Exit Code 1). Check output above.", "error")
                 kit.wait("Press any key to return to model selector...")
                 continue
 
-            recent_lines = _make_recent_lines()
-            recent_records: list[dict[str, object]] = []
+            recent_records = _make_recent_records(limit=5)
+            all_smoke_records: list[dict[str, object]] = []
             panel = _make_live_panel(
                 kit,
                 app,
@@ -871,20 +864,18 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
 
                 if event == "case_done" and record is not None:
                     record_dict = cast(dict[str, object], record)
-                    payload = record_dict.get("payload")
-                    if payload is None and record_dict.get("response_preview") is not None:
-                        payload = {"preview": record_dict.get("response_preview")}
+                    payload_data = record_dict.get("payload")
+                    if payload_data is None and record_dict.get("response_preview") is not None:
+                        payload_data = {"preview": record_dict.get("response_preview")}
                     recent_record = {
                         "image_name": str(record_dict.get("case_id") or record_dict.get("label") or "caso"),
                         "status": record_dict.get("status") or "unknown",
-                        "payload": payload,
+                        "payload": payload_data,
                         "validation_error": record_dict.get("message"),
                         "error": record_dict.get("error"),
                     }
-                    _append_recent_record(kit, recent_lines, recent_record)
-                    recent_records.append(recent_record)
-                    if len(recent_records) > 5:
-                        recent_records.pop(0)
+                    _append_recent_record(recent_records, recent_record)
+                    all_smoke_records.append(dict(recent_record))
 
                 _render_live_dashboard(
                     kit,
@@ -902,17 +893,23 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                         else None
                     ),
                     recent_title="Últimos casos:",
-                    recent_lines=list(recent_lines),
+                    recent_records=list(recent_records),
                 )
 
             kit.clear()
             result_code = 1
             try:
-                result_code = run_smoke_test(
-                    model_tag,
-                    ensure_test_images(),
-                    on_progress=on_smoke_progress,
-                )
+                try:
+                    result_code = run_smoke_test(
+                        model_tag,
+                        ensure_test_images(),
+                        on_progress=on_smoke_progress,
+                    )
+                except TypeError as error:
+                    if "on_progress" in str(error):
+                        raise
+                    result_code = int(smoke_test_main(model_path=model_tag))
+
                 _render_final_sections_screen(
                     kit,
                     app,
@@ -922,8 +919,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                         (
                             "Resumen",
                             _build_summary_lines(
-                                kit,
-                                [
+                                kit,[
                                     ("Modelo", str(smoke_summary.get("model_tag") or model_tag), "OK"),
                                     (
                                         "Casos procesados",
@@ -948,8 +944,9 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                             "Actividad reciente",
                             _build_recent_record_lines(
                                 kit,
-                                recent_records,
+                                all_smoke_records,
                                 empty_message="  Sin registros.",
+                                truncate=False,
                             ),
                         ),
                     ],
@@ -964,7 +961,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
     # Menú principal de tests
     # ------------------------------------------------------------------
 
-    options = [
+    options =[
         kit.MenuItem(
             " Manage/Pull LM Studio Models...",
             lambda: setup_models_ui.manage_models_menu_ui(kit, app),

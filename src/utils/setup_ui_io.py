@@ -267,8 +267,11 @@ def compute_render_decision(
     has_wrapped_lines = any(_visual_rows(line, terminal_width) > 1 for line in dynamic_lines)
     current_dynamic_rows = sum(_visual_rows(line, terminal_width) for line in dynamic_lines)
 
-    effective_force_full = force_full or not static_rendered or width_changed or has_wrapped_lines
-    use_incremental_frame = not has_wrapped_lines
+    # Si el ancho cambia, forzamos repaint completo (hard clear) para evitar basura en pantalla
+    effective_force_full = force_full or not static_rendered or width_changed
+    
+    # Solo usamos incremental si el ancho NO ha cambiado y NO forzamos repaint completo
+    use_incremental_frame = not effective_force_full
 
     return {
         "width_changed": width_changed,
@@ -308,9 +311,8 @@ def should_repaint_static(
         return True
     if not static_rendered:
         return True
+    # Si cambió el tamaño, SIEMPRE repintamos todo para limpiar la basura
     if force_full or width_changed or height_changed or signature_changed:
-        return True
-    if has_wrapped_lines:
         return True
     return False
 
@@ -335,12 +337,15 @@ def paint_dynamic_lines(
         int: Nuevo valor de `prev_dynamic_visual_rows`.
     """
     if use_incremental_frame and prev_dynamic_visual_rows > 0:
+        # Movemos el cursor hacia arriba
         print(f"\033[{prev_dynamic_visual_rows}F", end="")
 
     for line in dynamic_lines:
+        # Limpiamos la línea entera antes de pintar (crucial si el ancho ha cambiado ligeramente)
         print(f"\033[2K{line}")
 
     if use_incremental_frame and prev_dynamic_visual_rows > current_dynamic_rows:
+        # Si el frame anterior era más largo, limpiamos las líneas sobrantes de abajo
         for _ in range(prev_dynamic_visual_rows - current_dynamic_rows):
             print("\033[2K")
 
@@ -404,16 +409,21 @@ class IncrementalPanelRenderer:
         effective_force_full = bool(decision["effective_force_full"])
         use_incremental_frame = bool(decision["use_incremental_frame"])
 
+        # Si el renderer detecta que hay que limpiar la pantalla (por cambio de ancho, etc)
         if should_repaint_static(
             use_incremental=True,
             static_rendered=self.static_rendered,
             force_full=effective_force_full,
+            width_changed=bool(decision["width_changed"]), # AÑADIDO: Pasamos el cambio de ancho
             has_wrapped_lines=has_wrapped_lines,
         ):
             self.clear_screen_fn()
             self.render_static_fn()
             self.static_rendered = True
+            # Como acabamos de limpiar la pantalla, no hay filas previas que sobrescribir
             self.prev_dynamic_visual_rows = 0
+            # Forzamos a que pinte secuencialmente sin subir el cursor
+            use_incremental_frame = False
 
         self.prev_dynamic_visual_rows = paint_dynamic_lines(
             dynamic_lines=dynamic_lines,

@@ -9,7 +9,7 @@ import statistics
 import sys
 from pathlib import Path
 from pprint import pformat
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _PROJECT_ROOT not in sys.path:
@@ -128,8 +128,10 @@ def build_cli_progress_callback(*, stream: Any = None) -> Callable[[dict[str, An
         total = int(payload.get("total") or 0)
         image_path = payload.get("image_path")
         image_name = Path(str(image_path)).name if image_path else "N/D"
-        record = payload.get("record") if isinstance(payload.get("record"), dict) else None
-        summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+        record_payload = payload.get("record")
+        record = cast(dict[str, Any], record_payload) if isinstance(record_payload, dict) else None
+        summary_payload = payload.get("summary")
+        summary = cast(dict[str, Any], summary_payload) if isinstance(summary_payload, dict) else {}
 
         if event == "start":
             print(
@@ -162,7 +164,8 @@ def build_cli_progress_callback(*, stream: Any = None) -> Callable[[dict[str, An
             return
 
         if event == "complete":
-            availability = summary.get("telemetry_availability") if isinstance(summary.get("telemetry_availability"), dict) else {}
+            availability_payload = summary.get("telemetry_availability")
+            availability = cast(dict[str, Any], availability_payload) if isinstance(availability_payload, dict) else {}
             ok_records = int(availability.get("ok_records") or 0)
             print(
                 (
@@ -180,8 +183,10 @@ def build_cli_progress_callback(*, stream: Any = None) -> Callable[[dict[str, An
 def render_telemetry_report(summary: dict[str, Any], *, stream: Any = None) -> None:
     """Renderiza un informe final más legible para CLI."""
     target = stream or sys.stdout
-    static_info = summary.get("static_model_info") or {}
-    availability = summary.get("telemetry_availability") or {}
+    static_info_payload = summary.get("static_model_info")
+    static_info = cast(dict[str, Any], static_info_payload) if isinstance(static_info_payload, dict) else {}
+    availability_payload = summary.get("telemetry_availability")
+    availability = cast(dict[str, Any], availability_payload) if isinstance(availability_payload, dict) else {}
     ok_records = int(availability.get("ok_records") or 0)
 
     _print_section("TELEMETRY PROBE", stream=target)
@@ -194,8 +199,6 @@ def render_telemetry_report(summary: dict[str, Any], *, stream: Any = None) -> N
             ("Errores", summary.get("fail")),
             ("Modelo resuelto", static_info.get("resolved_model_id")),
             ("Arquitectura", static_info.get("architecture") or "N/D"),
-            ("Quantización", static_info.get("quantization") or "N/D"),
-            ("Parámetros", static_info.get("total_params") or "N/D"),
             ("Stop reason", static_info.get("stop_reason") or "N/D"),
         ],
         stream=target,
@@ -205,7 +208,6 @@ def render_telemetry_report(summary: dict[str, Any], *, stream: Any = None) -> N
     _print_rows(
         [
             ("TTFT", _format_metric_window(summary.get("ttft") or {}, suffix=" s")),
-            ("Prompt t/s", _format_metric_window(summary.get("prompt_tokens_per_second") or {})),
             ("TPS", _format_metric_window(summary.get("tps") or {})),
             ("Generación", _format_metric_window(summary.get("generation_duration") or {}, suffix=" s")),
             ("Latencia total", _format_metric_window(summary.get("total_duration") or {}, suffix=" s")),
@@ -220,7 +222,6 @@ def render_telemetry_report(summary: dict[str, Any], *, stream: Any = None) -> N
             ("Output tokens", _format_metric_window(summary.get("completion_tokens") or {})),
             ("Total tokens", _format_metric_window(summary.get("total_tokens") or {})),
             ("Reasoning JSON", _format_metric_window(summary.get("reasoning_tokens") or {})),
-            ("VRAM (MB)", _format_metric_window(summary.get("vram_usage_mb") or {})),
             ("GPU layers", _format_metric_window(summary.get("gpu_layers") or {})),
         ],
         stream=target,
@@ -230,16 +231,16 @@ def render_telemetry_report(summary: dict[str, Any], *, stream: Any = None) -> N
     _print_rows(
         [
             ("TTFT", f"{availability.get('ttft_records', 0)}/{ok_records}"),
-            ("Prompt t/s", f"{availability.get('prompt_tps_records', 0)}/{ok_records}"),
             ("TPS", f"{availability.get('tps_records', 0)}/{ok_records}"),
-            ("VRAM", f"{availability.get('vram_records', 0)}/{ok_records}"),
             ("GPU layers", f"{availability.get('gpu_layer_records', 0)}/{ok_records}"),
         ],
         stream=target,
     )
 
-    ttft_note = summary.get("notes", {}).get("ttft")
-    tps_note = summary.get("notes", {}).get("tps")
+    notes_payload = summary.get("notes")
+    notes = cast(dict[str, Any], notes_payload) if isinstance(notes_payload, dict) else {}
+    ttft_note = notes.get("ttft")
+    tps_note = notes.get("tps")
     if ttft_note or tps_note:
         _print_section("OBSERVACIONES", stream=target)
         if ttft_note:
@@ -261,7 +262,6 @@ def render_telemetry_report(summary: dict[str, Any], *, stream: Any = None) -> N
             detail = (
                 f"TTFT={format_metric(record.get('ttft_seconds'), suffix=' s')} | "
                 f"TPS={format_metric(record.get('tokens_per_second'))} | "
-                f"prompt_t/s={format_metric(record.get('prompt_tokens_per_second'))} | "
                 f"total={format_metric(record.get('total_duration_seconds'), suffix=' s')}"
             )
         else:
@@ -297,11 +297,9 @@ def _build_telemetry_summary(
 ) -> dict[str, Any]:
     """Construye un resumen parcial o final a partir de los registros acumulados."""
     ttft_values = [record["ttft_seconds"] for record in records if record.get("status") == "ok" and isinstance(record.get("ttft_seconds"), (int, float))]
-    prompt_tps_values = [record["prompt_tokens_per_second"] for record in records if record.get("status") == "ok" and isinstance(record.get("prompt_tokens_per_second"), (int, float))]
     tps_values = [record["tokens_per_second"] for record in records if record.get("status") == "ok" and isinstance(record.get("tokens_per_second"), (int, float))]
     generation_values = [record["generation_duration_seconds"] for record in records if record.get("status") == "ok" and isinstance(record.get("generation_duration_seconds"), (int, float))]
     reasoning_values = [record["reasoning_tokens"] for record in records if record.get("status") == "ok" and isinstance(record.get("reasoning_tokens"), (int, float))]
-    vram_values = [record["vram_usage_mb"] for record in records if record.get("status") == "ok" and isinstance(record.get("vram_usage_mb"), (int, float))]
     gpu_layer_values = [record["gpu_layers"] for record in records if record.get("status") == "ok" and isinstance(record.get("gpu_layers"), (int, float))]
     prompt_token_values = [record["prompt_tokens"] for record in records if record.get("status") == "ok" and isinstance(record.get("prompt_tokens"), (int, float))]
     completion_token_values = [record["completion_tokens"] for record in records if record.get("status") == "ok" and isinstance(record.get("completion_tokens"), (int, float))]
@@ -313,9 +311,9 @@ def _build_telemetry_summary(
     if ok > 0 and not ttft_values:
         ttft_note = "LM Studio no devolvio TTFT en response.stats; el probe no lo estima a partir de la latencia total."
     if ok > 0 and not tps_values:
-        tps_note = "LM Studio no devolvio predicted_tokens_per_sec en response.stats; TPS no disponible en esta ejecucion."
+        tps_note = "LM Studio no devolvio tokens_per_second en response.stats; TPS no disponible en esta ejecucion."
 
-    return {
+    summary = {
         "model_id": model_id,
         "schema_name": schema_name,
         "sample_size": sample_size,
@@ -323,11 +321,9 @@ def _build_telemetry_summary(
         "fail": fail,
         "records": list(records),
         "ttft": summarize_numeric(ttft_values),
-        "prompt_tokens_per_second": summarize_numeric(prompt_tps_values),
         "tps": summarize_numeric(tps_values),
         "generation_duration": summarize_numeric(generation_values),
         "reasoning_tokens": summarize_numeric(reasoning_values),
-        "vram_usage_mb": summarize_numeric(vram_values),
         "gpu_layers": summarize_numeric(gpu_layer_values),
         "prompt_tokens": summarize_numeric(prompt_token_values),
         "completion_tokens": summarize_numeric(completion_token_values),
@@ -336,17 +332,13 @@ def _build_telemetry_summary(
         "static_model_info": {
             "resolved_model_id": first_available_value(records, "model_id") or model_id,
             "architecture": first_available_value(records, "architecture"),
-            "quantization": first_available_value(records, "quantization"),
-            "total_params": first_available_value(records, "total_params"),
             "stop_reason": first_available_value(records, "stop_reason"),
         },
         "telemetry_availability": {
             "ttft_records": len(ttft_values),
-            "prompt_tps_records": len(prompt_tps_values),
             "tps_records": len(tps_values),
             "generation_records": len(generation_values),
             "reasoning_records": len(reasoning_values),
-            "vram_records": len(vram_values),
             "gpu_layer_records": len(gpu_layer_values),
             "prompt_token_records": len(prompt_token_values),
             "completion_token_records": len(completion_token_values),
@@ -357,10 +349,10 @@ def _build_telemetry_summary(
         "notes": {
             "ttft": ttft_note,
             "tps": tps_note,
-            "resources": None,
         },
         "prompt": prompt,
     }
+    return summary
 
 
 def run_telemetry_batch(
@@ -437,15 +429,11 @@ def run_telemetry_batch(
                         "status": "ok",
                         "ttft_seconds": telemetry.ttft_seconds,
                         "generation_duration_seconds": telemetry.generation_duration_seconds,
-                        "prompt_tokens_per_second": telemetry.prompt_tokens_per_second,
                         "tokens_per_second": telemetry.tokens_per_second,
                         "reasoning_tokens": telemetry.reasoning_tokens,
                         "stop_reason": telemetry.stop_reason,
                         "model_id": telemetry.model_id,
-                        "vram_usage_mb": telemetry.vram_usage_mb,
-                        "total_params": telemetry.total_params,
                         "architecture": telemetry.architecture,
-                        "quantization": telemetry.quantization,
                         "gpu_layers": telemetry.gpu_layers,
                         "prompt_tokens": telemetry.prompt_tokens,
                         "completion_tokens": telemetry.completion_tokens,

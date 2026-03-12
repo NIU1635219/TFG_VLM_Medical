@@ -9,7 +9,7 @@ import time
 import unicodedata
 import urllib.request
 import urllib.error
-from typing import Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 try:
     import lmstudio as lms
@@ -367,7 +367,67 @@ def validate_response(label: str, response_payload: str | Dict[str, object] | Ge
     )
 
 
-def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
+def _summarize_smoke_response(response_payload: str | Dict[str, object] | GenericObjectDetection) -> str:
+    """Resume la salida del modelo para mostrarla en UI sin volcar JSON completo."""
+    try:
+        parsed = parse_structured_response(response_payload)
+    except Exception:
+        text = str(response_payload).replace("\n", " ").strip()
+        return text[:117] + "..." if len(text) > 120 else text
+
+    parts: List[str] = []
+    if "object_detected" in parsed:
+        parts.append(f"objeto={parsed['object_detected']}")
+    if "confidence_score" in parsed:
+        parts.append(f"conf={parsed['confidence_score']}")
+    if "polyp_detected" in parsed:
+        parts.append(f"polipo={parsed['polyp_detected']}")
+    if not parts and "justification" in parsed:
+        parts.append(str(parsed["justification"]))
+    return " | ".join(parts) if parts else "respuesta estructurada disponible"
+
+
+def _extract_smoke_payload(response_payload: Any) -> object:
+    """Extrae un payload serializable para dashboards con salida multilinea."""
+    if response_payload is None:
+        return None
+    model_dump = getattr(response_payload, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return model_dump()
+        except Exception:
+            return str(response_payload)
+    if isinstance(response_payload, (dict, list, str, int, float, bool)):
+        return response_payload
+    return str(response_payload)
+
+
+def _build_smoke_summary(
+    *,
+    model_tag: str,
+    total_cases: int,
+    processed: int,
+    passed: int,
+    failed: int,
+    preload_seconds: float | None = None,
+) -> Dict[str, object]:
+    """Construye un resumen parcial o final del smoke test."""
+    return {
+        "model_tag": model_tag,
+        "total_cases": total_cases,
+        "processed": processed,
+        "passed": passed,
+        "failed": failed,
+        "preload_seconds": preload_seconds,
+    }
+
+
+def run_smoke_test(
+    model_tag: str,
+    test_cases: List[Dict[str, str]],
+    *,
+    on_progress: Callable[[Dict[str, Any]], None] | None = None,
+) -> int:
     """
     Ejecuta un test de humo para validar que el modelo puede procesar imágenes.
     
@@ -378,50 +438,138 @@ def run_smoke_test(model_tag: str, test_cases: List[Dict[str, str]]) -> int:
     Returns:
         int: Cantidad de casos de prueba exitosos.
     """
-    print("\n=== TAREA 4: SMOKE TEST VLM (LM STUDIO) ===")
-    print(f"👉 Modelo objetivo: {model_tag}")
-
-    print("\n1. Inicializando VLMLoader...")
+    if on_progress is None:
+        print("\n=== TAREA 4: SMOKE TEST VLM (LM STUDIO) ===")
+        print(f"👉 Modelo objetivo: {model_tag}")
+        print("\n1. Inicializando VLMLoader...")
     loader = VLMLoader(model_path=model_tag, verbose=True)
 
-    print("2. Validando modelo en LM Studio...")
+    processed = 0
+    passed = 0
+    failed = 0
+    preload_seconds: float | None = None
+
+    def build_summary() -> Dict[str, object]:
+        return _build_smoke_summary(
+            model_tag=model_tag,
+            total_cases=len(test_cases),
+            processed=processed,
+            passed=passed,
+            failed=failed,
+            preload_seconds=preload_seconds,
+        )
+
+    def emit_progress(
+        event: str,
+        *,
+        index: int = 0,
+        case: Dict[str, str] | None = None,
+        status: str | None = None,
+        record: Dict[str, object] | None = None,
+    ) -> None:
+        if on_progress is None:
+            return
+        on_progress(
+            {
+                "event": event,
+                "index": index,
+                "total": len(test_cases),
+                "case": dict(case) if case is not None else None,
+                "status": status,
+                "record": dict(record) if record is not None else None,
+                "summary": build_summary(),
+            }
+        )
+
+    emit_progress("start")
+
+    if on_progress is None:
+        print("2. Validando modelo en LM Studio...")
     start_time = time.time()
     loader.preload_model()
-    print(f"✅ Modelo precargado en {time.time() - start_time:.2f} s")
+    preload_seconds = time.time() - start_time
+    if on_progress is None:
+        print(f"✅ Modelo precargado en {preload_seconds:.2f} s")
+    emit_progress("model_ready", status="ready")
 
-    print(f"3. Ejecutando inferencia para {len(test_cases)} imágenes de prueba...")
+    if on_progress is None:
+        print(f"3. Ejecutando inferencia para {len(test_cases)} imágenes de prueba...")
     all_passed = True
 
     try:
-        for case in test_cases:
+        for index, case in enumerate(test_cases, start=1):
             label = case["label"]
             image_path = case["path"]
             case_id = case["id"]
 
-            print(f"\n--- Caso: {case_id.upper()} ({label.upper()}) ---")
-            print(f"Imagen: {image_path}")
-            response = loader.inference(image_path, PROMPT)
-            print("Respuesta estructurada del modelo:")
-            if isinstance(response, GenericObjectDetection):
-                print(response.model_dump_json(indent=2, ensure_ascii=False))
-            else:
-                print(response)
+            emit_progress("case_start", index=index, case=case, status="running")
 
-            valid, message = validate_response(label, response)
-            print(message)
-            if not valid:
-                all_passed = False
+            if on_progress is None:
+                print(f"\n--- Caso: {case_id.upper()} ({label.upper()}) ---")
+                print(f"Imagen: {image_path}")
+            try:
+                response = loader.inference(image_path, PROMPT)
+                if on_progress is None:
+                    print("Respuesta estructurada del modelo:")
+                    if isinstance(response, GenericObjectDetection):
+                        print(response.model_dump_json(indent=2, ensure_ascii=False))
+                    else:
+                        print(response)
+
+                valid, message = validate_response(label, response)
+                if on_progress is None:
+                    print(message)
+                processed += 1
+                if valid:
+                    passed += 1
+                else:
+                    failed += 1
+                    all_passed = False
+                emit_progress(
+                    "case_done",
+                    index=index,
+                    case=case,
+                    status="ok" if valid else "invalid",
+                    record={
+                        "case_id": case_id,
+                        "label": label,
+                        "image_path": image_path,
+                        "status": "ok" if valid else "invalid",
+                        "message": message,
+                        "payload": _extract_smoke_payload(response),
+                        "response_preview": _summarize_smoke_response(response),
+                    },
+                )
+            except Exception as error:
+                emit_progress(
+                    "case_done",
+                    index=index,
+                    case=case,
+                    status="error",
+                    record={
+                        "case_id": case_id,
+                        "label": label,
+                        "image_path": image_path,
+                        "status": "error",
+                        "error": str(error),
+                    },
+                )
+                raise
     finally:
         try:
             loader.unload_model()
         except Exception as unload_error:
-            print(f"⚠️ No se pudo liberar el modelo: {unload_error}")
+            if on_progress is None:
+                print(f"⚠️ No se pudo liberar el modelo: {unload_error}")
 
+    emit_progress("complete", index=processed, status="complete")
     if all_passed:
-        print("\n✅ TEST COMPLETADO CON ÉXITO (múltiples imágenes validadas).")
+        if on_progress is None:
+            print("\n✅ TEST COMPLETADO CON ÉXITO (múltiples imágenes validadas).")
         return 0
 
-    print("\n❌ TEST FALLIDO: al menos una validación no pasó.")
+    if on_progress is None:
+        print("\n❌ TEST FALLIDO: al menos una validación no pasó.")
     return 1
 
 

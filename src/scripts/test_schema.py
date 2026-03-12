@@ -11,6 +11,7 @@ import json
 import os
 import random
 import sys
+from typing import Any, Callable
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _PROJECT_ROOT not in sys.path:
@@ -257,6 +258,30 @@ def _print_result(image_path: str, result: BaseModel, idx: int, total: int) -> N
     print(json.dumps(result.model_dump(), indent=4, ensure_ascii=False))
 
 
+def _build_schema_summary(
+    *,
+    model_id: str,
+    schema_name: str,
+    prompt: str,
+    sample_size: int,
+    total_available: int,
+    ok: int,
+    fail: int,
+    invalid: int,
+) -> dict[str, Any]:
+    """Construye un resumen parcial o final del schema tester."""
+    return {
+        "model_id": model_id,
+        "schema_name": schema_name,
+        "prompt": prompt,
+        "sample_size": sample_size,
+        "total_available": total_available,
+        "ok": ok,
+        "fail": fail,
+        "invalid": invalid,
+    }
+
+
 def run_batch(
     model_id: str,
     schema_name: str,
@@ -264,6 +289,7 @@ def run_batch(
     images: list[str],
     *,
     max_images: int = MAX_SAMPLE_IMAGES,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[int, int, int]:
     """
     Ejecuta inferencia sobre una muestra aleatoria de imágenes y valida los
@@ -288,50 +314,142 @@ def run_batch(
     if len(images) > max_images:
         sample = random.sample(images, max_images)
 
-    print(f"\nModelo  : {model_id}")
-    print(f"Esquema : {schema_name}")
-    print(f"Imágenes: {len(sample)} (de {len(images)} disponibles)")
-    print(f"Prompt  : {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
-    print(f"Modo    : {'con razonamiento' if schema_uses_reasoning(schema_cls) else 'sin razonamiento'}")
-    print("-" * 60)
+    if on_progress is None:
+        print(f"\nModelo  : {model_id}")
+        print(f"Esquema : {schema_name}")
+        print(f"Imágenes: {len(sample)} (de {len(images)} disponibles)")
+        print(f"Prompt  : {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
+        print(f"Modo    : {'con razonamiento' if schema_uses_reasoning(schema_cls) else 'sin razonamiento'}")
+        print("-" * 60)
 
     loader = VLMLoader(model_path=model_id, verbose=False)
     ok = 0
     fail = 0
     invalid = 0
 
+    def build_summary() -> dict[str, Any]:
+        return _build_schema_summary(
+            model_id=model_id,
+            schema_name=schema_name,
+            prompt=prompt,
+            sample_size=len(sample),
+            total_available=len(images),
+            ok=ok,
+            fail=fail,
+            invalid=invalid,
+        )
+
+    def emit_progress(
+        event: str,
+        *,
+        index: int = 0,
+        image_path: str | None = None,
+        status: str | None = None,
+        record: dict[str, Any] | None = None,
+    ) -> None:
+        if on_progress is None:
+            return
+        on_progress(
+            {
+                "event": event,
+                "index": index,
+                "total": len(sample),
+                "image_path": image_path,
+                "status": status,
+                "record": dict(record) if record is not None else None,
+                "summary": build_summary(),
+            }
+        )
+
+    emit_progress("start")
+
     for i, img_path in enumerate(sample, start=1):
         try:
             rel = os.path.relpath(img_path, _PROJECT_ROOT)
         except ValueError:
             rel = img_path
-        print(f"\n  ▶ [{i}/{len(sample)}] {rel}")
+        if on_progress is None:
+            print(f"\n  ▶ [{i}/{len(sample)}] {rel}")
+        emit_progress("image_start", index=i, image_path=img_path, status="running")
         try:
             result = loader.inference(image_path=img_path, prompt=prompt, schema=schema_cls)
-            _print_result(img_path, result, i, len(sample))
+            if on_progress is None:
+                _print_result(img_path, result, i, len(sample))
             valid, reason = _validate_result(result, schema_cls)
+            payload = result.model_dump()
             if valid:
-                print("  ✔ Schema OK")
                 ok += 1
+                status = "ok"
+                record = {
+                    "image_path": img_path,
+                    "image_name": os.path.basename(img_path),
+                    "status": status,
+                    "payload": payload,
+                }
+                if on_progress is None:
+                    print("  ✔ Schema OK")
             else:
-                print(f"  ⚠ Schema INVALID: {reason}")
                 invalid += 1
+                status = "invalid"
+                record = {
+                    "image_path": img_path,
+                    "image_name": os.path.basename(img_path),
+                    "status": status,
+                    "payload": payload,
+                    "validation_error": reason,
+                }
+                if on_progress is None:
+                    print(f"  ⚠ Schema INVALID: {reason}")
         except FileNotFoundError:
-            print("  ✗ Imagen no encontrada")
             fail += 1
+            status = "error"
+            record = {
+                "image_path": img_path,
+                "image_name": os.path.basename(img_path),
+                "status": status,
+                "error": "Imagen no encontrada",
+            }
+            if on_progress is None:
+                print("  ✗ Imagen no encontrada")
         except RuntimeError as exc:
-            print(f"  ✗ Error: {exc}")
             fail += 1
+            status = "error"
+            record = {
+                "image_path": img_path,
+                "image_name": os.path.basename(img_path),
+                "status": status,
+                "error": str(exc),
+            }
+            if on_progress is None:
+                print(f"  ✗ Error: {exc}")
         except Exception as exc:
-            print(f"  ✗ {type(exc).__name__}: {exc}")
             fail += 1
+            status = "error"
+            record = {
+                "image_path": img_path,
+                "image_name": os.path.basename(img_path),
+                "status": status,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            if on_progress is None:
+                print(f"  ✗ {type(exc).__name__}: {exc}")
+
+        emit_progress(
+            "image_done",
+            index=i,
+            image_path=img_path,
+            status=status,
+            record=record,
+        )
 
     try:
         loader.unload_model()
     except Exception:
         pass
 
-    print("\n" + "-" * 60)
-    print(f"  ✔ {ok} válidas  ⚠ {invalid} inválidas  ✗ {fail} errores  (de {len(sample)} imágenes)\n")
+    if on_progress is None:
+        print("\n" + "-" * 60)
+        print(f"  ✔ {ok} válidas  ⚠ {invalid} inválidas  ✗ {fail} errores  (de {len(sample)} imágenes)\n")
+    emit_progress("complete", index=len(sample), status="complete")
     return ok, fail, invalid
 

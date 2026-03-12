@@ -182,6 +182,26 @@ def collect_public_attributes(value: Any) -> dict[str, Any]:
     return attrs
 
 
+def prune_absent_response_fields(value: Any) -> Any:
+    """Elimina claves ausentes serializadas como null en payloads de inspeccion."""
+    if isinstance(value, Mapping):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            pruned = prune_absent_response_fields(item)
+            if pruned is None:
+                continue
+            if isinstance(pruned, Mapping) and not pruned:
+                continue
+            if isinstance(pruned, list) and not pruned:
+                continue
+            cleaned[str(key)] = pruned
+        return cleaned
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        items = [prune_absent_response_fields(item) for item in value]
+        return [item for item in items if item is not None]
+    return value
+
+
 def default_output_path(model_id: str) -> str:
     """Construye una ruta por defecto para guardar la inspección."""
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -240,16 +260,78 @@ def print_section(title: str) -> None:
     print(divider)
 
 
-def print_rows(rows: list[tuple[str, Any]]) -> bool:
+def print_rows(rows: list[tuple[str, Any]], kit_for_json: Any = None) -> bool:
     """Imprime filas clave/valor con alineación simple, omitiendo valores vacíos."""
     visible_rows = [(label, value) for label, value in rows if has_display_value(value)]
     if not visible_rows:
         return False
     label_width = max((len(label) for label, _ in visible_rows), default=10)
+
     for label, value in visible_rows:
-        print(f"{label:<{label_width}} : {truncate_text(value)}")
+        if isinstance(value, (dict, list)):
+            print(f"{label:<{label_width}} :")
+        else:
+            print(f"{label:<{label_width}} : {truncate_text(value)}")
     print()
     return True
+
+
+def build_summary_sections(payload: dict[str, Any]) -> list[tuple[str, list[tuple[str, Any]]]]:
+    """Extrae secciones y filas visibles para CLI o TUI sin duplicar lógica."""
+    request = payload["request"]
+    response = payload["response"]
+    stats = response.get("stats") or {}
+    model_info = response.get("model_info") or {}
+    parsed = response.get("parsed") or {}
+
+    # Prioridad: Si hay datos parseados, evitamos duplicar atributos y texto crudo
+    has_parsed = isinstance(parsed, dict) and any(has_display_value(v) for v in parsed.values())
+
+    sections: list[tuple[str, list[tuple[str, Any]]]] = [
+        (
+            "LM STUDIO RESPONSE INSPECTOR",
+            [
+                ("Model", request.get("model_id")),
+                ("Image", request.get("image_path")),
+                ("Schema", request.get("schema_name")),
+                ("Response type", response.get("python_type")),
+                ("Structured", response.get("structured")),
+            ],
+        ),
+    ]
+
+    # Atributos del modelo (SDK Info) - Simplificado si hay parseo
+    attr_rows = [
+        ("Model key", model_info.get("model_key")),
+        ("Architecture", model_info.get("architecture")),
+        ("Params", model_info.get("params_string")),
+        ("Display name", model_info.get("display_name")),
+    ]
+    if not has_parsed:
+        # Solo mostrar atributos crudos y preview si no hay salida estructurada útil
+        attr_rows.insert(0, ("Public attrs", ", ".join(response.get("public_attributes", {}).keys()) or None))
+        attr_rows.append(("Text preview", response.get("text_extracted")))
+
+    sections.append(("SDK ATTRIBUTES", attr_rows))
+
+    stats_rows = [
+        ("stop_reason", stats.get("stop_reason")),
+        ("tokens_per_second", stats.get("tokens_per_second")),
+        ("time_to_first_token_sec", stats.get("time_to_first_token_sec")),
+        ("prompt_tokens_count", stats.get("prompt_tokens_count")),
+        ("predicted_tokens_count", stats.get("predicted_tokens_count")),
+        ("total_tokens_count", stats.get("total_tokens_count")),
+        ("num_gpu_layers", stats.get("num_gpu_layers")),
+    ]
+    if any(has_display_value(value) for _, value in stats_rows):
+        sections.append(("SDK STATS", stats_rows))
+
+    if has_parsed:
+        sections.append(("PARSED PAYLOAD", [(key, value) for key, value in parsed.items()]))
+    elif has_display_value(parsed):
+        sections.append(("PARSED PAYLOAD", [("parsed", parsed)]))
+
+    return sections
 
 
 def respond_without_schema(model_handle: Any, payload: Any, temperature: float) -> Any:
@@ -326,8 +408,19 @@ def run_inspection(args: argparse.Namespace) -> dict[str, Any]:
         parsed_payload = safe_getattr(response, "parsed")
         model_info_payload = loader._object_to_dict(getattr(response, "model_info", None))
         prediction_config_payload = loader._object_to_dict(getattr(response, "prediction_config", None))
-        model_resources = loader._fetch_model_resources()
-
+        response_payload = {
+            "python_type": type(response).__name__,
+            "repr": repr(response),
+            "public_attributes": collect_public_attributes(response),
+            "model_info": deep_serialize(model_info_payload),
+            "prediction_config": deep_serialize(prediction_config_payload),
+            "parsed": deep_serialize(parsed_payload),
+            "stats": deep_serialize(stats_payload),
+            "result": deep_serialize(result_payload),
+            "structured": deep_serialize(safe_getattr(response, "structured")),
+            "text_extracted": loader._extract_response_text(response),
+            "object_dump": deep_serialize(response),
+        }
         return {
             "request": {
                 "model_id": model_id,
@@ -343,20 +436,7 @@ def run_inspection(args: argparse.Namespace) -> dict[str, Any]:
                 "used_structured_prompt": structured_prompt,
                 "multimodal_payload": deep_serialize(multimodal_input, max_depth=6),
             },
-            "response": {
-                "python_type": type(response).__name__,
-                "repr": repr(response),
-                "public_attributes": collect_public_attributes(response),
-                "model_info": deep_serialize(model_info_payload),
-                "prediction_config": deep_serialize(prediction_config_payload),
-                "parsed": deep_serialize(parsed_payload),
-                "stats": deep_serialize(stats_payload),
-                "result": deep_serialize(result_payload),
-                "structured": deep_serialize(safe_getattr(response, "structured")),
-                "text_extracted": loader._extract_response_text(response),
-                "object_dump": deep_serialize(response),
-            },
-            "resources": deep_serialize(model_resources),
+            "response": prune_absent_response_fields(response_payload),
         }
     finally:
         loader.unload_model()
@@ -364,67 +444,12 @@ def run_inspection(args: argparse.Namespace) -> dict[str, Any]:
 
 def print_summary(payload: dict[str, Any]) -> None:
     """Imprime un resumen visual solo con la información que realmente existe."""
-    request = payload["request"]
-    response = payload["response"]
-    resources = payload["resources"] if isinstance(payload["resources"], dict) else {}
-    stats = response.get("stats") or {}
-    model_info = response.get("model_info") or {}
-    parsed = response.get("parsed") or {}
-
-    print_section("LM STUDIO RESPONSE INSPECTOR")
-    print_rows(
-        [
-            ("Model", request.get("model_id")),
-            ("Image", request.get("image_path")),
-            ("Schema", request.get("schema_name")),
-            ("Response type", response.get("python_type")),
-            ("Structured", response.get("structured")),
-        ]
-    )
-
-    print_section("SDK ATTRIBUTES")
-    print_rows(
-        [
-            ("Public attrs", ", ".join(response.get("public_attributes", {}).keys()) or None),
-            ("Model key", model_info.get("model_key")),
-            ("Architecture", model_info.get("architecture")),
-            ("Params", model_info.get("params_string") or model_info.get("total_params")),
-            ("Display name", model_info.get("display_name")),
-            ("Text preview", response.get("text_extracted")),
-        ]
-    )
-
-    stats_rows = [
-        ("stop_reason", stats.get("stop_reason")),
-        ("tokens_per_second", stats.get("tokens_per_second")),
-        ("time_to_first_token_sec", stats.get("time_to_first_token_sec")),
-        ("prompt_tokens_count", stats.get("prompt_tokens_count")),
-        ("predicted_tokens_count", stats.get("predicted_tokens_count")),
-        ("total_tokens_count", stats.get("total_tokens_count")),
-        ("num_gpu_layers", stats.get("num_gpu_layers")),
-    ]
-    if any(has_display_value(value) for _, value in stats_rows):
-        print_section("SDK STATS")
-        print_rows(stats_rows)
-
-    if isinstance(parsed, dict) and parsed:
-        print_section("PARSED PAYLOAD")
-        print_rows([(key, value) for key, value in parsed.items()])
-    elif has_display_value(parsed):
-        print_section("PARSED PAYLOAD")
-        print_rows([("parsed", parsed)])
-
-    resource_rows = [
-        ("model_id", resources.get("model_id")),
-        ("architecture", resources.get("architecture")),
-        ("quantization", resources.get("quantization")),
-        ("vram_usage_mb", resources.get("vram_usage_mb")),
-        ("gpu_layers", resources.get("gpu_layers")),
-    ]
-    visible_resource_rows = [(label, value) for label, value in resource_rows if has_display_value(value)]
-    if visible_resource_rows:
-        print_section("REST RESOURCES")
-        print_rows(visible_resource_rows)
+    for title, rows in build_summary_sections(payload):
+        visible_rows = [(label, value) for label, value in rows if has_display_value(value)]
+        if not visible_rows:
+            continue
+        print_section(title)
+        print_rows(visible_rows)
 
 
 def main(argv: list[str] | None = None) -> int:

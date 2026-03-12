@@ -4,7 +4,27 @@ from __future__ import annotations
 
 import os
 import shutil
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
+
+from .test_dashboards_ui import (
+    _append_recent_record,
+    _build_recent_record_lines,
+    _build_named_value_lines,
+    _build_probe_detail_parts,
+    _build_summary_lines,
+    _coerce_int,
+    _coverage_fragments,
+    _format_batch_summary_rows,
+    _format_metric_value,
+    _format_schema_summary_rows,
+    _make_live_panel,
+    _make_recent_lines,
+    _rel_probe_path,
+    _render_final_sections_screen,
+    _render_live_dashboard,
+    _standard_final_intro,
+    _telemetry_available,
+)
 
 if TYPE_CHECKING:
     from .menu_kit import AppContext, UIKit
@@ -30,36 +50,6 @@ def list_test_files() -> list[str]:
         if f.startswith("test_") and f.endswith(".py")
     ]
     return sorted(files)
-
-
-def _format_metric_value(value: object, *, suffix: str = "") -> str:
-    """Representa métricas opcionales de forma amigable para la TUI."""
-    if value is None:
-        return "N/D"
-    return f"{value}{suffix}"
-
-
-def _rel_probe_path(image_path: str | None) -> str:
-    """Normaliza rutas de imágenes para mostrarlas de forma compacta en la TUI."""
-    if not image_path:
-        return "N/D"
-    return os.path.relpath(image_path, ".")
-
-
-def _coerce_int(value: object) -> int:
-    """Convierte valores numéricos opcionales del callback de progreso a enteros."""
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        try:
-            return int(value)
-        except ValueError:
-            return 0
-    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -159,23 +149,6 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
 
             return get_schema_variant(base_schema_name, bool(reasoning_mode))
 
-    def _select_batch_output_format() -> str | None:
-        """Selector pequeño para elegir CSV o JSONL en el batch runner."""
-        items = [
-            kit.MenuItem("CSV", description="Guarda una fila por imagen, ideal para Pandas y análisis tabular."),
-            kit.MenuItem("JSONL", description="Guarda un objeto JSON por línea, útil para auditoría o reprocesado."),
-            kit.MenuItem("Cancel", lambda: None, description="Vuelve al menú anterior."),
-        ]
-        sel = kit.menu(
-            items,
-            header_func=_make_header("BATCH RUNNER · SELECT OUTPUT FORMAT"),
-            menu_id="batch_runner_output_format_selector",
-            nav_hint_text="↑/↓ elegir formato · ENTER confirmar · ESC volver",
-        )
-        if not sel or sel.label.strip() == "Cancel":
-            return None
-        return sel.label.strip().lower()
-
     def _select_batch_size() -> int | None | str:
         """Selector del tamaño de muestra para ejecución batch desde la TUI."""
         items = [
@@ -271,12 +244,17 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
     def run_smoke_test_in_process(model_tag: str) -> int:
         """Ejecuta smoke test sin subprocess."""
         try:
-            from src.scripts.test_inference import main as smoke_test_main
+            from src.scripts.test_inference import ensure_test_images, main as smoke_test_main, run_smoke_test
         except Exception as error:
             kit.log(f"Could not import smoke test script: {error}", "error")
             return 1
         try:
-            return int(smoke_test_main(model_path=model_tag))
+            try:
+                return int(run_smoke_test(model_tag, ensure_test_images()))
+            except TypeError as error:
+                if "on_progress" in str(error):
+                    raise
+                return int(smoke_test_main(model_path=model_tag))
         except Exception as error:
             kit.log(f"Smoke test crashed: {error}", "error")
             return 1
@@ -352,7 +330,8 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             kit.subtitle(f"SCHEMA TESTER · {schema_name}")
             print()
             _tw = max(60, shutil.get_terminal_size(fallback=(120, 30)).columns - 4)
-            for line in format_schema_info(schema_name, schema_cls, text_width=_tw).splitlines():
+            schema_info_lines = format_schema_info(schema_name, schema_cls, text_width=_tw).splitlines()
+            for line in schema_info_lines:
                 print(f"  {line}")
             print()
             kit.log(
@@ -360,7 +339,103 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                 "step",
             )
             try:
-                ok, fail, invalid = run_batch(model_tag, schema_name, schema_cls, images)
+                recent_lines = _make_recent_lines()
+                recent_records: list[dict[str, object]] = []
+                panel = _make_live_panel(
+                    kit,
+                    app,
+                    subtitle=f"SCHEMA TESTER · {schema_name}",
+                    intro=f"Modelo: {model_tag} · validando hasta 5 imágenes de {len(images)} disponibles...",
+                    static_lines=[f"  {line}" for line in schema_info_lines],
+                )
+
+                def on_schema_progress(payload: dict[str, object]) -> None:
+                    summary = cast(dict[str, object], payload.get("summary") or {})
+                    total = _coerce_int(payload.get("total"))
+                    event = str(payload.get("event") or "")
+                    current_index = _coerce_int(payload.get("index"))
+                    image_path = _rel_probe_path(cast(str | None, payload.get("image_path")))
+                    record_payload = payload.get("record")
+                    last_record = record_payload if isinstance(record_payload, dict) else None
+                    completed = (
+                        _coerce_int(summary.get("ok"))
+                        + _coerce_int(summary.get("invalid"))
+                        + _coerce_int(summary.get("fail"))
+                    )
+
+                    if event == "image_start":
+                        status_line = f"Estado: procesando {current_index}/{total} · {image_path}"
+                    elif event == "image_done" and str(payload.get("status") or "") == "ok":
+                        status_line = f"Estado: validada {current_index}/{total} · {image_path}"
+                    elif event == "image_done" and str(payload.get("status") or "") == "invalid":
+                        status_line = f"Estado: JSON inválido {current_index}/{total} · {image_path}"
+                    elif event == "complete":
+                        status_line = f"Estado: finalizado · {completed}/{total} imágenes revisadas"
+                    else:
+                        status_line = f"Estado: preparando ejecución · muestra {total}"
+
+                    if event == "image_done" and last_record is not None:
+                        _append_recent_record(kit, recent_lines, last_record)
+                        recent_records.append(dict(last_record))
+                        if len(recent_records) > 5:
+                            recent_records.pop(0)
+
+                    _render_live_dashboard(
+                        kit,
+                        panel,
+                        current=completed,
+                        total=total,
+                        stats_line=(
+                            f"Estadísticas: OK={summary.get('ok', 0)} | "
+                            f"Inválidas={summary.get('invalid', 0)} | Errores={summary.get('fail', 0)}"
+                        ),
+                        status_line=status_line,
+                        metrics_line=None,
+                        recent_title="Últimas validaciones:",
+                        recent_lines=list(recent_lines),
+                    )
+
+                try:
+                    ok, fail, invalid = run_batch(
+                        model_tag,
+                        schema_name,
+                        schema_cls,
+                        images,
+                        on_progress=on_schema_progress,
+                    )
+                except TypeError as error:
+                    if "on_progress" not in str(error):
+                        raise
+                    ok, fail, invalid = run_batch(model_tag, schema_name, schema_cls, images)
+                summary_rows = _format_schema_summary_rows(
+                    {
+                        "model_id": model_tag,
+                        "schema_name": schema_name,
+                        "sample_size": min(5, len(images)),
+                        "total_available": len(images),
+                        "ok": ok,
+                        "invalid": invalid,
+                        "fail": fail,
+                    }
+                )
+                _render_final_sections_screen(
+                    kit,
+                    app,
+                    subtitle=f"SCHEMA TESTER · {schema_name}",
+                    intro=_standard_final_intro(),
+                    sections=[
+                        ("Schema utilizado", [f"  {line}" for line in schema_info_lines]),
+                        ("Resumen", _build_summary_lines(kit, summary_rows)),
+                        (
+                            "Actividad reciente",
+                            _build_recent_record_lines(
+                                kit,
+                                recent_records,
+                                empty_message="  Sin validaciones recientes.",
+                            ),
+                        ),
+                    ],
+                )
                 if fail > 0 or invalid > 0:
                     kit.log(
                         f"Schema Tester completado: {ok} válidas, "
@@ -408,34 +483,26 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                 "step",
             )
             try:
-                progress_state: dict[str, object] = {}
-
-                def render_probe_static() -> None:
-                    app.print_banner()
-                    kit.subtitle(f"TELEMETRY PROBE · {schema_name}")
-                    kit.log(
-                        f"Midiendo telemetría sobre hasta 5 imágenes con el modelo {model_tag}...",
-                        "step",
-                    )
-
-                panel = kit.IncrementalPanelRenderer(
-                    clear_screen_fn=kit.clear,
-                    render_static_fn=render_probe_static,
+                recent_lines = _make_recent_lines()
+                panel = _make_live_panel(
+                    kit,
+                    app,
+                    subtitle=f"TELEMETRY PROBE · {schema_name}",
+                    intro=f"Midiendo telemetría sobre hasta 5 imágenes con el modelo {model_tag}...",
                 )
 
                 def on_probe_progress(payload: dict[str, object]) -> None:
-                    progress_state.update(payload)
                     summary = cast(dict[str, object], payload.get("summary") or {})
-                    records = cast(list[dict[str, object]], summary.get("records") or [])
                     completed = _coerce_int(summary.get("ok")) + _coerce_int(summary.get("fail"))
                     total = _coerce_int(payload.get("total"))
                     event = str(payload.get("event") or "")
                     image_path = _rel_probe_path(cast(str | None, payload.get("image_path")))
                     status = str(payload.get("status") or "")
                     current_index = _coerce_int(payload.get("index"))
-                    last_record = cast(dict[str, object] | None, payload.get("record"))
+                    record_payload = payload.get("record")
+                    last_record = record_payload if isinstance(record_payload, dict) else None
                     availability = cast(dict[str, object], summary.get("telemetry_availability") or {})
-                    ok_records = _coerce_int(availability.get("ok_records"))
+                    coverage_line = " · ".join(_coverage_fragments(availability))
 
                     if event == "image_start":
                         status_line = f"Estado: procesando {current_index}/{total} · {image_path}"
@@ -448,45 +515,26 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                     else:
                         status_line = f"Estado: preparando ejecución · muestra {total}"
 
-                    dynamic_lines = [
-                        "",
-                        kit.divider(kit.width()),
-                        f"Progreso: {completed}/{total} | OK: {summary.get('ok', 0)} | Errores: {summary.get('fail', 0)}",
-                        status_line,
-                        (
+                    if event == "image_done" and last_record is not None:
+                        _append_recent_record(kit, recent_lines, last_record)
+
+                    _render_live_dashboard(
+                        kit,
+                        panel,
+                        current=completed,
+                        total=total,
+                        stats_line=f"Estadísticas: OK={summary.get('ok', 0)} | Errores={summary.get('fail', 0)}",
+                        status_line=status_line,
+                        metrics_line=(
                             "Promedios parciales: "
                             f"TTFT={_format_metric_value(cast(dict[str, object], summary.get('ttft') or {}).get('avg'), suffix=' s')} | "
-                            f"prompt_tps={_format_metric_value(cast(dict[str, object], summary.get('prompt_tokens_per_second') or {}).get('avg'))} | "
                             f"TPS={_format_metric_value(cast(dict[str, object], summary.get('tps') or {}).get('avg'))} | "
                             f"latencia={_format_metric_value(cast(dict[str, object], summary.get('total_duration') or {}).get('avg'), suffix=' s')}"
                         ),
-                        (
-                            "Cobertura parcial: "
-                            f"TTFT={availability.get('ttft_records', 0)}/{ok_records} | "
-                            f"TPS={availability.get('tps_records', 0)}/{ok_records} | "
-                            f"VRAM={availability.get('vram_records', 0)}/{ok_records}"
-                        ),
-                    ]
-
-                    if event == "image_start":
-                        dynamic_lines.append("Última inferencia: esperando respuesta del modelo...")
-                    elif last_record and last_record.get("status") == "ok":
-                        dynamic_lines.append(
-                            "Última inferencia: "
-                            f"TTFT={_format_metric_value(last_record.get('ttft_seconds'), suffix=' s')} | "
-                            f"TPS={_format_metric_value(last_record.get('tokens_per_second'))} | "
-                            f"reasoning={_format_metric_value(last_record.get('reasoning_tokens'))} | "
-                            f"total={_format_metric_value(last_record.get('total_duration_seconds'), suffix=' s')}"
-                        )
-                    elif last_record and last_record.get("status") == "error":
-                        dynamic_lines.append(f"Última inferencia: ERROR · {last_record.get('error', 'unknown error')}")
-                    elif records:
-                        dynamic_lines.append("Última inferencia: completada, esperando siguiente imagen...")
-                    else:
-                        dynamic_lines.append("Última inferencia: sin resultados todavía.")
-
-                    dynamic_lines.append(kit.divider(kit.width()))
-                    panel.render(dynamic_lines)
+                        coverage_line=f"Cobertura parcial: {coverage_line}" if coverage_line else None,
+                        recent_title="Últimas inferencias:",
+                        recent_lines=list(recent_lines),
+                    )
 
                 summary = run_telemetry_batch(
                     model_id=model_tag,
@@ -496,9 +544,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                     max_images=5,
                     on_progress=on_probe_progress,
                 )
-                kit.clear()
-                app.print_banner()
-                kit.subtitle(f"TELEMETRY PROBE · {schema_name}")
+                availability = cast(dict[str, object], summary.get("telemetry_availability") or {})
                 rows = [
                     ("Modelo", summary["model_id"], "OK"),
                     ("Esquema", summary["schema_name"], "OK"),
@@ -507,59 +553,66 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                     ("Errores", str(summary["fail"]), "OK" if summary["fail"] == 0 else "WARN"),
                     ("Modelo resuelto", str(summary["static_model_info"]["resolved_model_id"]), "OK" if summary["static_model_info"]["resolved_model_id"] else "WARN"),
                     ("Arquitectura", str(summary["static_model_info"]["architecture"]), "OK" if summary["static_model_info"]["architecture"] else "WARN"),
-                    ("Quantizacion", str(summary["static_model_info"]["quantization"]), "OK" if summary["static_model_info"]["quantization"] else "WARN"),
-                    ("Total params", str(summary["static_model_info"]["total_params"]), "OK" if summary["static_model_info"]["total_params"] else "WARN"),
                     ("Stop reason", str(summary["static_model_info"]["stop_reason"]), "OK" if summary["static_model_info"]["stop_reason"] else "WARN"),
                     ("TTFT medio (s)", _format_metric_value(summary["ttft"]["avg"]), "OK" if summary["ttft"]["avg"] is not None else "WARN"),
-                    ("Ingesta prompt media (t/s)", _format_metric_value(summary["prompt_tokens_per_second"]["avg"]), "OK" if summary["prompt_tokens_per_second"]["avg"] is not None else "WARN"),
                     ("TPS medio", _format_metric_value(summary["tps"]["avg"]), "OK" if summary["tps"]["avg"] is not None else "WARN"),
                     ("Generacion media (s)", _format_metric_value(summary["generation_duration"]["avg"]), "OK" if summary["generation_duration"]["avg"] is not None else "WARN"),
                     ("Prompt tokens medios", _format_metric_value(summary["prompt_tokens"]["avg"]), "OK" if summary["prompt_tokens"]["avg"] is not None else "WARN"),
                     ("Output tokens medios", _format_metric_value(summary["completion_tokens"]["avg"]), "OK" if summary["completion_tokens"]["avg"] is not None else "WARN"),
                     ("Total tokens medios", _format_metric_value(summary["total_tokens"]["avg"]), "OK" if summary["total_tokens"]["avg"] is not None else "WARN"),
-                    ("Reasoning schema medio", _format_metric_value(summary["reasoning_tokens"]["avg"]), "OK" if summary["reasoning_tokens"]["avg"] is not None else "WARN"),
-                    ("VRAM media (MB)", _format_metric_value(summary["vram_usage_mb"]["avg"]), "OK" if summary["vram_usage_mb"]["avg"] is not None else "WARN"),
-                    ("Capas GPU medias", _format_metric_value(summary["gpu_layers"]["avg"]), "OK" if summary["gpu_layers"]["avg"] is not None else "WARN"),
                     ("Latencia media (s)", _format_metric_value(summary["total_duration"]["avg"]), "OK" if summary["total_duration"]["avg"] is not None else "WARN"),
                 ]
-                print()
-                kit.table(rows)
-                print()
+                if _telemetry_available(availability, "reasoning_records"):
+                    rows.append(
+                        (
+                            "Reasoning schema medio",
+                            _format_metric_value(summary["reasoning_tokens"]["avg"]),
+                            "OK" if summary["reasoning_tokens"]["avg"] is not None else "WARN",
+                        )
+                    )
+                if _telemetry_available(availability, "gpu_layer_records"):
+                    rows.append(
+                        (
+                            "Capas GPU medias",
+                            _format_metric_value(summary["gpu_layers"]["avg"]),
+                            "OK" if summary["gpu_layers"]["avg"] is not None else "WARN",
+                        )
+                    )
                 ttft_note = summary.get("notes", {}).get("ttft")
+                tps_note = summary.get("notes", {}).get("tps")
+                coverage_fragments = _coverage_fragments(availability)
+                detail_lines = _build_recent_record_lines(
+                    kit,
+                    cast(list[dict[str, object]], summary["records"]),
+                )
+                note_lines = []
                 if ttft_note:
                     kit.log(ttft_note, "warning")
-                tps_note = summary.get("notes", {}).get("tps")
+                    note_lines.append(f"  TTFT: {ttft_note}")
                 if tps_note:
                     kit.log(tps_note, "warning")
-                availability = summary.get("telemetry_availability", {})
-                ok_records = availability.get("ok_records", 0)
-                kit.log(
-                    "Cobertura: "
-                    f"TTFT {availability.get('ttft_records', 0)}/{ok_records} · "
-                    f"TPS {availability.get('tps_records', 0)}/{ok_records} · "
-                    f"VRAM {availability.get('vram_records', 0)}/{ok_records}",
-                    "step",
+                    note_lines.append(f"  TPS: {tps_note}")
+                if coverage_fragments:
+                    kit.log(f"Cobertura: {' · '.join(coverage_fragments)}", "step")
+                    note_lines.append(f"  Cobertura: {' · '.join(coverage_fragments)}")
+                _render_final_sections_screen(
+                    kit,
+                    app,
+                    subtitle=f"TELEMETRY PROBE · {schema_name}",
+                    intro=_standard_final_intro(),
+                    sections=[
+                        ("Resumen", _build_summary_lines(kit, [(str(a), str(b), str(c)) for a, b, c in rows])),
+                        ("Observaciones", note_lines or ["  Sin observaciones adicionales."]),
+                        ("Actividad reciente", detail_lines),
+                    ],
                 )
-                for record in summary["records"]:
-                    rel_path = os.path.relpath(record["image_path"], ".")
-                    status = record.get("status", "unknown")
-                    if status == "ok":
-                        print(
-                            f"  [OK] {rel_path} | TTFT={_format_metric_value(record.get('ttft_seconds'), suffix=' s')} | "
-                            f"prompt_tps={_format_metric_value(record.get('prompt_tokens_per_second'))} | "
-                            f"TPS={_format_metric_value(record.get('tokens_per_second'))} | "
-                            f"gen={_format_metric_value(record.get('generation_duration_seconds'), suffix=' s')} | "
-                            f"prompt={_format_metric_value(record.get('prompt_tokens'))} | "
-                            f"output={_format_metric_value(record.get('completion_tokens'))} | "
-                            f"reasoning_json={_format_metric_value(record.get('reasoning_tokens'))} | "
-                            f"stop={_format_metric_value(record.get('stop_reason'))} | "
-                            f"vram={_format_metric_value(record.get('vram_usage_mb'))} | "
-                            f"gpu_layers={_format_metric_value(record.get('gpu_layers'))} | "
-                            f"total={_format_metric_value(record.get('total_duration_seconds'), suffix=' s')}"
-                        )
-                    else:
-                        print(f"  [ERR] {rel_path} | {record.get('error', 'unknown error')}")
-                kit.log("Telemetry Probe completado.", "success" if summary["fail"] == 0 else "warning")
+                if summary["fail"] == 0:
+                    kit.log(f"Telemetry Probe completado: {summary['ok']} inferencias OK.", "success")
+                else:
+                    kit.log(
+                        f"Telemetry Probe completado con incidencias: {summary['ok']} OK, {summary['fail']} errores.",
+                        "warning",
+                    )
             except Exception as error:
                 kit.log(f"Telemetry Probe terminó con error: {error}", "error")
             kit.wait("Press any key to return to model selector...")
@@ -581,10 +634,6 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                 continue
             schema_name, _schema_cls = schema_variant
 
-            output_format = _select_batch_output_format()
-            if output_format is None:
-                continue
-
             max_images = _select_batch_size()
             if max_images == "BACK":
                 continue
@@ -594,17 +643,103 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             app.print_banner()
             kit.subtitle(f"BATCH RUNNER · {schema_name}")
             kit.log(
-                f"Exportando resultados incrementales en {output_format.upper()} desde data/...",
+                "Exportando resultados incrementales en JSONL desde data/...",
                 "step",
             )
             try:
-                summary = run_batch_job(
-                    model_id=model_tag,
-                    image_dir="data",
-                    schema_name=schema_name,
-                    output_format=output_format,
-                    max_images=selected_max_images,
-                    shuffle=True,
+                recent_lines = _make_recent_lines()
+                recent_records: list[dict[str, object]] = []
+                panel = _make_live_panel(
+                    kit,
+                    app,
+                    subtitle=f"BATCH RUNNER · {schema_name}",
+                    intro="Exportando resultados incrementales en JSONL desde data/...",
+                )
+
+                def on_batch_progress(payload: dict[str, object]) -> None:
+                    summary = cast(dict[str, object], payload.get("summary") or {})
+                    total = _coerce_int(payload.get("total"))
+                    event = str(payload.get("event") or "")
+                    current_index = _coerce_int(payload.get("index"))
+                    image_path = _rel_probe_path(cast(str | None, payload.get("image_path")))
+                    record_payload = payload.get("record")
+                    last_record = record_payload if isinstance(record_payload, dict) else None
+                    completed = _coerce_int(summary.get("processed"))
+                    invalid_count = _coerce_int(summary.get("invalid"))
+                    fail_count = _coerce_int(summary.get("fail"))
+
+                    if event == "image_start":
+                        status_line = f"Estado: procesando {current_index}/{total} · {image_path}"
+                    elif event == "image_done" and str(payload.get("status") or "") == "ok":
+                        status_line = f"Estado: exportada {current_index}/{total} · {image_path}"
+                    elif event == "image_done" and str(payload.get("status") or "") == "invalid":
+                        status_line = f"Estado: respuesta inválida {current_index}/{total} · {image_path}"
+                    elif event == "complete":
+                        status_line = f"Estado: finalizado · {completed}/{total} imágenes exportadas"
+                    else:
+                        status_line = f"Estado: preparando ejecución · muestra {total}"
+
+                    if event == "image_done" and last_record is not None:
+                        _append_recent_record(kit, recent_lines, last_record)
+                        recent_records.append(dict(last_record))
+                        if len(recent_records) > 5:
+                            recent_records.pop(0)
+
+                    _render_live_dashboard(
+                        kit,
+                        panel,
+                        current=completed,
+                        total=total,
+                        stats_line=(
+                            f"Estadísticas: OK={summary.get('ok', 0)} | "
+                            f"Inválidas={invalid_count} | Errores={fail_count}"
+                        ),
+                        status_line=status_line,
+                        metrics_line=(
+                            "Promedios parciales: "
+                            f"TTFT={_format_metric_value(cast(dict[str, object], summary.get('ttft') or {}).get('avg'), suffix=' s')} | "
+                            f"TPS={_format_metric_value(cast(dict[str, object], summary.get('tps') or {}).get('avg'))} | "
+                            f"latencia={_format_metric_value(cast(dict[str, object], summary.get('total_duration') or {}).get('avg'), suffix=' s')}"
+                        ),
+                        recent_title="Últimos registros exportados:",
+                        recent_lines=list(recent_lines),
+                    )
+
+                try:
+                    summary = run_batch_job(
+                        model_id=model_tag,
+                        image_dir="data",
+                        schema_name=schema_name,
+                        max_images=selected_max_images,
+                        shuffle=True,
+                        on_progress=on_batch_progress,
+                    )
+                except TypeError as error:
+                    if "on_progress" not in str(error):
+                        raise
+                    summary = run_batch_job(
+                        model_id=model_tag,
+                        image_dir="data",
+                        schema_name=schema_name,
+                        max_images=selected_max_images,
+                        shuffle=True,
+                    )
+                _render_final_sections_screen(
+                    kit,
+                    app,
+                    subtitle=f"BATCH RUNNER · {schema_name}",
+                    intro=_standard_final_intro(),
+                    sections=[
+                        ("Resumen", _build_summary_lines(kit, _format_batch_summary_rows(summary))),
+                        (
+                            "Actividad reciente",
+                            _build_recent_record_lines(
+                                kit,
+                                recent_records,
+                                empty_message="  Sin registros recientes.",
+                            ),
+                        ),
+                    ],
                 )
                 level = "success" if summary["fail"] == 0 and summary["invalid"] == 0 else "warning"
                 kit.log(
@@ -619,7 +754,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
     def run_response_inspector_wrapper() -> None:
         """Ejecuta el inspector de respuesta del SDK con defaults automáticos."""
         from argparse import Namespace
-        from src.scripts.test_response_inspector import print_summary, run_inspection, save_inspection_payload
+        from src.scripts.test_response import build_summary_sections, run_inspection, save_inspection_payload
 
         while True:
             model_tag = _select_model(
@@ -658,8 +793,17 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
                     )
                 )
                 output_path = save_inspection_payload(payload)
-                print_summary(payload)
-                print()
+                sections = []
+                for title, rows in build_summary_sections(payload):
+                    sections.append((title, _build_named_value_lines(kit, rows)))
+                sections.append(("Salida", [f"  Archivo guardado en: {output_path}"]))
+                _render_final_sections_screen(
+                    kit,
+                    app,
+                    subtitle="RESPONSE INSPECTOR",
+                    intro=_standard_final_intro(),
+                    sections=sections,
+                )
                 kit.log(f"Response Inspector completado. Salida: {output_path}", "success")
             except Exception as error:
                 kit.log(f"Response Inspector terminó con error: {error}", "error")
@@ -675,9 +819,143 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             if model_tag is None:
                 return
 
+            try:
+                from src.scripts.test_inference import ensure_test_images, run_smoke_test
+            except Exception as error:
+                kit.log(f"Could not import smoke test script: {error}", "error")
+                kit.log("Smoke test failed (Exit Code 1). Check output above.", "error")
+                kit.wait("Press any key to return to model selector...")
+                continue
+
+            recent_lines = _make_recent_lines()
+            recent_records: list[dict[str, object]] = []
+            panel = _make_live_panel(
+                kit,
+                app,
+                subtitle="SMOKE TEST · INFERENCE DEMO",
+                intro=f"Ejecutando smoke test con {model_tag}...",
+            )
+            smoke_summary: dict[str, object] = {
+                "model_tag": model_tag,
+                "total_cases": 0,
+                "processed": 0,
+                "passed": 0,
+                "failed": 0,
+                "preload_seconds": None,
+            }
+
+            def on_smoke_progress(payload: dict[str, object]) -> None:
+                summary = cast(dict[str, object], payload.get("summary") or {})
+                smoke_summary.update(summary)
+                total = _coerce_int(payload.get("total"))
+                event = str(payload.get("event") or "")
+                current_index = _coerce_int(payload.get("index"))
+                case = cast(dict[str, object], payload.get("case") or {})
+                record_payload = payload.get("record")
+                record = record_payload if isinstance(record_payload, dict) else None
+                processed = _coerce_int(summary.get("processed"))
+
+                if event == "model_ready":
+                    status_line = (
+                        "Estado: modelo precargado en "
+                        f"{_format_metric_value(summary.get('preload_seconds'), suffix=' s')}"
+                    )
+                elif event == "case_start":
+                    status_line = f"Estado: procesando {current_index}/{total} · {case.get('id', 'caso')}"
+                elif event == "case_done":
+                    status_line = f"Estado: completado {current_index}/{total} · {case.get('id', 'caso')}"
+                elif event == "complete":
+                    status_line = f"Estado: finalizado · {processed}/{total} casos revisados"
+                else:
+                    status_line = f"Estado: preparando ejecución · muestra {total}"
+
+                if event == "case_done" and record is not None:
+                    record_dict = cast(dict[str, object], record)
+                    payload = record_dict.get("payload")
+                    if payload is None and record_dict.get("response_preview") is not None:
+                        payload = {"preview": record_dict.get("response_preview")}
+                    recent_record = {
+                        "image_name": str(record_dict.get("case_id") or record_dict.get("label") or "caso"),
+                        "status": record_dict.get("status") or "unknown",
+                        "payload": payload,
+                        "validation_error": record_dict.get("message"),
+                        "error": record_dict.get("error"),
+                    }
+                    _append_recent_record(kit, recent_lines, recent_record)
+                    recent_records.append(recent_record)
+                    if len(recent_records) > 5:
+                        recent_records.pop(0)
+
+                _render_live_dashboard(
+                    kit,
+                    panel,
+                    current=processed,
+                    total=total,
+                    stats_line=(
+                        f"Estadísticas: OK={summary.get('passed', 0)} | "
+                        f"Inválidos={summary.get('failed', 0)}"
+                    ),
+                    status_line=status_line,
+                    metrics_line=(
+                        f"Modelo precargado: {_format_metric_value(summary.get('preload_seconds'), suffix=' s')}"
+                        if summary.get("preload_seconds") is not None
+                        else None
+                    ),
+                    recent_title="Últimos casos:",
+                    recent_lines=list(recent_lines),
+                )
+
             kit.clear()
-            kit.log(f"Launching Inference with {model_tag}...", "step")
-            result_code = run_smoke_test_in_process(model_tag)
+            result_code = 1
+            try:
+                result_code = run_smoke_test(
+                    model_tag,
+                    ensure_test_images(),
+                    on_progress=on_smoke_progress,
+                )
+                _render_final_sections_screen(
+                    kit,
+                    app,
+                    subtitle="SMOKE TEST · INFERENCE DEMO",
+                    intro=_standard_final_intro(),
+                    sections=[
+                        (
+                            "Resumen",
+                            _build_summary_lines(
+                                kit,
+                                [
+                                    ("Modelo", str(smoke_summary.get("model_tag") or model_tag), "OK"),
+                                    (
+                                        "Casos procesados",
+                                        f"{smoke_summary.get('processed', 0)} de {smoke_summary.get('total_cases', 0)}",
+                                        "OK",
+                                    ),
+                                    ("Válidos", str(smoke_summary.get("passed", 0)), "OK"),
+                                    (
+                                        "Incidencias",
+                                        str(smoke_summary.get("failed", 0)),
+                                        "OK" if _coerce_int(smoke_summary.get("failed")) == 0 else "WARN",
+                                    ),
+                                    (
+                                        "Precarga (s)",
+                                        _format_metric_value(smoke_summary.get("preload_seconds"), suffix=" s"),
+                                        "OK",
+                                    ),
+                                ],
+                            ),
+                        ),
+                        (
+                            "Actividad reciente",
+                            _build_recent_record_lines(
+                                kit,
+                                recent_records,
+                                empty_message="  Sin registros.",
+                            ),
+                        ),
+                    ],
+                )
+            except Exception as error:
+                kit.log(f"Smoke test crashed: {error}", "error")
             if result_code != 0:
                 kit.log("Smoke test failed (Exit Code 1). Check output above.", "error")
             kit.wait("Press any key to return to model selector...")
@@ -724,11 +1002,11 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             ),
         ),
         kit.MenuItem(
-            " Run Batch Runner (CSV/JSONL Export)",
+            " Run Batch Runner",
             run_batch_runner_wrapper,
             description=(
-                "Ejecuta inferencia masiva con guardado incremental en CSV o JSONL para análisis "
-                "posterior con Pandas."
+                "Ejecuta inferencia masiva con guardado incremental para análisis posterior "
+                "sin romper la TUI."
             ),
         ),
         kit.MenuItem(

@@ -12,6 +12,7 @@ from src.scripts.test_telemetry import (
     run_telemetry_batch,
     summarize_numeric,
 )
+from src.scripts.test_schema import run_batch as run_schema_batch
 
 
 def test_summarize_numeric_returns_mean_min_max():
@@ -34,7 +35,7 @@ def test_first_available_value_returns_first_non_empty_record():
     assert first_available_value(records, "architecture") == "qwen3"
 
 
-def test_inference_include_telemetry_reads_sdk_stats_and_rest_resources(monkeypatch):
+def test_inference_include_telemetry_reads_sdk_stats_from_response(monkeypatch):
     loader = VLMLoader(model_path="fake-model")
 
     mock_model = SimpleNamespace(
@@ -47,8 +48,7 @@ def test_inference_include_telemetry_reads_sdk_stats_and_rest_resources(monkeypa
             stats=SimpleNamespace(
                 prompt_tokens_count=12,
                 predicted_tokens_count=24,
-                prompt_tokens_per_sec=100.0,
-                predicted_tokens_per_sec=60.0,
+                tokens_per_second=60.0,
                 time_to_first_token_sec=0.35,
                 total_duration_ms=900.0,
                 stop_reason="eos",
@@ -56,29 +56,6 @@ def test_inference_include_telemetry_reads_sdk_stats_and_rest_resources(monkeypa
         )
     )
 
-    class FakeResponse:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {
-                "data": [
-                    {
-                        "id": "fake-model",
-                        "stats": {
-                            "vram_usage_bytes": 104857600,
-                            "gpu_layers": 28,
-                        },
-                        "metadata": {
-                            "total_params": 9000000000,
-                            "architecture": "qwen3_vl",
-                            "quantization": "Q8_0",
-                        },
-                    }
-                ]
-            }
-
-    monkeypatch.setattr("src.inference.vlm_runner.requests", SimpleNamespace(get=lambda *args, **kwargs: FakeResponse()))
     monkeypatch.setattr(loader, "load_model", lambda: None)
     loader._loaded_model = mock_model
     monkeypatch.setattr("src.inference.vlm_runner.os.path.isfile", lambda *_: True)
@@ -98,18 +75,18 @@ def test_inference_include_telemetry_reads_sdk_stats_and_rest_resources(monkeypa
     assert result.telemetry.total_duration_seconds == pytest.approx(0.9)
     assert result.telemetry.ttft_seconds == pytest.approx(0.35)
     assert result.telemetry.generation_duration_seconds == pytest.approx(0.4)
-    assert result.telemetry.prompt_tokens_per_second == pytest.approx(100.0)
+    assert result.telemetry.prompt_tokens_per_second is None
     assert result.telemetry.tokens_per_second == pytest.approx(60.0)
     assert result.telemetry.prompt_tokens == 12
     assert result.telemetry.completion_tokens == 24
     assert result.telemetry.total_tokens == 36
     assert result.telemetry.stop_reason == "eos"
     assert result.telemetry.model_id == "fake-model"
-    assert result.telemetry.vram_usage_mb == pytest.approx(100.0)
-    assert result.telemetry.total_params == 9000000000
-    assert result.telemetry.architecture == "qwen3_vl"
-    assert result.telemetry.quantization == "Q8_0"
-    assert result.telemetry.gpu_layers == 28
+    assert result.telemetry.vram_usage_mb is None
+    assert result.telemetry.total_params is None
+    assert result.telemetry.architecture is None
+    assert result.telemetry.quantization is None
+    assert result.telemetry.gpu_layers is None
 
 
 def test_inference_include_telemetry_counts_reasoning_tokens_from_schema(monkeypatch):
@@ -129,7 +106,6 @@ def test_inference_include_telemetry_counts_reasoning_tokens_from_schema(monkeyp
         )
     )
 
-    monkeypatch.setattr("src.inference.vlm_runner.requests", None)
     monkeypatch.setattr(loader, "load_model", lambda: None)
     loader._loaded_model = mock_model
     monkeypatch.setattr("src.inference.vlm_runner.os.path.isfile", lambda *_: True)
@@ -162,7 +138,6 @@ def test_inference_include_telemetry_uses_wall_time_when_stats_are_missing(monke
         )
     )
 
-    monkeypatch.setattr("src.inference.vlm_runner.requests", None)
     monkeypatch.setattr(loader, "load_model", lambda: None)
     loader._loaded_model = mock_model
     monkeypatch.setattr("src.inference.vlm_runner.os.path.isfile", lambda *_: True)
@@ -184,7 +159,7 @@ def test_inference_include_telemetry_uses_wall_time_when_stats_are_missing(monke
     assert result.telemetry.vram_usage_mb is None
 
 
-def test_inference_include_telemetry_uses_sdk_model_info_when_rest_is_missing(monkeypatch):
+def test_inference_include_telemetry_uses_sdk_model_info_when_present(monkeypatch):
     loader = VLMLoader(model_path="fake-model")
 
     mock_model = SimpleNamespace(
@@ -212,7 +187,6 @@ def test_inference_include_telemetry_uses_sdk_model_info_when_rest_is_missing(mo
         )
     )
 
-    monkeypatch.setattr("src.inference.vlm_runner.requests", None)
     monkeypatch.setattr(loader, "load_model", lambda: None)
     loader._loaded_model = mock_model
     monkeypatch.setattr("src.inference.vlm_runner.os.path.isfile", lambda *_: True)
@@ -230,8 +204,8 @@ def test_inference_include_telemetry_uses_sdk_model_info_when_rest_is_missing(mo
 
     assert result.telemetry.model_id == "fake-model"
     assert result.telemetry.architecture == "qwen35"
-    assert result.telemetry.total_params == "9B"
-    assert result.telemetry.quantization == "Q8_0"
+    assert result.telemetry.total_params is None
+    assert result.telemetry.quantization is None
     assert result.telemetry.gpu_layers == -1
     assert result.telemetry.tokens_per_second == pytest.approx(60.0)
     assert result.telemetry.total_tokens == 36
@@ -243,21 +217,16 @@ def test_run_telemetry_batch_collects_summary(monkeypatch):
             self.total_duration_seconds = total
             self.ttft_seconds = ttft
             self.generation_duration_seconds = 0.5
-            self.prompt_tokens_per_second = 120.0
             self.tokens_per_second = tps
             self.reasoning_tokens = 3
             self.stop_reason = "eos"
             self.model_id = "fake-model"
-            self.vram_usage_mb = 512.0
-            self.total_params = 9000000000
             self.architecture = "qwen3_vl"
-            self.quantization = "Q8_0"
             self.gpu_layers = 28
             self.prompt_tokens = 20
             self.completion_tokens = 15
             self.total_tokens = 35
-            self.stats = {"predicted_tokens_per_sec": tps}
-            self.resources = {"vram_usage_mb": 512.0}
+            self.stats = {"tokens_per_second": tps}
 
     class FakePayload:
         def __init__(self, ttft, tps, total):
@@ -299,17 +268,14 @@ def test_run_telemetry_batch_collects_summary(monkeypatch):
     assert summary["fail"] == 1
     assert summary["sample_size"] == 3
     assert summary["ttft"]["avg"] == pytest.approx(0.55)
-    assert summary["prompt_tokens_per_second"]["avg"] == pytest.approx(120.0)
     assert summary["tps"]["avg"] == pytest.approx(21.5)
     assert summary["generation_duration"]["avg"] == pytest.approx(0.5)
     assert summary["reasoning_tokens"]["avg"] == pytest.approx(3.0)
-    assert summary["vram_usage_mb"]["avg"] == pytest.approx(512.0)
     assert summary["gpu_layers"]["avg"] == pytest.approx(28.0)
     assert summary["prompt_tokens"]["avg"] == pytest.approx(20.0)
     assert summary["static_model_info"]["architecture"] == "qwen3_vl"
     assert summary["notes"]["ttft"] is None
     assert summary["notes"]["tps"] is None
-    assert summary["notes"]["resources"] is None
 
 
 def test_run_telemetry_batch_reports_notes_when_stats_and_rest_are_missing(monkeypatch):
@@ -318,7 +284,6 @@ def test_run_telemetry_batch_reports_notes_when_stats_and_rest_are_missing(monke
             self.total_duration_seconds = 1.1
             self.ttft_seconds = None
             self.generation_duration_seconds = None
-            self.prompt_tokens_per_second = None
             self.tokens_per_second = None
             self.reasoning_tokens = None
             self.stop_reason = None
@@ -332,7 +297,6 @@ def test_run_telemetry_batch_reports_notes_when_stats_and_rest_are_missing(monke
             self.completion_tokens = None
             self.total_tokens = None
             self.stats = {}
-            self.resources = {}
 
     class FakePayload:
         def __init__(self):
@@ -370,10 +334,8 @@ def test_run_telemetry_batch_reports_notes_when_stats_and_rest_are_missing(monke
     assert summary["ok"] == 2
     assert summary["ttft"]["avg"] is None
     assert summary["tps"]["avg"] is None
-    assert summary["vram_usage_mb"]["avg"] is None
     assert "TTFT" in summary["notes"]["ttft"]
     assert "TPS" in summary["notes"]["tps"]
-    assert summary["notes"]["resources"] is None
 
 
 def test_render_telemetry_report_prints_structured_sections(capsys):
@@ -389,7 +351,6 @@ def test_render_telemetry_report_prints_structured_sections(capsys):
                 "status": "ok",
                 "ttft_seconds": 0.4,
                 "tokens_per_second": 22.0,
-                "prompt_tokens_per_second": 120.0,
                 "total_duration_seconds": 1.1,
             },
             {
@@ -399,11 +360,9 @@ def test_render_telemetry_report_prints_structured_sections(capsys):
             },
         ],
         "ttft": {"avg": 0.4, "min": 0.4, "max": 0.4},
-        "prompt_tokens_per_second": {"avg": 120.0, "min": 120.0, "max": 120.0},
         "tps": {"avg": 22.0, "min": 22.0, "max": 22.0},
         "generation_duration": {"avg": 0.7, "min": 0.7, "max": 0.7},
         "reasoning_tokens": {"avg": 11.0, "min": 11.0, "max": 11.0},
-        "vram_usage_mb": {"avg": None, "min": None, "max": None},
         "gpu_layers": {"avg": None, "min": None, "max": None},
         "prompt_tokens": {"avg": 100.0, "min": 100.0, "max": 100.0},
         "completion_tokens": {"avg": 40.0, "min": 40.0, "max": 40.0},
@@ -412,22 +371,17 @@ def test_render_telemetry_report_prints_structured_sections(capsys):
         "static_model_info": {
             "resolved_model_id": "fake-model",
             "architecture": "qwen3_vl",
-            "quantization": "Q8_0",
-            "total_params": "9B",
             "stop_reason": "eos",
         },
         "telemetry_availability": {
             "ttft_records": 1,
-            "prompt_tps_records": 1,
             "tps_records": 1,
-            "vram_records": 0,
             "gpu_layer_records": 0,
             "ok_records": 2,
         },
         "notes": {
             "ttft": None,
-            "tps": "LM Studio no devolvio predicted_tokens_per_sec en response.stats; TPS no disponible en esta ejecucion.",
-            "resources": None,
+            "tps": "LM Studio no devolvio tokens_per_second en response.stats; TPS no disponible en esta ejecucion.",
         },
         "prompt": "Describe la imagen.",
     }
@@ -487,3 +441,51 @@ def test_build_cli_progress_callback_reports_completion_without_rest_warning(cap
     assert "[1/2] [OK] a.jpg" in output
     assert "Completado: 1 OK / 1 errores" in output
     assert "/v1/models" not in output
+
+
+def test_run_schema_batch_emits_progress_events(monkeypatch):
+    events = []
+
+    class FakeResult:
+        def model_dump(self):
+            return {
+                "object_detected": "cat",
+                "confidence_score": 90,
+                "justification": "ok",
+            }
+
+    class FakeLoader:
+        def __init__(self, model_path, verbose=False):
+            self.model_path = model_path
+
+        def inference(self, image_path, prompt, schema):
+            if image_path == "b.jpg":
+                raise RuntimeError("boom")
+            return FakeResult()
+
+        def unload_model(self):
+            return None
+
+    monkeypatch.setattr("src.scripts.test_schema.VLMLoader", FakeLoader)
+
+    ok, fail, invalid = run_schema_batch(
+        "fake-model",
+        "GenericObjectDetection",
+        GenericObjectDetection,
+        ["a.jpg", "b.jpg"],
+        max_images=2,
+        on_progress=events.append,
+    )
+
+    assert (ok, fail, invalid) == (1, 1, 0)
+    assert [event["event"] for event in events] == [
+        "start",
+        "image_start",
+        "image_done",
+        "image_start",
+        "image_done",
+        "complete",
+    ]
+    assert events[2]["record"]["status"] == "ok"
+    assert events[4]["record"]["status"] == "error"
+    assert events[-1]["summary"]["fail"] == 1

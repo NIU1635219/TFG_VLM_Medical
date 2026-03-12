@@ -11,14 +11,8 @@ import re
 import time
 from pathlib import Path
 from typing import Any, Generic, Literal, Protocol, Type, TypeVar, cast, overload
-from urllib.parse import urlparse, urlunparse
 
 from pydantic import BaseModel, ValidationError
-
-try:
-    import requests
-except ImportError:
-    requests = None
 
 from src.inference.schemas import (
     GenericObjectDetection,
@@ -503,85 +497,6 @@ class VLMLoader:
                     return normalized
         return None
 
-    def _extract_quantization_value(self, *candidates: object) -> str | None:
-        """Extrae la cuantización desde textos como model_key o path cuando no viene por REST."""
-        pattern = re.compile(r"(Q\d+(?:_K)?(?:_[MSL01])?|IQ\d+(?:_[MSL]|_XS)?)", re.IGNORECASE)
-        for candidate in candidates:
-            if not isinstance(candidate, str):
-                continue
-            match = pattern.search(candidate)
-            if match:
-                return match.group(1).upper()
-        return None
-
-    def _build_rest_api_base(self) -> str:
-        """Resuelve la base REST de LM Studio terminando en `/v1`."""
-        host = self.server_api_host or "http://localhost:1234"
-        if not host.startswith(("http://", "https://")):
-            host = f"http://{host}"
-
-        parsed = urlparse(host)
-        path = parsed.path.rstrip("/")
-        if not path:
-            path = "/v1"
-        elif not path.endswith("/v1"):
-            path = f"{path}/v1"
-
-        return urlunparse(parsed._replace(path=path, params="", query="", fragment=""))
-
-    def _fetch_model_resources(self) -> dict[str, Any]:
-        """Consulta `/v1/models` para obtener telemetría de recursos del modelo activo."""
-        if requests is None:
-            return {}
-
-        headers: dict[str, str] = {}
-        if self.api_token:
-            headers["Authorization"] = f"Bearer {self.api_token}"
-
-        try:
-            response = requests.get(
-                f"{self._build_rest_api_base()}/models",
-                headers=headers,
-                timeout=5,
-            )
-            response.raise_for_status()
-            payload = response.json()
-        except Exception:
-            return {}
-
-        data = payload.get("data")
-        if not isinstance(data, list) or not data:
-            return {}
-
-        normalized_tag = self.model_tag.lower()
-        target_model: dict[str, Any] | None = None
-        for item in data:
-            if not isinstance(item, dict):
-                continue
-            item_id = str(item.get("id", "")).strip().lower()
-            if item_id and item_id == normalized_tag:
-                target_model = item
-                break
-
-        if target_model is None:
-            target_model = next((item for item in data if isinstance(item, dict)), None)
-        if target_model is None:
-            return {}
-
-        metadata = cast(dict[str, Any], target_model.get("metadata") or {}) if isinstance(target_model.get("metadata"), dict) else {}
-        stats = cast(dict[str, Any], target_model.get("stats") or {}) if isinstance(target_model.get("stats"), dict) else {}
-        vram_usage_bytes = stats.get("vram_usage_bytes")
-        gpu_layers = stats.get("gpu_layers")
-
-        return {
-            "model_id": target_model.get("id") or self.model_tag,
-            "vram_usage_mb": (float(vram_usage_bytes) / (1024.0 ** 2)) if isinstance(vram_usage_bytes, (int, float)) else None,
-            "total_params": metadata.get("total_params"),
-            "architecture": metadata.get("architecture"),
-            "quantization": metadata.get("quantization"),
-            "gpu_layers": int(gpu_layers) if isinstance(gpu_layers, (int, float)) else None,
-        }
-
     def _estimate_reasoning_tokens(self, validated: BaseModel) -> int | None:
         """Cuenta tokens aproximados a partir del campo ``reasoning`` del schema validado."""
         reasoning_value = getattr(validated, "reasoning", None)
@@ -606,38 +521,24 @@ class VLMLoader:
             stats_payload,
             (
                 "prompt_tokens_count",
-                "prompt_tokens",
-                "input_tokens",
             ),
         )
         completion_tokens_value = self._extract_numeric_value(
             stats_payload,
             (
                 "predicted_tokens_count",
-                "completion_tokens",
-                "total_output_tokens",
-            ),
-        )
-        prompt_tokens_per_second = self._extract_numeric_value(
-            stats_payload,
-            (
-                "prompt_tokens_per_second",
-                "prompt_tokens_per_sec",
             ),
         )
         tokens_per_second = self._extract_numeric_value(
             stats_payload,
             (
                 "tokens_per_second",
-                "predicted_tokens_per_sec",
             ),
         )
         ttft_seconds = self._extract_numeric_value(
             stats_payload,
             (
                 "time_to_first_token_sec",
-                "time_to_first_token_seconds",
-                "time_to_first_token",
             ),
         )
         total_duration_ms = self._extract_numeric_value(stats_payload, ("total_duration_ms",))
@@ -658,52 +559,31 @@ class VLMLoader:
         if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
             total_tokens = prompt_tokens + completion_tokens
 
-        resources = self._fetch_model_resources()
         stop_reason = self._extract_string_value(stats_payload, ("stop_reason",))
-        total_params = resources.get("total_params") or model_info_payload.get("total_params") or model_info_payload.get("params_string")
-        if not isinstance(total_params, (int, str)):
-            total_params = None
-
-        model_id = cast(str | None, resources.get("model_id"))
-        if model_id is None:
-            model_id = self._extract_string_value(model_info_payload, ("model_key", "id", "display_name")) or self.model_tag
-
-        architecture = cast(str | None, resources.get("architecture"))
-        if architecture is None:
-            architecture = self._extract_string_value(model_info_payload, ("architecture",))
-
-        quantization = cast(str | None, resources.get("quantization"))
-        if quantization is None:
-            quantization = self._extract_quantization_value(
-                model_info_payload.get("path"),
-                model_info_payload.get("model_key"),
-                model_info_payload.get("display_name"),
-            )
-
-        gpu_layers = cast(int | None, resources.get("gpu_layers"))
-        if gpu_layers is None:
-            gpu_layers_value = self._extract_numeric_value(stats_payload, ("num_gpu_layers",))
-            gpu_layers = int(gpu_layers_value) if gpu_layers_value is not None else None
+        model_id = self._extract_string_value(model_info_payload, ("model_key", "id", "display_name")) or self.model_tag
+        architecture = self._extract_string_value(model_info_payload, ("architecture",))
+        gpu_layers_value = self._extract_numeric_value(stats_payload, ("num_gpu_layers",))
+        gpu_layers = int(gpu_layers_value) if gpu_layers_value is not None else None
 
         return InferenceTelemetry(
             total_duration_seconds=total_duration_seconds,
             ttft_seconds=ttft_seconds,
             generation_duration_seconds=generation_seconds,
-            prompt_tokens_per_second=prompt_tokens_per_second,
+            prompt_tokens_per_second=None,
             tokens_per_second=tokens_per_second,
             reasoning_tokens=None,
             stop_reason=stop_reason,
             model_id=model_id,
-            vram_usage_mb=cast(float | None, resources.get("vram_usage_mb")),
-            total_params=cast(int | str | None, total_params),
+            vram_usage_mb=None,
+            total_params=None,
             architecture=architecture,
-            quantization=quantization,
+            quantization=None,
             gpu_layers=gpu_layers,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             stats=stats_payload,
-            resources=resources,
+            resources={},
         )
 
     def _encode_image_data_url(self, image_path: str) -> str:

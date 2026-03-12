@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import dataclasses
 import json
 import os
@@ -12,7 +11,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _PROJECT_ROOT not in sys.path:
@@ -32,33 +31,20 @@ except ImportError:
 
 
 _IMG_EXT: set[str] = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
-_CSV_META_FIELDS: list[str] = [
-    "timestamp_utc",
-    "model_id",
-    "schema_name",
-    "image_path",
-    "image_name",
-    "status",
-    "duration_seconds",
-    "total_duration_seconds",
-    "ttft_seconds",
-    "generation_duration_seconds",
-    "prompt_tokens_per_second",
-    "tokens_per_second",
-    "reasoning_tokens",
-    "stop_reason",
-    "resolved_model_id",
-    "vram_usage_mb",
-    "total_params",
-    "architecture",
-    "quantization",
-    "gpu_layers",
-    "prompt_tokens",
-    "completion_tokens",
-    "total_tokens",
-    "error_type",
-    "error_message",
-]
+_TELEMETRY_RECORD_FIELDS: dict[str, str] = {
+    "total_duration_seconds": "total_duration_seconds",
+    "ttft_seconds": "ttft_seconds",
+    "generation_duration_seconds": "generation_duration_seconds",
+    "tokens_per_second": "tokens_per_second",
+    "reasoning_tokens": "reasoning_tokens",
+    "stop_reason": "stop_reason",
+    "resolved_model_id": "model_id",
+    "architecture": "architecture",
+    "gpu_layers": "gpu_layers",
+    "prompt_tokens": "prompt_tokens",
+    "completion_tokens": "completion_tokens",
+    "total_tokens": "total_tokens",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Procesa un directorio de imágenes con un VLM en LM Studio y guarda "
-            "resultados incrementales en CSV o JSONL."
+            "resultados incrementales en JSONL."
         )
     )
     parser.add_argument("--model", required=True, help="Identificador del modelo en LM Studio.")
@@ -84,11 +70,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--output",
         help="Ruta del archivo de salida. Si se omite, se genera en data/processed/batch_results/.",
-    )
-    parser.add_argument(
-        "--output-format",
-        choices=("csv", "jsonl"),
-        help="Formato de salida. Si se omite, se infiere de la extensión o se usa csv.",
     )
     parser.add_argument(
         "--max-images",
@@ -175,29 +156,10 @@ def select_images(
     return selected
 
 
-def infer_output_format(output_path: Path, explicit_format: str | None) -> str:
-    """Determina el formato de salida efectivo."""
-    if explicit_format:
-        return explicit_format
-
-    suffix = output_path.suffix.lower()
-    if suffix == ".jsonl":
-        return "jsonl"
-    return "csv"
-
-
-def build_default_output_path(schema_name: str, output_format: str) -> Path:
-    """Genera una ruta de salida por defecto bajo data/processed/batch_results."""
+def build_default_output_path(schema_name: str) -> Path:
+    """Genera una ruta JSONL por defecto bajo data/processed/batch_results."""
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    extension = "jsonl" if output_format == "jsonl" else "csv"
-    return Path(_PROJECT_ROOT) / "data" / "processed" / "batch_results" / f"batch_{schema_name}_{timestamp}.{extension}"
-
-
-def _serialize_scalar(value: Any) -> Any:
-    """Convierte valores complejos a una representación persistible."""
-    if isinstance(value, (dict, list, tuple)):
-        return json.dumps(value, ensure_ascii=False)
-    return value
+    return Path(_PROJECT_ROOT) / "data" / "processed" / "batch_results" / f"batch_{schema_name}_{timestamp}.jsonl"
 
 
 def _sync_file(file_handle: Any) -> None:
@@ -214,50 +176,32 @@ def append_jsonl_record(output_path: Path, record: dict[str, Any]) -> None:
         _sync_file(file_handle)
 
 
-def append_csv_record(output_path: Path, record: dict[str, Any], fieldnames: list[str]) -> None:
-    """Añade un registro CSV conservando cabecera y compatibilidad entre reintentos."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    header_exists = output_path.exists() and output_path.stat().st_size > 0
-
-    if header_exists:
-        with output_path.open("r", encoding="utf-8", newline="") as existing_file:
-            reader = csv.reader(existing_file)
-            existing_header = next(reader, [])
-        if existing_header and existing_header != fieldnames:
-            raise RuntimeError(
-                "La cabecera del CSV existente no coincide con el esquema actual. "
-                f"Archivo: {output_path}"
-            )
-
-    row = {field_name: _serialize_scalar(record.get(field_name, "")) for field_name in fieldnames}
-    with output_path.open("a", encoding="utf-8", newline="") as file_handle:
-        writer = csv.DictWriter(file_handle, fieldnames=fieldnames)
-        if not header_exists:
-            writer.writeheader()
-        writer.writerow(row)
-        _sync_file(file_handle)
-
-
-def persist_record(
-    output_path: Path,
-    output_format: str,
-    record: dict[str, Any],
-    *,
-    fieldnames: list[str],
-) -> None:
-    """Persiste un registro en el formato solicitado."""
-    if output_format == "jsonl":
-        append_jsonl_record(output_path, record)
-        return
-    append_csv_record(output_path, record, fieldnames)
-
-
 def classify_error(error: BaseException) -> str:
     """Clasifica un error para la telemetría del lote."""
     message = str(error).lower()
     if "no cumple el esquema" in message or "json válido" in message:
         return "invalid"
     return "error"
+
+
+def _prune_missing_fields(value: Any) -> Any:
+    """Elimina claves opcionales ausentes en salidas JSON-like sin tocar 0 o False."""
+    if isinstance(value, dict):
+        pruned: dict[str, Any] = {}
+        for key, item in value.items():
+            cleaned = _prune_missing_fields(item)
+            if cleaned is None:
+                continue
+            if isinstance(cleaned, dict) and not cleaned:
+                continue
+            if isinstance(cleaned, list) and not cleaned:
+                continue
+            pruned[key] = cleaned
+        return pruned
+    if isinstance(value, list):
+        items = [_prune_missing_fields(item) for item in value]
+        return [item for item in items if item is not None]
+    return value
 
 
 def build_record(
@@ -271,7 +215,7 @@ def build_record(
     telemetry: dict[str, Any] | None = None,
     error: BaseException | None = None,
 ) -> dict[str, Any]:
-    """Construye un registro homogéneo para CSV o JSONL."""
+    """Construye un registro homogéneo para JSONL."""
     record: dict[str, Any] = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "model_id": model_id,
@@ -280,31 +224,68 @@ def build_record(
         "image_name": image_path.name,
         "status": status,
         "duration_seconds": round(duration_seconds, 6),
-        "total_duration_seconds": telemetry.get("total_duration_seconds") if telemetry else None,
-        "ttft_seconds": telemetry.get("ttft_seconds") if telemetry else None,
-        "generation_duration_seconds": telemetry.get("generation_duration_seconds") if telemetry else None,
-        "prompt_tokens_per_second": telemetry.get("prompt_tokens_per_second") if telemetry else None,
-        "tokens_per_second": telemetry.get("tokens_per_second") if telemetry else None,
-        "reasoning_tokens": telemetry.get("reasoning_tokens") if telemetry else None,
-        "stop_reason": telemetry.get("stop_reason") if telemetry else None,
-        "resolved_model_id": telemetry.get("model_id") if telemetry else None,
-        "vram_usage_mb": telemetry.get("vram_usage_mb") if telemetry else None,
-        "total_params": telemetry.get("total_params") if telemetry else None,
-        "architecture": telemetry.get("architecture") if telemetry else None,
-        "quantization": telemetry.get("quantization") if telemetry else None,
-        "gpu_layers": telemetry.get("gpu_layers") if telemetry else None,
-        "prompt_tokens": telemetry.get("prompt_tokens") if telemetry else None,
-        "completion_tokens": telemetry.get("completion_tokens") if telemetry else None,
-        "total_tokens": telemetry.get("total_tokens") if telemetry else None,
-        "error_type": type(error).__name__ if error is not None else "",
-        "error_message": str(error) if error is not None else "",
+        "error_type": type(error).__name__ if error is not None else None,
+        "error_message": str(error) if error is not None else None,
     }
+    if telemetry:
+        record.update(
+            {
+                record_key: telemetry.get(telemetry_key)
+                for record_key, telemetry_key in _TELEMETRY_RECORD_FIELDS.items()
+            }
+        )
     if payload:
-        record.update(payload)
         record["payload"] = payload
-    else:
-        record["payload"] = None
-    return record
+    return _prune_missing_fields(record)
+
+
+def _empty_metric_summary() -> dict[str, float | None]:
+    """Construye una estructura homogénea para métricas opcionales."""
+    return {"avg": None}
+
+
+def _compute_metric_summary(total: float, count: int) -> dict[str, float | None]:
+    """Calcula una media incremental o marca la métrica como no disponible."""
+    if count <= 0:
+        return _empty_metric_summary()
+    return {"avg": total / count}
+
+
+def _build_batch_summary(
+    *,
+    model_id: str,
+    schema_name: str,
+    prompt: str,
+    output_path: Path,
+    processed: int,
+    ok: int,
+    invalid: int,
+    fail: int,
+    total_available: int,
+    sample_size: int,
+    ttft_total: float,
+    ttft_count: int,
+    tps_total: float,
+    tps_count: int,
+    total_duration_total: float,
+    total_duration_count: int,
+) -> dict[str, Any]:
+    """Construye el resumen parcial o final del batch runner."""
+    return {
+        "model_id": model_id,
+        "schema_name": schema_name,
+        "prompt": prompt,
+        "output_path": str(output_path),
+        "processed": processed,
+        "ok": ok,
+        "invalid": invalid,
+        "fail": fail,
+        "total_available": total_available,
+        "sample_size": sample_size,
+        "ttft": _compute_metric_summary(ttft_total, ttft_count),
+        "tps": _compute_metric_summary(tps_total, tps_count),
+        "total_duration": _compute_metric_summary(total_duration_total, total_duration_count),
+    }
 
 
 def run_batch_job(
@@ -314,7 +295,6 @@ def run_batch_job(
     schema_name: str,
     include_reasoning: bool = False,
     output_path: str | Path | None = None,
-    output_format: str | None = None,
     max_images: int | None = None,
     shuffle: bool = False,
     seed: int | None = None,
@@ -323,6 +303,7 @@ def run_batch_job(
     server_api_host: str | None = None,
     api_token: str | None = None,
     verbose: bool = False,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Ejecuta el lote completo y devuelve un resumen final."""
     public_schema_name, schema_cls = resolve_schema(schema_name, include_reasoning)
@@ -330,12 +311,9 @@ def run_batch_job(
     discovered_images = iter_image_paths(Path(image_dir))
     images = select_images(discovered_images, max_images=max_images, shuffle=shuffle, seed=seed)
 
-    resolved_output_path = Path(output_path) if output_path is not None else build_default_output_path(
-        public_schema_name,
-        output_format or "csv",
-    )
-    resolved_output_format = infer_output_format(resolved_output_path, output_format)
-    csv_fieldnames = [*_CSV_META_FIELDS, *schema_cls.model_fields.keys()]
+    resolved_output_path = Path(output_path) if output_path is not None else build_default_output_path(public_schema_name)
+    if resolved_output_path.suffix.lower() != ".jsonl":
+        resolved_output_path = resolved_output_path.with_suffix(".jsonl")
 
     loader = VLMLoader(
         model_path=model_id,
@@ -348,11 +326,62 @@ def run_batch_job(
     invalid = 0
     fail = 0
     processed = 0
+    ttft_total = 0.0
+    ttft_count = 0
+    tps_total = 0.0
+    tps_count = 0
+    total_duration_total = 0.0
+    total_duration_count = 0
+
+    def build_summary() -> dict[str, Any]:
+        return _build_batch_summary(
+            model_id=model_id,
+            schema_name=public_schema_name,
+            prompt=selected_prompt,
+            output_path=resolved_output_path,
+            processed=processed,
+            ok=ok,
+            invalid=invalid,
+            fail=fail,
+            total_available=len(discovered_images),
+            sample_size=len(images),
+            ttft_total=ttft_total,
+            ttft_count=ttft_count,
+            tps_total=tps_total,
+            tps_count=tps_count,
+            total_duration_total=total_duration_total,
+            total_duration_count=total_duration_count,
+        )
+
+    def emit_progress(
+        event: str,
+        *,
+        index: int = 0,
+        image_path: str | None = None,
+        status: str | None = None,
+        record: dict[str, Any] | None = None,
+    ) -> None:
+        if on_progress is None:
+            return
+        on_progress(
+            {
+                "event": event,
+                "index": index,
+                "total": len(images),
+                "image_path": image_path,
+                "status": status,
+                "record": dict(record) if record is not None else None,
+                "summary": build_summary(),
+            }
+        )
+
+    emit_progress("start")
 
     try:
         loader.load_model()
-        progress_iter = tqdm(images, desc="Procesando imágenes", unit="img")
-        for image_path in progress_iter:
+        progress_iter = tqdm(images, desc="Procesando imágenes", unit="img") if on_progress is None else images
+        for index, image_path in enumerate(progress_iter, start=1):
+            emit_progress("image_start", index=index, image_path=str(image_path), status="running")
             started_at = time.perf_counter()
             try:
                 result = loader.inference(
@@ -379,6 +408,18 @@ def run_batch_job(
                     telemetry=telemetry_payload,
                 )
                 ok += 1
+                ttft_value = telemetry_payload.get("ttft_seconds")
+                if isinstance(ttft_value, (int, float)):
+                    ttft_total += float(ttft_value)
+                    ttft_count += 1
+                tps_value = telemetry_payload.get("tokens_per_second")
+                if isinstance(tps_value, (int, float)):
+                    tps_total += float(tps_value)
+                    tps_count += 1
+                total_duration_value = telemetry_payload.get("total_duration_seconds")
+                if isinstance(total_duration_value, (int, float)):
+                    total_duration_total += float(total_duration_value)
+                    total_duration_count += 1
             except Exception as error:
                 duration_seconds = time.perf_counter() - started_at
                 status = classify_error(error)
@@ -395,28 +436,21 @@ def run_batch_job(
                 else:
                     fail += 1
 
-            persist_record(
-                resolved_output_path,
-                resolved_output_format,
-                record,
-                fieldnames=csv_fieldnames,
-            )
+            append_jsonl_record(resolved_output_path, record)
             processed += 1
+            emit_progress(
+                "image_done",
+                index=index,
+                image_path=str(image_path),
+                status=str(record.get("status") or "error"),
+                record=record,
+            )
     finally:
         loader.unload_model()
 
-    return {
-        "model_id": model_id,
-        "schema_name": public_schema_name,
-        "prompt": selected_prompt,
-        "output_path": str(resolved_output_path),
-        "output_format": resolved_output_format,
-        "processed": processed,
-        "ok": ok,
-        "invalid": invalid,
-        "fail": fail,
-        "total_available": len(discovered_images),
-    }
+    summary = build_summary()
+    emit_progress("complete", index=processed, status="complete")
+    return summary
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -430,7 +464,6 @@ def main(argv: list[str] | None = None) -> int:
         schema_name=args.schema,
         include_reasoning=args.with_reasoning,
         output_path=args.output,
-        output_format=args.output_format,
         max_images=args.max_images,
         shuffle=args.shuffle,
         seed=args.seed,

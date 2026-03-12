@@ -1,7 +1,7 @@
 from argparse import Namespace
 from types import SimpleNamespace
 
-from src.scripts import test_response_inspector as inspector
+from src.scripts import test_response as inspector
 
 
 def test_resolve_schema_defaults_to_generic_when_reasoning_is_requested():
@@ -65,9 +65,6 @@ def test_run_inspection_autofills_model_image_and_prompt(monkeypatch):
                 for key in dir(value)
                 if not key.startswith("_") and not callable(getattr(value, key))
             }
-
-        def _fetch_model_resources(self):
-            return {}
 
         def _extract_response_text(self, response):
             return response.content
@@ -133,7 +130,6 @@ def test_print_summary_renders_visual_sections(capsys):
                 "confidence_score": 88,
             },
         },
-        "resources": {},
     }
 
     inspector.print_summary(payload)
@@ -163,7 +159,6 @@ def test_print_summary_omits_empty_rows_and_sections(capsys):
             "stats": {},
             "parsed": {},
         },
-        "resources": {},
     }
 
     inspector.print_summary(payload)
@@ -175,9 +170,30 @@ def test_print_summary_omits_empty_rows_and_sections(capsys):
 
 
 def test_save_inspection_payload_writes_expected_file(tmp_path):
-    payload = {"request": {"model_id": "demo-model"}, "response": {}, "resources": {}}
+    payload = {"request": {"model_id": "demo-model"}, "response": {}}
 
     output_path = inspector.save_inspection_payload(payload, str(tmp_path / "out.json"))
 
     assert output_path.endswith("out.json")
     assert (tmp_path / "out.json").exists()
+
+
+def test_prune_absent_response_fields_removes_none_keys_recursively():
+    payload = {
+        "stats": {
+            "tokens_per_second": 25.0,
+            "prompt_tokens_per_second": None,
+        },
+        "model_info": {
+            "architecture": "qwen35",
+            "quantization": None,
+        },
+        "empty_section": None,
+    }
+
+    cleaned = inspector.prune_absent_response_fields(payload)
+
+    assert cleaned == {
+        "stats": {"tokens_per_second": 25.0},
+        "model_info": {"architecture": "qwen35"},
+    }

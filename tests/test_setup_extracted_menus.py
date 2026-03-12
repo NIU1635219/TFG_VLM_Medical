@@ -748,11 +748,9 @@ def test_setup_tests_ui_telemetry_probe_runs_with_selected_schema(monkeypatch):
             "fail": 0,
             "records": [],
             "ttft": {"avg": 0.4, "min": 0.3, "max": 0.5},
-            "prompt_tokens_per_second": {"avg": 120.0, "min": 110.0, "max": 130.0},
             "tps": {"avg": 20.0, "min": 19.0, "max": 21.0},
             "generation_duration": {"avg": 0.8, "min": 0.7, "max": 0.9},
             "reasoning_tokens": {"avg": 12.0, "min": 10.0, "max": 14.0},
-            "vram_usage_mb": {"avg": 512.0, "min": 500.0, "max": 524.0},
             "gpu_layers": {"avg": 28.0, "min": 28.0, "max": 28.0},
             "prompt_tokens": {"avg": 110.0, "min": 100.0, "max": 120.0},
             "completion_tokens": {"avg": 45.0, "min": 40.0, "max": 50.0},
@@ -761,13 +759,11 @@ def test_setup_tests_ui_telemetry_probe_runs_with_selected_schema(monkeypatch):
             "static_model_info": {
                 "resolved_model_id": "model-a",
                 "architecture": "qwen3_vl",
-                "quantization": "Q8_0",
-                "total_params": 9000000000,
                 "stop_reason": "eos",
             },
             "prompt": "demo",
             "telemetry_availability": {},
-            "notes": {"ttft": None, "tps": None, "resources": None},
+            "notes": {"ttft": None, "tps": None},
         },
     )
 
@@ -835,24 +831,20 @@ def test_setup_tests_ui_telemetry_probe_warns_when_tps_is_unavailable(monkeypatc
                     "image_path": "a.jpg",
                     "status": "ok",
                     "ttft_seconds": 0.4,
-                    "prompt_tokens_per_second": 120.0,
                     "tokens_per_second": None,
                     "generation_duration_seconds": 0.7,
                     "prompt_tokens": 100,
                     "completion_tokens": 40,
                     "reasoning_tokens": 11,
                     "stop_reason": "eos",
-                    "vram_usage_mb": 256.0,
                     "gpu_layers": 24,
                     "total_duration_seconds": 1.1,
                 }
             ],
             "ttft": {"avg": 0.4, "min": 0.4, "max": 0.4},
-            "prompt_tokens_per_second": {"avg": 120.0, "min": 120.0, "max": 120.0},
             "tps": {"avg": None, "min": None, "max": None},
             "generation_duration": {"avg": 0.7, "min": 0.7, "max": 0.7},
             "reasoning_tokens": {"avg": 11.0, "min": 11.0, "max": 11.0},
-            "vram_usage_mb": {"avg": 256.0, "min": 256.0, "max": 256.0},
             "gpu_layers": {"avg": 24.0, "min": 24.0, "max": 24.0},
             "prompt_tokens": {"avg": 100.0, "min": 100.0, "max": 100.0},
             "completion_tokens": {"avg": 40.0, "min": 40.0, "max": 40.0},
@@ -861,12 +853,10 @@ def test_setup_tests_ui_telemetry_probe_warns_when_tps_is_unavailable(monkeypatc
             "static_model_info": {
                 "resolved_model_id": "model-a",
                 "architecture": None,
-                "quantization": None,
-                "total_params": None,
                 "stop_reason": "eos",
             },
             "telemetry_availability": {"ttft_records": 1, "tps_records": 0, "total_duration_records": 1, "ok_records": 1},
-            "notes": {"ttft": None, "tps": "LM Studio no devolvio predicted_tokens_per_sec en response.stats; TPS no disponible en esta ejecucion.", "resources": None},
+            "notes": {"ttft": None, "tps": "LM Studio no devolvio tokens_per_second en response.stats; TPS no disponible en esta ejecucion."},
             "prompt": "demo",
         },
     )
@@ -895,8 +885,204 @@ def test_setup_tests_ui_telemetry_probe_warns_when_tps_is_unavailable(monkeypatc
     assert any("TPS no disponible" in msg for msg in warnings)
 
 
+def test_setup_tests_ui_telemetry_probe_hides_metrics_without_coverage(monkeypatch, capsys):
+    menu_calls = {"tests": 0, "model": 0, "schema": 0, "mode": 0}
+    logs = []
+
+    def interactive_menu(options, **kwargs):
+        menu_id = kwargs.get("menu_id")
+        if menu_id == "tests_manager_menu":
+            menu_calls["tests"] += 1
+            if menu_calls["tests"] == 1:
+                return next(item for item in options if item.label == " Run Telemetry Probe (TTFT/TPS)")
+            return None
+        if menu_id == "telemetry_probe_model_selector":
+            menu_calls["model"] += 1
+            if menu_calls["model"] == 1:
+                return next(item for item in options if item.label == "model-a")
+            return next(item for item in options if item.label == "Cancel")
+        if menu_id == "telemetry_probe_schema_selector":
+            menu_calls["schema"] += 1
+            return next(item for item in options if item.label == "PolypDetection")
+        if menu_id == "telemetry_probe_reasoning_selector":
+            menu_calls["mode"] += 1
+            return next(item for item in options if item.label == "Sin razonamiento")
+        raise AssertionError(f"Unexpected menu_id: {menu_id}")
+
+    import src.scripts.test_schema as schema_script
+    import src.scripts.test_telemetry as telemetry_script
+
+    monkeypatch.setattr(schema_script, "find_images", lambda: ["a.jpg"])
+    monkeypatch.setattr(
+        telemetry_script,
+        "run_telemetry_batch",
+        lambda **kwargs: {
+            "model_id": kwargs["model_id"],
+            "schema_name": kwargs["schema_name"],
+            "sample_size": 1,
+            "ok": 1,
+            "fail": 0,
+            "records": [
+                {
+                    "image_path": "a.jpg",
+                    "status": "ok",
+                    "ttft_seconds": 1.85791,
+                    "tokens_per_second": 28.196269274704576,
+                    "generation_duration_seconds": 8.4348634,
+                    "prompt_tokens": 1488,
+                    "completion_tokens": 237.8,
+                    "reasoning_tokens": None,
+                    "stop_reason": "eosFound",
+                    "gpu_layers": -1,
+                    "total_duration_seconds": 10.3789271799993,
+                }
+            ],
+            "ttft": {"avg": 1.85791, "min": 1.85791, "max": 1.85791},
+            "tps": {"avg": 28.196269274704576, "min": 28.196269274704576, "max": 28.196269274704576},
+            "generation_duration": {"avg": 8.4348634, "min": 8.4348634, "max": 8.4348634},
+            "reasoning_tokens": {"avg": None, "min": None, "max": None},
+            "gpu_layers": {"avg": -1.0, "min": -1.0, "max": -1.0},
+            "prompt_tokens": {"avg": 1488.0, "min": 1488.0, "max": 1488.0},
+            "completion_tokens": {"avg": 237.8, "min": 237.8, "max": 237.8},
+            "total_tokens": {"avg": 1725.8, "min": 1725.8, "max": 1725.8},
+            "total_duration": {"avg": 10.3789271799993, "min": 10.3789271799993, "max": 10.3789271799993},
+            "static_model_info": {
+                "resolved_model_id": "model-a",
+                "architecture": "qwen35",
+                "stop_reason": "eosFound",
+            },
+            "telemetry_availability": {
+                "ttft_records": 1,
+                "tps_records": 1,
+                "generation_records": 1,
+                "reasoning_records": 0,
+                "gpu_layer_records": 1,
+                "prompt_token_records": 1,
+                "completion_token_records": 1,
+                "total_token_records": 1,
+                "total_duration_records": 1,
+                "ok_records": 1,
+            },
+            "notes": {"ttft": None, "tps": None},
+            "prompt": "demo",
+        },
+    )
+
+    ctx = {
+        "Style": _DummyStyle,
+        "MenuItem": _MenuItem,
+        "print_banner": lambda: None,
+        "log": lambda msg, level="info": logs.append((msg, level)),
+        "run_cmd": lambda *_: None,
+        "wait_for_any_key": lambda *args, **kwargs: None,
+        "interactive_menu": interactive_menu,
+        "list_test_files": lambda: [],
+        "get_installed_lms_models": lambda: ["model-a"],
+        "clear_screen_ansi": lambda: None,
+        "manage_models_menu_ui": lambda: None,
+        "time": SimpleNamespace(sleep=lambda *_: None),
+    }
+
+    kit, app = _make_kit_app(ctx)
+    setup_tests_ui.run_tests_menu(kit, app)
+
+    output = capsys.readouterr().out
+    render_calls = kit.IncrementalPanelRenderer.return_value.render.call_args_list
+    rendered_lines = []
+    if render_calls:
+        rendered_lines = render_calls[-1][0][0]
+    rendered_text = "\n".join(rendered_lines)
+    assert "Ingesta prompt media (t/s)" not in output
+    assert "VRAM media (MB)" not in output
+    assert "Reasoning schema medio" not in output
+    assert "prompt_tps=" not in rendered_text
+    assert "vram=" not in rendered_text
+    assert "reasoning=" not in rendered_text
+    assert any(msg == "Cobertura: TTFT 1/1 · TPS 1/1 · GPU 1/1" for msg, _level in logs)
+    assert "TTFT=1.858 s" in rendered_text
+    assert "TPS=28.196" in rendered_text
+    assert "total=10.379 s" in rendered_text
+
+
+def test_setup_tests_ui_telemetry_probe_reports_incidents_in_final_message(monkeypatch):
+    menu_calls = {"tests": 0, "model": 0, "schema": 0, "mode": 0}
+    logs = []
+
+    def interactive_menu(options, **kwargs):
+        menu_id = kwargs.get("menu_id")
+        if menu_id == "tests_manager_menu":
+            menu_calls["tests"] += 1
+            if menu_calls["tests"] == 1:
+                return next(item for item in options if item.label == " Run Telemetry Probe (TTFT/TPS)")
+            return None
+        if menu_id == "telemetry_probe_model_selector":
+            menu_calls["model"] += 1
+            if menu_calls["model"] == 1:
+                return next(item for item in options if item.label == "model-a")
+            return next(item for item in options if item.label == "Cancel")
+        if menu_id == "telemetry_probe_schema_selector":
+            menu_calls["schema"] += 1
+            return next(item for item in options if item.label == "PolypDetection")
+        if menu_id == "telemetry_probe_reasoning_selector":
+            menu_calls["mode"] += 1
+            return next(item for item in options if item.label == "Sin razonamiento")
+        raise AssertionError(f"Unexpected menu_id: {menu_id}")
+
+    import src.scripts.test_schema as schema_script
+    import src.scripts.test_telemetry as telemetry_script
+
+    monkeypatch.setattr(schema_script, "find_images", lambda: ["a.jpg", "b.jpg"])
+    monkeypatch.setattr(
+        telemetry_script,
+        "run_telemetry_batch",
+        lambda **kwargs: {
+            "model_id": kwargs["model_id"],
+            "schema_name": kwargs["schema_name"],
+            "sample_size": 2,
+            "ok": 1,
+            "fail": 1,
+            "records": [
+                {"image_path": "a.jpg", "status": "ok", "ttft_seconds": 1.2, "tokens_per_second": 30.0, "generation_duration_seconds": 2.0, "prompt_tokens": 100, "completion_tokens": 50, "stop_reason": "eosFound", "gpu_layers": -1, "total_duration_seconds": 3.4},
+                {"image_path": "b.jpg", "status": "error", "error": "boom"},
+            ],
+            "ttft": {"avg": 1.2, "min": 1.2, "max": 1.2},
+            "tps": {"avg": 30.0, "min": 30.0, "max": 30.0},
+            "generation_duration": {"avg": 2.0, "min": 2.0, "max": 2.0},
+            "reasoning_tokens": {"avg": None, "min": None, "max": None},
+            "gpu_layers": {"avg": -1.0, "min": -1.0, "max": -1.0},
+            "prompt_tokens": {"avg": 100.0, "min": 100.0, "max": 100.0},
+            "completion_tokens": {"avg": 50.0, "min": 50.0, "max": 50.0},
+            "total_tokens": {"avg": 150.0, "min": 150.0, "max": 150.0},
+            "total_duration": {"avg": 3.4, "min": 3.4, "max": 3.4},
+            "static_model_info": {"resolved_model_id": "model-a", "architecture": "qwen35", "stop_reason": "eosFound"},
+            "telemetry_availability": {"ttft_records": 1, "tps_records": 1, "gpu_layer_records": 1, "prompt_token_records": 1, "completion_token_records": 1, "total_token_records": 1, "total_duration_records": 1, "ok_records": 1},
+            "notes": {"ttft": None, "tps": None},
+            "prompt": "demo",
+        },
+    )
+
+    ctx = {
+        "Style": _DummyStyle,
+        "MenuItem": _MenuItem,
+        "print_banner": lambda: None,
+        "log": lambda msg, level="info": logs.append((msg, level)),
+        "run_cmd": lambda *_: None,
+        "wait_for_any_key": lambda *args, **kwargs: None,
+        "interactive_menu": interactive_menu,
+        "list_test_files": lambda: [],
+        "get_installed_lms_models": lambda: ["model-a"],
+        "clear_screen_ansi": lambda: None,
+        "manage_models_menu_ui": lambda: None,
+        "time": SimpleNamespace(sleep=lambda *_: None),
+    }
+
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
+
+    assert any(msg == "Telemetry Probe completado con incidencias: 1 OK, 1 errores." and level == "warning" for msg, level in logs)
+
+
 def test_setup_tests_ui_batch_runner_exports_results(monkeypatch):
-    menu_calls = {"tests": 0, "model": 0, "schema": 0, "mode": 0, "format": 0, "size": 0}
+    menu_calls = {"tests": 0, "model": 0, "schema": 0, "mode": 0, "size": 0}
     batch_calls = []
     waits = {"count": 0}
     logs = []
@@ -906,7 +1092,7 @@ def test_setup_tests_ui_batch_runner_exports_results(monkeypatch):
         if menu_id == "tests_manager_menu":
             menu_calls["tests"] += 1
             if menu_calls["tests"] == 1:
-                return next(item for item in options if item.label == " Run Batch Runner (CSV/JSONL Export)")
+                return next(item for item in options if item.label == " Run Batch Runner")
             return None
         if menu_id == "batch_runner_model_selector":
             menu_calls["model"] += 1
@@ -919,9 +1105,6 @@ def test_setup_tests_ui_batch_runner_exports_results(monkeypatch):
         if menu_id == "batch_runner_reasoning_selector":
             menu_calls["mode"] += 1
             return next(item for item in options if item.label == "Con razonamiento")
-        if menu_id == "batch_runner_output_format_selector":
-            menu_calls["format"] += 1
-            return next(item for item in options if item.label == "CSV")
         if menu_id == "batch_runner_size_selector":
             menu_calls["size"] += 1
             return next(item for item in options if item.label == "25 imágenes")
@@ -936,7 +1119,7 @@ def test_setup_tests_ui_batch_runner_exports_results(monkeypatch):
             "ok": 25,
             "invalid": 0,
             "fail": 0,
-            "output_path": "data/processed/batch_results/demo.csv",
+            "output_path": "data/processed/batch_results/demo.jsonl",
         },
     )
 
@@ -959,7 +1142,6 @@ def test_setup_tests_ui_batch_runner_exports_results(monkeypatch):
 
     assert batch_calls[0]["model_id"] == "model-a"
     assert batch_calls[0]["schema_name"] == "PolypDetectionWithReasoning"
-    assert batch_calls[0]["output_format"] == "csv"
     assert batch_calls[0]["max_images"] == 25
     assert waits["count"] == 1
     assert any("Batch Runner completado" in msg for msg, _level in logs)
@@ -970,7 +1152,7 @@ def test_setup_tests_ui_response_inspector_runs_from_menu(monkeypatch):
     inspector_calls = []
     waits = {"count": 0}
     logs = []
-    printed_payloads = []
+    rendered_sections = []
 
     def interactive_menu(options, **kwargs):
         menu_id = kwargs.get("menu_id")
@@ -989,7 +1171,7 @@ def test_setup_tests_ui_response_inspector_runs_from_menu(monkeypatch):
             return next(item for item in options if item.label == "Estructurada con reasoning")
         raise AssertionError(f"Unexpected menu_id: {menu_id}")
 
-    import src.scripts.test_response_inspector as inspector_script
+    import src.scripts.test_response as inspector_script
 
     monkeypatch.setattr(
         inspector_script,
@@ -997,11 +1179,10 @@ def test_setup_tests_ui_response_inspector_runs_from_menu(monkeypatch):
         lambda args: inspector_calls.append(args) or {
             "request": {"model_id": args.model, "image_path": "a.jpg", "schema_name": "GenericObjectDetectionWithReasoning"},
             "response": {"python_type": "PredictionResult", "structured": True, "public_attributes": {}, "text_extracted": "demo", "model_info": {}, "stats": {}, "parsed": {}},
-            "resources": {},
         },
     )
     monkeypatch.setattr(inspector_script, "save_inspection_payload", lambda payload, output_path=None: f"data/processed/debug/{payload['request']['model_id']}.json")
-    monkeypatch.setattr(inspector_script, "print_summary", lambda payload: printed_payloads.append(payload))
+    monkeypatch.setattr(inspector_script, "build_summary_sections", lambda payload: rendered_sections.append(payload) or [("Resumen", [("Model", payload["request"]["model_id"])])])
 
     ctx = {
         "Style": _DummyStyle,
@@ -1023,6 +1204,6 @@ def test_setup_tests_ui_response_inspector_runs_from_menu(monkeypatch):
     assert inspector_calls[0].model == "model-a"
     assert inspector_calls[0].structured is True
     assert inspector_calls[0].with_reasoning is True
-    assert printed_payloads[0]["request"]["model_id"] == "model-a"
+    assert rendered_sections[0]["request"]["model_id"] == "model-a"
     assert waits["count"] == 1
     assert any("Response Inspector completado" in msg for msg, _level in logs)

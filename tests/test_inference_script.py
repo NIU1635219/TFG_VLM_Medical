@@ -231,6 +231,42 @@ def test_run_smoke_test_executes_model_load_unload_cycle(monkeypatch):
     assert calls["unload"] == 1
 
 
+def test_run_smoke_test_emits_progress_events(monkeypatch):
+    events = []
+
+    class FakeLoader:
+        def __init__(self, model_path, verbose=False):
+            self.model_path = model_path
+
+        def preload_model(self):
+            return None
+
+        def inference(self, image_path, prompt):
+            return '{"object_detected": "gato", "confidence_score": 95, "justification": "Se ve un gato"}'
+
+        def unload_model(self):
+            return None
+
+    monkeypatch.setattr("src.scripts.test_inference.VLMLoader", FakeLoader)
+
+    code = run_smoke_test(
+        "fake-model",
+        [{"id": "sample_01", "label": "cat", "path": "a.jpg"}],
+        on_progress=events.append,
+    )
+
+    assert code == 0
+    assert [event["event"] for event in events] == [
+        "start",
+        "model_ready",
+        "case_start",
+        "case_done",
+        "complete",
+    ]
+    assert events[3]["record"]["status"] == "ok"
+    assert events[-1]["summary"]["passed"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Tests: get_installed_models (variant-aware listing)
 # ---------------------------------------------------------------------------

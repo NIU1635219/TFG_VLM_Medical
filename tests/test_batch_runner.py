@@ -1,7 +1,8 @@
-import csv
 import json
+from pathlib import Path
 
 from src.scripts.batch_runner import (
+    build_record,
     build_parser,
     iter_image_paths,
     run_batch_job,
@@ -40,13 +41,13 @@ def test_build_parser_accepts_required_batch_args():
     assert args.schema == "GenericObjectDetection"
 
 
-def test_run_batch_job_writes_incremental_csv_and_unloads(monkeypatch, tmp_path):
+def test_run_batch_job_writes_incremental_jsonl_and_unloads(monkeypatch, tmp_path):
     image_dir = tmp_path / "images"
     image_dir.mkdir()
     for index in range(5):
         (image_dir / f"sample_{index}.jpg").write_bytes(b"image")
 
-    output_path = tmp_path / "results.csv"
+    output_path = tmp_path / "results.jsonl"
     calls = {"load": 0, "unload": 0, "inference": 0}
 
     class FakeResult:
@@ -78,7 +79,7 @@ def test_run_batch_job_writes_incremental_csv_and_unloads(monkeypatch, tmp_path)
             self.prompt_tokens = 32
             self.completion_tokens = 18
             self.total_tokens = 50
-            self.stats = {"predicted_tokens_per_sec": 22.5}
+            self.stats = {"tokens_per_second": 22.5}
             self.resources = {"vram_usage_mb": 100.0}
 
     class FakeInferenceResult:
@@ -109,7 +110,6 @@ def test_run_batch_job_writes_incremental_csv_and_unloads(monkeypatch, tmp_path)
         image_dir=image_dir,
         schema_name="GenericObjectDetection",
         output_path=output_path,
-        output_format="csv",
         max_images=5,
     )
 
@@ -119,23 +119,100 @@ def test_run_batch_job_writes_incremental_csv_and_unloads(monkeypatch, tmp_path)
     assert summary["fail"] == 0
     assert calls == {"load": 1, "unload": 1, "inference": 5}
 
-    with output_path.open("r", encoding="utf-8", newline="") as file_handle:
-        rows = list(csv.DictReader(file_handle))
+    rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").strip().splitlines()]
 
     assert len(rows) == 5
     assert rows[0]["status"] == "ok"
-    assert rows[0]["object_detected"].startswith("sample_")
-    assert rows[0]["total_duration_seconds"] == "1.2"
-    assert rows[0]["ttft_seconds"] == "0.4"
-    assert rows[0]["prompt_tokens_per_second"] == "120.0"
-    assert rows[0]["tokens_per_second"] == "22.5"
-    assert rows[0]["reasoning_tokens"] == "4"
+    assert rows[0]["payload"]["object_detected"].startswith("sample_")
+    assert rows[0]["total_duration_seconds"] == 1.2
+    assert rows[0]["ttft_seconds"] == 0.4
+    assert rows[0]["tokens_per_second"] == 22.5
+    assert rows[0]["reasoning_tokens"] == 4
     assert rows[0]["stop_reason"] == "eos"
     assert rows[0]["resolved_model_id"] == "fake-model"
-    assert rows[0]["vram_usage_mb"] == "100.0"
     assert rows[0]["architecture"] == "qwen3_vl"
-    assert rows[0]["quantization"] == "Q8_0"
-    assert rows[0]["gpu_layers"] == "28"
+    assert rows[0]["gpu_layers"] == 28
+
+
+def test_run_batch_job_emits_progress_events(monkeypatch, tmp_path):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    for index in range(2):
+        (image_dir / f"sample_{index}.jpg").write_bytes(b"image")
+
+    events = []
+
+    class FakeResult:
+        def __init__(self, image_name):
+            self._image_name = image_name
+
+        def model_dump(self):
+            return {
+                "object_detected": self._image_name,
+                "confidence_score": 99,
+                "justification": "ok",
+            }
+
+    class FakeTelemetry:
+        def __init__(self):
+            self.total_duration_seconds = 1.0
+            self.ttft_seconds = 0.2
+            self.generation_duration_seconds = 0.8
+            self.prompt_tokens_per_second = 111.0
+            self.tokens_per_second = 33.0
+            self.reasoning_tokens = 2
+            self.stop_reason = "eos"
+            self.model_id = "fake-model"
+            self.vram_usage_mb = 90.0
+            self.total_params = 123
+            self.architecture = "fake_arch"
+            self.quantization = "Q4"
+            self.gpu_layers = 12
+            self.prompt_tokens = 10
+            self.completion_tokens = 20
+            self.total_tokens = 30
+
+    class FakeInferenceResult:
+        def __init__(self, image_name):
+            self.data = FakeResult(image_name)
+            self.telemetry = FakeTelemetry()
+
+    class FakeLoader:
+        def __init__(self, model_path, verbose=False, server_api_host=None, api_token=None):
+            self.model_path = model_path
+
+        def load_model(self):
+            return None
+
+        def inference(self, image_path, prompt, schema, temperature, include_telemetry=False):
+            return FakeInferenceResult(image_path.name)
+
+        def unload_model(self):
+            return None
+
+    monkeypatch.setattr("src.scripts.batch_runner.VLMLoader", FakeLoader)
+
+    summary = run_batch_job(
+        model_id="fake-model",
+        image_dir=image_dir,
+        schema_name="GenericObjectDetection",
+        output_path=tmp_path / "results.jsonl",
+        on_progress=events.append,
+    )
+
+    assert summary["processed"] == 2
+    assert [event["event"] for event in events] == [
+        "start",
+        "image_start",
+        "image_done",
+        "image_start",
+        "image_done",
+        "complete",
+    ]
+    assert events[2]["record"]["status"] == "ok"
+    assert events[2]["summary"]["processed"] == 1
+    assert events[-1]["summary"]["processed"] == 2
+    assert events[-1]["summary"]["ttft"]["avg"] == 0.2
 
 
 def test_run_batch_job_persists_error_rows_in_jsonl(monkeypatch, tmp_path):
@@ -172,7 +249,7 @@ def test_run_batch_job_persists_error_rows_in_jsonl(monkeypatch, tmp_path):
             self.prompt_tokens = 20
             self.completion_tokens = 18
             self.total_tokens = 38
-            self.stats = {"predicted_tokens_per_sec": 30.0}
+            self.stats = {"tokens_per_second": 30.0}
             self.resources = {"vram_usage_mb": 80.0}
 
     class FakeInferenceResult:
@@ -205,7 +282,6 @@ def test_run_batch_job_persists_error_rows_in_jsonl(monkeypatch, tmp_path):
         image_dir=image_dir,
         schema_name="GenericObjectDetection",
         output_path=output_path,
-        output_format="jsonl",
     )
 
     assert summary["processed"] == 3
@@ -217,5 +293,41 @@ def test_run_batch_job_persists_error_rows_in_jsonl(monkeypatch, tmp_path):
     records = [json.loads(line) for line in lines]
 
     assert len(records) == 3
+    assert "object_detected" not in records[0]
+    assert records[0]["payload"]["object_detected"] == "ok"
     assert records[1]["status"] == "invalid"
     assert "no cumple el esquema" in records[1]["error_message"].lower()
+
+
+def test_build_record_omits_absent_optional_fields_in_json_like_payload():
+    record = build_record(
+        model_id="fake-model",
+        schema_name="GenericObjectDetection",
+        image_path=Path("demo.jpg"),
+        duration_seconds=0.5,
+        status="ok",
+        payload={"object_detected": "cat"},
+        telemetry={"tokens_per_second": 12.0},
+    )
+
+    assert record["tokens_per_second"] == 12.0
+    assert record["payload"] == {"object_detected": "cat"}
+    assert "object_detected" not in record
+    assert "prompt_tokens_per_second" not in record
+    assert "error_message" not in record
+    assert "total_duration_seconds" not in record
+
+
+def test_build_record_can_keep_payload_nested_without_flattening():
+    record = build_record(
+        model_id="fake-model",
+        schema_name="GenericObjectDetection",
+        image_path=Path("demo.jpg"),
+        duration_seconds=0.5,
+        status="ok",
+        payload={"object_detected": "cat"},
+        telemetry={"tokens_per_second": 12.0},
+    )
+
+    assert record["payload"] == {"object_detected": "cat"}
+    assert "object_detected" not in record

@@ -1081,72 +1081,6 @@ def test_setup_tests_ui_telemetry_probe_reports_incidents_in_final_message(monke
     assert any(msg == "Telemetry Probe completado con incidencias: 1 OK, 1 errores." and level == "warning" for msg, level in logs)
 
 
-def test_setup_tests_ui_batch_runner_exports_results(monkeypatch):
-    menu_calls = {"tests": 0, "model": 0, "schema": 0, "mode": 0, "size": 0}
-    batch_calls = []
-    waits = {"count": 0}
-    logs = []
-
-    def interactive_menu(options, **kwargs):
-        menu_id = kwargs.get("menu_id")
-        if menu_id == "tests_manager_menu":
-            menu_calls["tests"] += 1
-            if menu_calls["tests"] == 1:
-                return next(item for item in options if item.label == " Run Batch Runner")
-            return None
-        if menu_id == "batch_runner_model_selector":
-            menu_calls["model"] += 1
-            if menu_calls["model"] == 1:
-                return next(item for item in options if item.label == "model-a")
-            return next(item for item in options if item.label == "Cancel")
-        if menu_id == "batch_runner_schema_selector":
-            menu_calls["schema"] += 1
-            return next(item for item in options if item.label == "PolypDetection")
-        if menu_id == "batch_runner_reasoning_selector":
-            menu_calls["mode"] += 1
-            return next(item for item in options if item.label == "Con razonamiento")
-        if menu_id == "batch_runner_size_selector":
-            menu_calls["size"] += 1
-            return next(item for item in options if item.label == "25 imágenes")
-        raise AssertionError(f"Unexpected menu_id: {menu_id}")
-
-    import src.scripts.batch_runner as batch_script
-
-    monkeypatch.setattr(
-        batch_script,
-        "run_batch_job",
-        lambda **kwargs: batch_calls.append(kwargs) or {
-            "ok": 25,
-            "invalid": 0,
-            "fail": 0,
-            "output_path": "data/processed/batch_results/demo.jsonl",
-        },
-    )
-
-    ctx = {
-        "Style": _DummyStyle,
-        "MenuItem": _MenuItem,
-        "print_banner": lambda: None,
-        "log": lambda msg, level="info": logs.append((msg, level)),
-        "run_cmd": lambda *_: None,
-        "wait_for_any_key": lambda *args, **kwargs: waits.__setitem__("count", waits["count"] + 1),
-        "interactive_menu": interactive_menu,
-        "list_test_files": lambda: [],
-        "get_installed_lms_models": lambda: ["model-a"],
-        "clear_screen_ansi": lambda: None,
-        "manage_models_menu_ui": lambda: None,
-        "time": SimpleNamespace(sleep=lambda *_: None),
-    }
-
-    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
-
-    assert batch_calls[0]["model_id"] == "model-a"
-    assert batch_calls[0]["schema_name"] == "PolypDetectionWithReasoning"
-    assert batch_calls[0]["max_images"] == 25
-    assert waits["count"] == 1
-    assert any("Batch Runner completado" in msg for msg, _level in logs)
-
-
 def test_setup_tests_ui_response_inspector_runs_from_menu(monkeypatch):
     menu_calls = {"tests": 0, "model": 0, "mode": 0}
     inspector_calls = []
@@ -1207,3 +1141,36 @@ def test_setup_tests_ui_response_inspector_runs_from_menu(monkeypatch):
     assert rendered_sections[0]["request"]["model_id"] == "model-a"
     assert waits["count"] == 1
     assert any("Response Inspector completado" in msg for msg, _level in logs)
+
+
+def test_setup_tests_ui_menu_no_longer_contains_separate_manifest_init_option():
+    menu_calls = {"tests": 0}
+    checked_options = {"has_init": False}
+
+    def interactive_menu(options, **kwargs):
+        menu_id = kwargs.get("menu_id")
+        if menu_id == "tests_manager_menu":
+            menu_calls["tests"] += 1
+            checked_options["has_init"] = any(item.label == " Initialize Zero-Shot Manifest" for item in options)
+            return None
+        raise AssertionError(f"Unexpected menu_id: {menu_id}")
+
+    ctx = {
+        "Style": _DummyStyle,
+        "MenuItem": _MenuItem,
+        "print_banner": lambda: None,
+        "log": lambda *_args, **_kwargs: None,
+        "run_cmd": lambda *_: None,
+        "wait_for_any_key": lambda *args, **kwargs: None,
+        "interactive_menu": interactive_menu,
+        "list_test_files": lambda: [],
+        "get_installed_lms_models": lambda: ["model-a"],
+        "clear_screen_ansi": lambda: None,
+        "manage_models_menu_ui": lambda: None,
+        "time": SimpleNamespace(sleep=lambda *_: None),
+    }
+
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
+
+    assert menu_calls["tests"] == 1
+    assert checked_options["has_init"] is False

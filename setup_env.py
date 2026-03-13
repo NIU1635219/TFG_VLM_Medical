@@ -6,8 +6,6 @@ import shutil
 import time
 import atexit
 from src.utils import (
-    lms_models,
-    lms_menu_helpers,
     setup_ui_io,
     setup_models_ui,
     setup_diagnostics,
@@ -18,8 +16,11 @@ from src.utils import (
 from src.utils.menu_kit import UIKit, AppContext
 from src.utils.app_config import REQUIRED_LIBS, LIB_IMPORT_MAP, MODELS_REGISTRY
 from src.utils.setup_install_flow import detect_gpu, check_uv, create_project_structure
-from src.utils.setup_tests_ui import list_test_files
-from src.utils.lms_models import get_installed_lms_models
+from src.utils.tests_ui.run_pytest import list_test_files
+from src.utils.models_ui import (
+    lms_models,
+    lms_menu_helpers
+)
 
 # Manejo de MSVCRT para inputs en Windows
 try:
@@ -328,7 +329,7 @@ _app = AppContext(
     fix_libs=fix_libs,
     check_lms=lms_models.check_lms,
     restart_program=restart_program,
-    get_installed_lms_models=get_installed_lms_models,
+    get_installed_lms_models=lms_models.get_installed_lms_models,
     list_test_files=list_test_files,
     ensure_lms_server_running=ensure_lms_server_running,
     stop_lms_server_if_owned=stop_lms_server_if_owned,

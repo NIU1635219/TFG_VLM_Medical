@@ -19,9 +19,48 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Manager TUI modularizado y con tests de regresión.
 - `UIKit` incluye API de tablas interactivas (`TableColumn`, `TableRow`, `build_table_items`, `table_menu`) con anchos de columna adaptativos al terminal.
 - Schema Tester integrado en el manager: selección interactiva de modelo + esquema + inferencia por lotes.
-- Batch Runner CLI con exportado incremental en CSV/JSONL para análisis posterior con Pandas.
+- Batch Runner CLI con exportado incremental en JSONL compartido por manifiesto+schema.
 - Telemetry Probe integrado en el manager con progreso en vivo, cobertura de métricas y resumen final legible.
 - Response Inspector integrado en el manager para inspeccionar campos reales del SDK con modo crudo o estructurado.
+- UI/IO reforzada en `setup_ui_io.py`:
+    - `ask_text(...)` como helper general de entrada reactiva en terminal.
+    - `ask_choice(...)` como selector horizontal reutilizable para prompts interactivos.
+    - `ask_user(...)` mantenido por compatibilidad y delegado sobre `ask_choice(...)`.
+- Flujo de `BATCH RUNNER · MANIFEST SAMPLE SIZE` mejorado con preview estratificado en vivo:
+    - reparto por clase mientras se escribe,
+    - distribución total del dataset,
+    - resumen `Total estimado / solicitado`,
+    - repintado completo opcional para evitar duplicación visual/ghosting.
+- Manifests de experimentos con formato compacto:
+    - configuración global (`run_models`, `run_schema_name`, `run_include_reasoning`) en metadatos de cabecera,
+    - filas de imágenes más limpias y sin repetir configuración por registro,
+    - compatibilidad mantenida con manifests legacy que aún embeben esos campos en cada línea.
+- Refactor modular de menús de modelos y tests:
+    - extracción de pantallas a `src/utils/models_ui/` y `src/utils/tests_ui/`,
+    - menor acoplamiento y mayor reutilización,
+    - mantenimiento de compatibilidad funcional con pruebas de regresión.
+- `batch_results` con metadatos canónicos `__batch_meta__` (v2):
+    - formato sin claves legacy,
+    - `model_ids`, `schema_names`, `input_sources`, `manifest_paths`.
+- Resumen agregado `__batch_summary__` al final del JSONL:
+    - min/max/media de métricas de latencia por modelo y global,
+    - aciertos y accuracy por modelo y global (`correct/evaluated`).
+- Reejecución de batch mejorada:
+    - una única decisión al inicio (sí/no/selección múltiple de modelos),
+    - selección múltiple real con `SPACE`,
+    - barra de cola oculta cuando solo se ejecuta un modelo.
+
+## Novedades recientes (marzo 2026)
+
+- Estandarización de docstrings en estilo Google en módulos refactorizados.
+- Corrección de imports tras mover helpers de LM Studio a `src/utils/models_ui/`.
+- Consolidación del input reactivo en `src/utils/setup_ui_io.py` y reutilización en:
+    - pantalla de selección de tamaño de subgrupo (Batch Runner),
+    - pantalla de descarga manual por ID/URL (Model Manager).
+- Validación continua con `pytest` en bloques focalizados y suite completa durante la refactorización.
+- Batch Runner: metadata de salida unificado en `__batch_meta__` v2 y eliminación de campos legacy.
+- Batch Runner: generación automática de `__batch_summary__` con métricas globales y por modelo (incluye accuracy).
+- Batch Runner UI: estrategia de reejecución por dataset con selector múltiple de modelos.
 
 ## Stack técnico
 
@@ -37,69 +76,84 @@ Dependencias declaradas en `pyproject.toml`.
 
 ```text
 .
-├── README.md                         # Documentación principal del proyecto y guía de uso.
-├── pyproject.toml                    # Metadatos del proyecto y dependencias Python.
-├── uv.lock                           # Lockfile reproducible del entorno gestionado con uv.
-├── setup_env.py                      # Punto de entrada del manager TUI de instalación/tests/modelos.
-├── setup.bat                         # Arranque rápido del manager en Windows.
-├── setup.sh                          # Arranque rápido del manager en Linux/macOS.
+├── README.md                           # Documentación principal del proyecto y guía de uso.
+├── pyproject.toml                      # Metadatos del proyecto y dependencias Python.
+├── uv.lock                             # Lockfile reproducible del entorno gestionado con uv.
+├── setup_env.py                        # Punto de entrada del manager TUI de instalación/tests/modelos.
+├── setup.bat                           # Arranque rápido del manager en Windows.
+├── setup.sh                            # Arranque rápido del manager en Linux/macOS.
 ├── data/
-│   ├── raw/                          # Dataset original y particiones sin preprocesar.
+│   ├── raw/                            # Dataset original y particiones sin preprocesar.
 │   │   ├── m_train/
 │   │   ├── m_valid/
 │   │   └── m_test/
-│   ├── processed/                    # Imágenes recortadas/preprocesadas y CSV replicados.
+│   ├── processed/                      # Imágenes recortadas/preprocesadas y CSV replicados.
 │   │   ├── m_train/
 │   │   ├── m_valid/
 │   │   └── m_test/
-│   └── smoke_test/                   # Imágenes pequeñas de validación end-to-end.
+│   └── smoke_test/                     # Imágenes pequeñas de validación end-to-end.
 ├── notebooks/
-│   └── 01_eda_polypsegm.ipynb        # EDA, extracción y comparativas visuales del dataset.
+│   └── 01_eda_polypsegm.ipynb          # EDA, extracción y comparativas visuales del dataset.
 ├── src/
 │   ├── inference/
-│   │   ├── schemas.py                # Esquemas Pydantic base y variantes WithReasoning.
-│   │   └── vlm_runner.py             # Carga VLM, inferencia multimodal, compatibilidad SDK y telemetría.
+│   │   ├── schemas.py                  # Esquemas Pydantic base y variantes WithReasoning.
+│   │   └── vlm_runner.py               # Carga VLM, inferencia multimodal, compatibilidad SDK y telemetría.
 │   ├── preprocessing/
-│   │   └── preprocess.py             # CLI de recorte de bordes negros y copia de CSV.
+│   │   └── preprocess.py               # CLI de recorte de bordes negros y copia de CSV.
 │   ├── scripts/
-│   │   ├── batch_runner.py           # Orquestador masivo con exportado incremental CSV/JSONL.
-│   │   ├── test_inference.py         # Smoke test CLI con descarga automática de imágenes de muestra.
-│   │   ├── test_response_inspector.py# Inspector CLI de respuestas reales del SDK LM Studio.
-│   │   ├── test_schema.py            # Lógica batch reutilizable para el Schema Tester interactivo.
-│   │   └── test_telemetry.py         # Medición CLI de TTFT/TPS y resumen de latencias.
+│   │   ├── batch_runner.py             # Orquestador masivo con exportado incremental CSV/JSONL.
+│   │   ├── test_inference.py           # Smoke test CLI con descarga automática de imágenes de muestra.
+│   │   ├── test_response_inspector.py  # Inspector CLI de respuestas reales del SDK LM Studio.
+│   │   ├── test_schema.py              # Lógica batch reutilizable para el Schema Tester interactivo.
+│   │   └── test_telemetry.py           # Medición CLI de TTFT/TPS y resumen de latencias.
 │   └── utils/
-│       ├── app_config.py             # Configuración estática, librerías requeridas y registro de modelos.
-│       ├── lms_download_manager.py   # Máquina de estado para descargas y seguimiento de modelos.
-│       ├── lms_menu_helpers.py       # Helpers puros de selección y presentación para menús LM Studio.
-│       ├── lms_models.py             # Wrappers sobre CLI/SDK de LM Studio y control del servidor.
-│       ├── menu_kit.py               # UIKit + AppContext: abstracción de tablas, menús y render.
-│       ├── setup_diagnostics.py      # Diagnóstico del entorno, dependencias y smart-fix.
-│       ├── setup_install_flow.py     # Flujo principal de instalación y navegación del manager.
-│       ├── setup_menu_engine.py      # Motor de menús interactivos y estado del cursor.
-│       ├── setup_models_ui.py        # UI de gestión de modelos LM Studio.
-│       ├── setup_reinstall_ui.py     # UI de reinstalación selectiva de librerías/herramientas.
-│       ├── setup_tests_ui.py         # UI de tests, Smoke Test, Schema Tester, Telemetry Probe, Response Inspector y Batch Runner.
-│       └── setup_ui_io.py            # Entrada de teclado, estilos ANSI y render incremental de terminal.
+│       ├── app_config.py               # Configuración estática, librerías requeridas y registro de modelos.
+│       ├── menu_kit.py                 # UIKit + AppContext: abstracción de tablas, menús y render.
+│       ├── setup_diagnostics.py        # Diagnóstico del entorno, dependencias y smart-fix.
+│       ├── setup_install_flow.py       # Flujo principal de instalación y navegación del manager.
+│       ├── setup_menu_engine.py        # Motor de menús interactivos y estado del cursor.
+│       ├── setup_reinstall_ui.py       # UI de reinstalación selectiva de librerías/herramientas.
+│       ├── setup_models_ui.py          # Orquestador de UI para gestión de modelos LM Studio.
+│       ├── setup_tests_ui.py           # Orquestador de UI para tests y utilidades de evaluación.
+│       ├── setup_ui_io.py              # Núcleo UI/IO: ask_text, ask_choice, ask_user, ANSI, render incremental.
+│       ├── models_ui/                  # Pantallas y helpers de Model Manager desacoplados.
+│       │   ├── custom_screen.py        # Pantalla de descarga manual por ID/URL y selección de cuantización.
+│       │   ├── registry_screen.py      # Pantalla de catálogo/registro de modelos disponibles para descarga.
+│       │   ├── shared.py               # Helpers comunes del manager de modelos (selección y progreso).
+│       │   ├── lms_download_manager.py # Estado y ciclo de vida de descargas en segundo plano.
+│       │   ├── lms_menu_helpers.py     # Utilidades de formateo/capacidad para menús de modelos.
+│       │   └── lms_models.py           # Wrappers de LM Studio para listar, descargar y resolver opciones.
+│       └── tests_ui/                   # Pantallas y helpers extraídos de Setup Tests UI.
+│           ├── batch.py                # Flujo UI del Batch Runner y selección de parámetros de ejecución.
+│           ├── manifest.py             # Gestión de manifests y selección reactiva de tamaño de subgrupo.
+│           ├── manifest_generation.py  # Generación estratificada de manifests para muestreo reproducible.
+│           ├── response_inspector.py   # Pantalla UI para inspección de respuestas reales del SDK.
+│           ├── run_pytest.py           # Ejecución de pytest desde TUI con resumen y navegación.
+│           ├── schema.py               # Pantallas del Schema Tester (modelo, esquema y variante reasoning).
+│           ├── shared.py               # Helpers comunes de tests_ui y cabeceras reutilizables.
+│           ├── smoke.py                # Flujo interactivo del smoke test sobre imágenes de validación.
+│           ├── telemetry.py            # Pantallas del Telemetry Probe con métricas y resumen visual.
+│           └── test_dashboards_ui.py   # Dashboards/visualización en terminal para resultados de tests.
 └── tests/
-    ├── test_app_config.py            # Contratos de configuración estática y registro de modelos.
-    ├── test_batch_runner.py          # Exportado incremental y persistencia por imagen.
-    ├── test_inference_script.py      # Smoke test, keywords esperadas y validación por etiquetas.
+    ├── test_app_config.py              # Contratos de configuración estática y registro de modelos.
+    ├── test_batch_runner.py            # Exportado incremental y persistencia por imagen.
+    ├── test_inference_script.py        # Smoke test, keywords esperadas y validación por etiquetas.
     ├── test_inspect_lmstudio_response.py # Inspector de respuesta, autodetección y resumen visual.
-    ├── test_lms_download_manager.py  # Descargas de modelos y manejo de estados.
-    ├── test_lms_menu_helpers.py      # Helpers de menús LM Studio.
-    ├── test_lms_models.py            # Wrappers del SDK/CLI y utilidades de modelos.
-    ├── test_menu_kit.py              # Tablas, AppContext y primitives de UI.
-    ├── test_preprocess.py            # Preprocesado de imágenes endoscópicas.
-    ├── test_schemas.py               # Esquemas Pydantic, reasoning y registro público.
-    ├── test_setup_diagnostics.py     # Diagnóstico y smart-fix del entorno.
-    ├── test_setup_env_menu.py        # Integración general de setup_env.
-    ├── test_setup_extracted_menus.py # Menús extraídos de tests/modelos/reinstalación.
-    ├── test_setup_install_flow.py    # Flujo de instalación y navegación principal.
-    ├── test_setup_menu_engine.py     # Motor de menús interactivos.
-    ├── test_setup_models_ui.py       # UI del gestor de modelos.
-    ├── test_setup_ui_io_render.py    # Render de terminal, wrap y repintado incremental.
-    ├── test_telemetry.py             # Extracción de TTFT/TPS y resumen de telemetría.
-    └── test_vlm_runner.py            # Backend de inferencia, compatibilidad y resize multimodal.
+    ├── test_lms_download_manager.py    # Descargas de modelos y manejo de estados.
+    ├── test_lms_menu_helpers.py        # Helpers de menús LM Studio.
+    ├── test_lms_models.py              # Wrappers del SDK/CLI y utilidades de modelos.
+    ├── test_menu_kit.py                # Tablas, AppContext y primitives de UI.
+    ├── test_preprocess.py              # Preprocesado de imágenes endoscópicas.
+    ├── test_schemas.py                 # Esquemas Pydantic, reasoning y registro público.
+    ├── test_setup_diagnostics.py       # Diagnóstico y smart-fix del entorno.
+    ├── test_setup_env_menu.py          # Integración general de setup_env.
+    ├── test_setup_extracted_menus.py   # Menús extraídos de tests/modelos/reinstalación.
+    ├── test_setup_install_flow.py      # Flujo de instalación y navegación principal.
+    ├── test_setup_menu_engine.py       # Motor de menús interactivos.
+    ├── test_setup_models_ui.py         # UI del gestor de modelos.
+    ├── test_setup_ui_io_render.py      # Render de terminal, wrap y repintado incremental.
+    ├── test_telemetry.py               # Extracción de TTFT/TPS y resumen de telemetría.
+    └── test_vlm_runner.py              # Backend de inferencia, compatibilidad y resize multimodal.
 ```
 
 ## Notebooks
@@ -446,19 +500,23 @@ resultado en caliente para no perder trabajo si se interrumpe el proceso.
 - Recorre imágenes compatibles de forma recursiva.
 - Permite limitar muestra o barajar antes de procesar.
 - Carga el modelo una vez y lo descarga en bloque `finally`.
-- Exporta incrementalmente en `CSV` o `JSONL`.
+- Exporta incrementalmente en `JSONL`.
 - Incluye telemetría por imagen junto al payload estructurado.
+- Añade cabecera `__batch_meta__` canónica para trazabilidad del archivo compartido.
+- Añade línea final `__batch_summary__` con:
+    - min/max/media de métricas por modelo y global,
+    - aciertos y accuracy por modelo y global cuando existe `ground_truth_cls`.
 
 ### Ejecutar
 
 ```bash
-uv run python src/scripts/batch_runner.py --model opengvlab_internvl3_5-14b --image-dir data/processed/m_test/images --schema PolypDetection --output-format csv
+uv run python src/scripts/batch_runner.py --model opengvlab_internvl3_5-14b --image-dir data/processed/m_test/images --schema PolypDetection
 ```
 
 Ejemplo con reasoning y JSONL:
 
 ```bash
-uv run python src/scripts/batch_runner.py --model opengvlab_internvl3_5-14b --image-dir data --schema PolypClassification --with-reasoning --output-format jsonl --shuffle --max-images 25
+uv run python src/scripts/batch_runner.py --model opengvlab_internvl3_5-14b --image-dir data --schema PolypClassification --with-reasoning --shuffle --max-images 25
 ```
 
 ## Testing

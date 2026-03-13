@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from src.inference.schemas import SCHEMA_REGISTRY, get_schema_variant
 from src.inference.vlm_runner import VLMLoader
 from src.scripts.test_schema import build_prompt_for_schema, find_images
-from src.utils.lms_models import get_installed_lms_models, get_installed_models, list_loaded_llm_model_keys
+from src.utils.models_ui.lms_models import get_installed_lms_models, get_installed_models, list_loaded_llm_model_keys
 
 DEFAULT_RAW_PROMPT = (
     "Analiza esta imagen y responde con el máximo detalle posible para fines de depuración. "

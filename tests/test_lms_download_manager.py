@@ -4,7 +4,7 @@ import time
 import pytest
 from unittest.mock import patch
 
-from src.utils.lms_download_manager import DownloadJobState, _trim_text, FINISHED_STATUS_TTL_SECONDS
+from src.utils.models_ui.lms_download_manager import DownloadJobState, _trim_text, FINISHED_STATUS_TTL_SECONDS
 
 
 # ---------------------------------------------------------------------------

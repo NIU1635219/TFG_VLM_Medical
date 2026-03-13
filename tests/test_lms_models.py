@@ -1,7 +1,7 @@
 import json
 import pytest
 from unittest.mock import patch, MagicMock
-from src.utils.lms_models import (
+from src.utils.models_ui.lms_models import (
     _normalize_model_ref,
     check_lms,
     get_server_status,
@@ -16,18 +16,18 @@ def test_normalize_model_ref():
     assert _normalize_model_ref("lmstudio-community/model") == "lmstudio-community/model"
     assert _normalize_model_ref("") == ""
 
-@patch('src.utils.lms_models._run_lms_command')
+@patch('src.utils.models_ui.lms_models._run_lms_command')
 def test_check_lms_installed(mock_run):
     mock_run.return_value = MagicMock(returncode=0)
     assert check_lms() is True
 
-@patch('src.utils.lms_models._run_lms_command')
+@patch('src.utils.models_ui.lms_models._run_lms_command')
 def test_check_lms_not_installed(mock_run):
     mock_run.side_effect = Exception("Command not found")
     assert check_lms() is False
 
-@patch('src.utils.lms_models.check_lms')
-@patch('src.utils.lms_models._run_lms_command')
+@patch('src.utils.models_ui.lms_models.check_lms')
+@patch('src.utils.models_ui.lms_models._run_lms_command')
 def test_get_server_status_running(mock_run, mock_check_lms):
     mock_check_lms.return_value = True
     mock_result = MagicMock()
@@ -39,8 +39,8 @@ def test_get_server_status_running(mock_run, mock_check_lms):
     assert is_running is True
     assert "running" in output.lower()
 
-@patch('src.utils.lms_models.check_lms')
-@patch('src.utils.lms_models._run_lms_command')
+@patch('src.utils.models_ui.lms_models.check_lms')
+@patch('src.utils.models_ui.lms_models._run_lms_command')
 def test_get_server_status_not_running(mock_run, mock_check_lms):
     mock_check_lms.return_value = True
     mock_result = MagicMock()
@@ -52,7 +52,7 @@ def test_get_server_status_not_running(mock_run, mock_check_lms):
     assert is_running is False
     assert "stopped" in output.lower()
 
-@patch('src.utils.lms_models.check_lms')
+@patch('src.utils.models_ui.lms_models.check_lms')
 def test_get_server_status_no_lms(mock_check_lms):
     mock_check_lms.return_value = False
     is_running, output = get_server_status()
@@ -120,8 +120,8 @@ LMS_LS_JSON = [
 # Tests: _cli_ls_json
 # ---------------------------------------------------------------------------
 
-@patch('src.utils.lms_models.check_lms', return_value=True)
-@patch('src.utils.lms_models._run_lms_command')
+@patch('src.utils.models_ui.lms_models.check_lms', return_value=True)
+@patch('src.utils.models_ui.lms_models._run_lms_command')
 def test_cli_ls_json_returns_parsed_list(mock_run, _mock_check):
     """_cli_ls_json parsea correctamente la salida JSON de lms ls."""
     mock_result = MagicMock()
@@ -135,8 +135,8 @@ def test_cli_ls_json_returns_parsed_list(mock_run, _mock_check):
     assert result[0]["modelKey"] == "qwen/qwen3.5-9b"
 
 
-@patch('src.utils.lms_models.check_lms', return_value=True)
-@patch('src.utils.lms_models._run_lms_command')
+@patch('src.utils.models_ui.lms_models.check_lms', return_value=True)
+@patch('src.utils.models_ui.lms_models._run_lms_command')
 def test_cli_ls_json_returns_empty_on_nonzero_rc(mock_run, _mock_check):
     """_cli_ls_json devuelve [] si lms retorna código de error."""
     mock_result = MagicMock()
@@ -147,7 +147,7 @@ def test_cli_ls_json_returns_empty_on_nonzero_rc(mock_run, _mock_check):
     assert _cli_ls_json() == []
 
 
-@patch('src.utils.lms_models.check_lms', return_value=False)
+@patch('src.utils.models_ui.lms_models.check_lms', return_value=False)
 def test_cli_ls_json_returns_empty_when_no_lms(_mock_check):
     """_cli_ls_json devuelve [] si lms CLI no está disponible."""
     assert _cli_ls_json() == []
@@ -157,7 +157,7 @@ def test_cli_ls_json_returns_empty_when_no_lms(_mock_check):
 # Tests: list_downloaded_models_with_variants
 # ---------------------------------------------------------------------------
 
-@patch('src.utils.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
+@patch('src.utils.models_ui.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
 def test_list_downloaded_models_filters_embeddings(_mock_json):
     """list_downloaded_models_with_variants excluye registros de tipo embedding."""
     result = list_downloaded_models_with_variants()
@@ -166,7 +166,7 @@ def test_list_downloaded_models_filters_embeddings(_mock_json):
     assert len(result) == 3
 
 
-@patch('src.utils.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
+@patch('src.utils.models_ui.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
 def test_list_downloaded_models_expands_variants(_mock_json):
     """qwen/qwen3.5-9b debe tener 2 variantes en su campo 'variants'."""
     result = list_downloaded_models_with_variants()
@@ -176,7 +176,7 @@ def test_list_downloaded_models_expands_variants(_mock_json):
     assert "qwen/qwen3.5-9b@q8_0" in qwen["variants"]
 
 
-@patch('src.utils.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
+@patch('src.utils.models_ui.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
 def test_list_downloaded_models_selected_variant(_mock_json):
     """selected_variant debe coincidir con el valor del JSON."""
     result = list_downloaded_models_with_variants()
@@ -184,7 +184,7 @@ def test_list_downloaded_models_selected_variant(_mock_json):
     assert qwen["selected_variant"] == "qwen/qwen3.5-9b@q4_k_m"
 
 
-@patch('src.utils.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
+@patch('src.utils.models_ui.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
 def test_list_downloaded_models_metadata(_mock_json):
     """Verifica que arquitectura, vision y max_context se mapean correctamente."""
     result = list_downloaded_models_with_variants()
@@ -194,7 +194,7 @@ def test_list_downloaded_models_metadata(_mock_json):
     assert qwen["max_context"] == 262144
 
 
-@patch('src.utils.lms_models._cli_ls_json', return_value=[])
+@patch('src.utils.models_ui.lms_models._cli_ls_json', return_value=[])
 def test_list_downloaded_models_returns_empty_on_empty_json(_mock_json):
     """Si _cli_ls_json devuelve lista vacía, list_downloaded_models devuelve []."""
     assert list_downloaded_models_with_variants() == []
@@ -204,7 +204,7 @@ def test_list_downloaded_models_returns_empty_on_empty_json(_mock_json):
 # Tests: get_installed_lms_models
 # ---------------------------------------------------------------------------
 
-@patch('src.utils.lms_models.list_downloaded_models_with_variants', return_value=[
+@patch('src.utils.models_ui.lms_models.list_downloaded_models_with_variants', return_value=[
     {
         "model_key": "qwen/qwen3.5-9b",
         "variants": ["qwen/qwen3.5-9b@q4_k_m", "qwen/qwen3.5-9b@q8_0"],
@@ -226,7 +226,7 @@ def test_get_installed_lms_models_expands_variants(_mock_models):
     assert len(result) == len(set(result))
 
 
-@patch('src.utils.lms_models.list_downloaded_models_with_variants', return_value=[
+@patch('src.utils.models_ui.lms_models.list_downloaded_models_with_variants', return_value=[
     {
         "model_key": "qwen/qwen3.5-9b",
         "variants": ["qwen/qwen3.5-9b@q4_k_m", "qwen/qwen3.5-9b@q8_0"],
@@ -239,8 +239,8 @@ def test_get_installed_lms_models_no_duplicates(_mock_models):
     assert "qwen/qwen3.5-9b" not in result
 
 
-@patch('src.utils.lms_models.list_downloaded_models_with_variants', return_value=[])
-@patch('src.utils.lms_models.get_installed_models', return_value=["fallback-model"])
+@patch('src.utils.models_ui.lms_models.list_downloaded_models_with_variants', return_value=[])
+@patch('src.utils.models_ui.lms_models.get_installed_models', return_value=["fallback-model"])
 def test_get_installed_lms_models_fallback_to_cli(_mock_installed, _mock_variants):
     """Si list_downloaded_models_with_variants devuelve [], usa get_installed_models."""
     result = get_installed_lms_models()
@@ -251,7 +251,7 @@ def test_get_installed_lms_models_fallback_to_cli(_mock_installed, _mock_variant
 # Tests: list_installed_variants_flat
 # ---------------------------------------------------------------------------
 
-@patch('src.utils.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
+@patch('src.utils.models_ui.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
 def test_list_installed_variants_flat_resolves_quant_for_no_suffix_model(_mock_json):
     """opengvlab_internvl3_5-14b sin @ debe tener quantization=Q4_K_M desde JSON."""
     result = list_installed_variants_flat()
@@ -260,7 +260,7 @@ def test_list_installed_variants_flat_resolves_quant_for_no_suffix_model(_mock_j
     assert internvl["quantization"] == "Q4_K_M"
 
 
-@patch('src.utils.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
+@patch('src.utils.models_ui.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
 def test_list_installed_variants_flat_no_duplicates(_mock_json):
     """Sin variantes duplicadas en la lista plana."""
     result = list_installed_variants_flat()
@@ -268,7 +268,7 @@ def test_list_installed_variants_flat_no_duplicates(_mock_json):
     assert len(keys) == len(set(keys))
 
 
-@patch('src.utils.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
+@patch('src.utils.models_ui.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
 def test_list_installed_variants_flat_expands_qwen_variants(_mock_json):
     """qwen/qwen3.5-9b genera dos entradas: una por @q4_k_m y otra por @q8_0."""
     result = list_installed_variants_flat()
@@ -278,7 +278,7 @@ def test_list_installed_variants_flat_expands_qwen_variants(_mock_json):
     assert "qwen/qwen3.5-9b" not in keys
 
 
-@patch('src.utils.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
+@patch('src.utils.models_ui.lms_models._cli_ls_json', return_value=LMS_LS_JSON)
 def test_list_installed_variants_flat_quant_from_suffix_takes_precedence(_mock_json):
     """Para variantes con @q8_0 en el key, quantization es Q8_0 (no Q4_K_M del JSON padre)."""
     result = list_installed_variants_flat()

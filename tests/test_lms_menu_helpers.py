@@ -1,4 +1,4 @@
-from src.utils.lms_menu_helpers import option_is_local
+from src.utils.models_ui.lms_menu_helpers import option_is_local
 
 
 def test_option_is_local_matches_exact_indexed_signature():

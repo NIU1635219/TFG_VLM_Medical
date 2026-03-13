@@ -61,6 +61,12 @@ class DownloadJobState:
     _STATE_KEY = "__lms_download_state__"
 
     def __init__(self, *, style: Any, cursor_memory: dict | None = None) -> None:
+        """Inicializa el estado compartido de descargas.
+
+        Args:
+            style: Objeto de estilo ANSI usado para renderizar estado.
+            cursor_memory: Diccionario compartido para persistir jobs entre menús.
+        """
         self.style = style
 
         # Localizar o crear el bloque de estado persistente

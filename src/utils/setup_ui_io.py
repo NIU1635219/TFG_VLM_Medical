@@ -515,6 +515,281 @@ def log(*, style: Any, msg: str, level: str = "info") -> None:
         print(f"\n{style.BOLD}➤ {msg}{style.ENDC}")
 
 
+def ask_text(
+    *,
+    kit: Any,
+    title: str,
+    intro_lines: list[str] | None = None,
+    prompt_label: str = "Entrada:",
+    help_line: str = "[ENTER] confirmar · [Backspace] borrar · [ESC] cancelar",
+    initial_value: str = "",
+    allow_char_fn: Callable[[str], bool] | None = None,
+    normalize_on_submit_fn: Callable[[str], str] | None = None,
+    validate_on_submit_fn: Callable[[str], str | None] | None = None,
+    render_extra_lines_fn: Callable[[str, int], list[str]] | None = None,
+    render_static_top_fn: Callable[[int], None] | None = None,
+    max_length: int | None = None,
+    force_full_on_update: bool = False,
+) -> str | None:
+    """Renderiza un panel reactivo de entrada de texto reutilizable.
+
+    Args:
+        kit: Instancia de ``UIKit`` o compatible.
+        title: Título del panel.
+        intro_lines: Líneas introductorias bajo el título.
+        prompt_label: Etiqueta del campo de entrada.
+        help_line: Línea de ayuda de teclas.
+        initial_value: Valor inicial del campo.
+        allow_char_fn: Filtro opcional por carácter.
+        normalize_on_submit_fn: Normalización previa a validar/devolver.
+        validate_on_submit_fn: Validador; devuelve error o ``None``.
+        render_extra_lines_fn: Callback de líneas dinámicas adicionales.
+        render_static_top_fn: Callback estático opcional antes del título.
+        max_length: Longitud maxima aceptada para el campo (sin truncar valor confirmado).
+        force_full_on_update: Fuerza repaint completo para evitar ghosting.
+
+    Returns:
+        Texto confirmado o ``None`` si se cancela con ESC.
+    """
+    intro = list(intro_lines or [])
+
+    def _clip_value_for_render(value: str, ui_width: int) -> str:
+        """Recorta visualmente el valor para evitar wrap y repintado excesivo."""
+        safe_width = max(8, int(ui_width) - 10)
+        visible_limit = safe_width if max_length is None else min(safe_width, max(1, int(max_length)))
+        if len(value) <= visible_limit:
+            return value
+        return "..." + value[-(visible_limit - 3):]
+
+    def _apply_normalize(value: str) -> str:
+        if normalize_on_submit_fn is None:
+            return value
+        return normalize_on_submit_fn(value)
+
+    def _validate(value: str) -> str | None:
+        if validate_on_submit_fn is None:
+            return None
+        return validate_on_submit_fn(value)
+
+    if getattr(kit.os_module, "name", "") != "nt" or kit.msvcrt_module is None:
+        while True:
+            raw_value = kit.input(f"{prompt_label} ")
+            if raw_value is None:
+                return None
+            value = str(raw_value)
+            if allow_char_fn is not None and any(not allow_char_fn(ch) for ch in value):
+                kit.log("Entrada invalida para este campo.", "warning")
+                continue
+            value = _apply_normalize(value)
+            error = _validate(value)
+            if error:
+                kit.log(error, "warning")
+                continue
+            return value
+
+    style = kit.style
+    panel = kit.IncrementalPanelRenderer(clear_screen_fn=kit.clear, render_static_fn=lambda: None)
+    current_value = str(initial_value or "")
+    inline_error = ""
+    previous_width: int | None = None
+    needs_render = True
+
+    while True:
+        ui_width = kit.width()
+        if previous_width is None:
+            previous_width = ui_width
+            needs_render = True
+        elif previous_width != ui_width:
+            panel.reset()
+            previous_width = ui_width
+            needs_render = True
+
+        if needs_render:
+
+            def _render_static() -> None:
+                """Pinta cabecera fija del panel de entrada reactiva."""
+                if render_static_top_fn is not None:
+                    render_static_top_fn(ui_width)
+                print(f"{style.BOLD} {title} {style.ENDC}")
+                print(" " + kit.divider(ui_width))
+                for line in intro:
+                    print(" " + line)
+                print(" " + kit.divider(ui_width))
+
+            panel.render_static_fn = _render_static
+
+            rendered_value = _clip_value_for_render(current_value, ui_width)
+            dynamic_lines: list[str] = [
+                f" {style.BOLD}{prompt_label}{style.ENDC} {style.WARNING}{rendered_value}{style.ENDC}",
+                f" {style.DIM}{help_line}{style.ENDC}",
+                kit.divider(ui_width),
+            ]
+            if inline_error:
+                dynamic_lines.append(f" {style.FAIL}{inline_error}{style.ENDC}")
+                dynamic_lines.append(kit.divider(ui_width))
+
+            if render_extra_lines_fn is not None:
+                dynamic_lines.extend(render_extra_lines_fn(current_value, ui_width))
+
+            panel.render(dynamic_lines, force_full=force_full_on_update)
+            needs_render = False
+
+        if not hasattr(kit.msvcrt_module, "kbhit") or not kit.msvcrt_module.kbhit():
+            time.sleep(0.03)
+            continue
+
+        try:
+            key = kit.msvcrt_module.getwch()
+        except Exception:
+            time.sleep(0.03)
+            continue
+
+        inline_error = ""
+
+        if key in ("\r", "\n"):
+            candidate = _apply_normalize(current_value)
+            error = _validate(candidate)
+            if error:
+                inline_error = error
+                needs_render = True
+                continue
+            return candidate
+
+        if key == "\x1b":
+            return None
+
+        if key in ("\x08", "\x7f"):
+            new_value = current_value[:-1]
+            if new_value != current_value:
+                current_value = new_value
+                needs_render = True
+            continue
+
+        if key in ("\x00", "\xe0"):
+            try:
+                _ = kit.msvcrt_module.getwch()
+            except Exception:
+                pass
+            continue
+
+        if key == "\x03":
+            raise KeyboardInterrupt
+
+        if key.isprintable():
+            if allow_char_fn is not None and not allow_char_fn(key):
+                inline_error = "Caracter no permitido para este campo."
+                needs_render = True
+                continue
+            if max_length is not None and len(current_value) >= max(0, int(max_length)):
+                inline_error = "Has alcanzado la longitud maxima permitida."
+                needs_render = True
+                continue
+            current_value += key
+            needs_render = True
+
+def ask_choice(
+    *,
+    question: str,
+    options: list[str],
+    default_index: int,
+    style: Any,
+    read_key_fn: Callable[[], str | None],
+    clear_screen_fn: Callable[[], None],
+    info_text: str | Callable[[], str] = "",
+    nav_hint_text: str = "Acciones: ←/→ (o ↑/↓) cambiar opción · ENTER confirmar · ESC cancelar.",
+) -> int | None:
+    """Solicita al usuario elegir una opción horizontal con teclado.
+
+    Args:
+        question: Pregunta principal.
+        options: Opciones renderizadas en formato "chips".
+        default_index: Índice inicial seleccionado.
+        style: Clase/objeto con estilos ANSI.
+        read_key_fn: Lector de tecla no bloqueante.
+        clear_screen_fn: Función para limpiar pantalla.
+        info_text: Texto adicional fijo o dinámico.
+        nav_hint_text: Ayuda de navegación mostrada en cabecera.
+
+    Returns:
+        Índice de opción confirmada o ``None`` si se cancela con ESC.
+    """
+    if not options:
+        return None
+
+    selected = max(0, min(int(default_index), len(options) - 1))
+
+    def _render_static() -> None:
+        """Renderiza cabecera estática del selector."""
+        content_width = get_full_ui_width(shutil_module=shutil)
+        divider = "─" * (content_width + 2)
+        for q_line in wrap_plain_text(str(question or ""), max(16, content_width)):
+            print(f"{style.BOLD}{style.WARNING}{q_line}{style.ENDC}")
+        print(divider)
+        for hint_line in wrap_plain_text(nav_hint_text, max(16, content_width)):
+            print(f"{style.DIM}{hint_line}{style.ENDC}")
+        print(divider)
+
+    panel = IncrementalPanelRenderer(clear_screen_fn=clear_screen_fn, render_static_fn=_render_static)
+    last_render_signature: tuple[Any, ...] | None = None
+
+    while True:
+        content_width = get_full_ui_width(shutil_module=shutil)
+        divider = "─" * (content_width + 2)
+
+        rendered_options: list[str] = []
+        for idx, option in enumerate(options):
+            label = f" {option.strip()} "
+            if idx == selected:
+                rendered_options.append(f"{style.SELECTED}{label}{style.ENDC}")
+            else:
+                rendered_options.append(label)
+
+        dynamic_lines: list[str] = ["", "   " + "    ".join(rendered_options), ""]
+
+        resolved_info_text = ""
+        if callable(info_text):
+            try:
+                resolved_info_text = str(info_text() or "")
+            except Exception:
+                resolved_info_text = ""
+        else:
+            resolved_info_text = str(info_text or "")
+
+        info_lines = [line for line in resolved_info_text.splitlines() if line.strip()]
+        if info_lines:
+            dynamic_lines.append(divider)
+            for info_line in info_lines:
+                if "\x1b[" in info_line:
+                    dynamic_lines.append(info_line)
+                else:
+                    for wrapped in wrap_plain_text(info_line, max(16, content_width)):
+                        dynamic_lines.append(f"{style.DIM}{wrapped}{style.ENDC}")
+
+        dynamic_lines.append(divider)
+
+        render_signature: tuple[Any, ...] = (
+            selected,
+            content_width,
+            tuple(options),
+            tuple(info_lines),
+        )
+        if last_render_signature != render_signature:
+            panel.render(dynamic_lines)
+            last_render_signature = render_signature
+
+        key = read_key_fn()
+        if key in ("LEFT", "UP"):
+            selected = (selected - 1) % len(options)
+        elif key in ("RIGHT", "DOWN"):
+            selected = (selected + 1) % len(options)
+        elif key == "ENTER":
+            return selected
+        elif key == "ESC":
+            return None
+        elif key is None:
+            time.sleep(0.03)
+
+
 def ask_user(
     *,
     question: str,
@@ -544,80 +819,18 @@ def ask_user(
     if normalized_default not in ("y", "n"):
         normalized_default = "y"
 
-    selected = 0 if normalized_default == "y" else 1
-    def _render_static() -> None:
-        """
-        Renderiza la parte estática de la interfaz de selección.
-        """
-        content_width = get_full_ui_width(shutil_module=shutil)
-        divider = "─" * (content_width + 2)
-        for q_line in wrap_plain_text(str(question or ""), max(16, content_width)):
-            print(f"{style.BOLD}{style.WARNING}{q_line}{style.ENDC}")
-        print(divider)
-        hint_text = "Acciones: ←/→ (o ↑/↓) cambiar opción · ENTER confirmar · ESC cancelar."
-        for hint_line in wrap_plain_text(hint_text, max(16, content_width)):
-            print(f"{style.DIM}{hint_line}{style.ENDC}")
-        print(divider)
-
-    panel = IncrementalPanelRenderer(clear_screen_fn=clear_screen_fn, render_static_fn=_render_static)
-    last_render_signature: tuple[Any, ...] | None = None
-
-    while True:
-        yes_label = " Sí "
-        no_label = " No "
-
-        if selected == 0:
-            yes_render = f"{style.SELECTED}{yes_label}{style.ENDC}"
-            no_render = no_label
-        else:
-            yes_render = yes_label
-            no_render = f"{style.SELECTED}{no_label}{style.ENDC}"
-
-        content_width = get_full_ui_width(shutil_module=shutil)
-        divider = "─" * (content_width + 2)
-        dynamic_lines: list[str] = ["", f"   {yes_render}    {no_render}", ""]
-
-        resolved_info_text = ""
-        if callable(info_text):
-            try:
-                resolved_info_text = str(info_text() or "")
-            except Exception:
-                resolved_info_text = ""
-        else:
-            resolved_info_text = str(info_text or "")
-
-        info_lines = [line for line in resolved_info_text.splitlines() if line.strip()]
-        if info_lines:
-            dynamic_lines.append(divider)
-            for info_line in info_lines:
-                if "\x1b[" in info_line:
-                    dynamic_lines.append(info_line)
-                else:
-                    for wrapped in wrap_plain_text(info_line, max(16, content_width)):
-                        dynamic_lines.append(f"{style.DIM}{wrapped}{style.ENDC}")
-
-        dynamic_lines.append(divider)
-
-        render_signature: tuple[Any, ...] = (
-            selected,
-            content_width,
-            tuple(info_lines),
-        )
-        if last_render_signature != render_signature:
-            panel.render(dynamic_lines)
-            last_render_signature = render_signature
-
-        key = read_key_fn()
-        if key in ("LEFT", "UP"):
-            selected = 0
-        elif key in ("RIGHT", "DOWN"):
-            selected = 1
-        elif key == "ENTER":
-            return selected == 0
-        elif key == "ESC":
-            return False
-        elif key is None:
-            time.sleep(0.03)
+    selected_index = ask_choice(
+        question=question,
+        options=["Si", "No"],
+        default_index=0 if normalized_default == "y" else 1,
+        style=style,
+        read_key_fn=read_key_fn,
+        clear_screen_fn=clear_screen_fn,
+        info_text=info_text,
+    )
+    if selected_index is None:
+        return False
+    return selected_index == 0
 
 
 def input_with_esc(*, prompt: str, os_module: Any, msvcrt_module: Any) -> str | None:

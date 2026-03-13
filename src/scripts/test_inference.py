@@ -25,7 +25,7 @@ except ImportError:
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from src.inference.vlm_runner import VLMLoader, GenericObjectDetection
-from src.utils.lms_models import (
+from src.utils.models_ui.lms_models import (
     get_installed_lms_models as _lms_get_installed_models,
     get_installed_models as _lms_cli_installed_models,
     list_loaded_llm_model_keys as _lms_loaded_model_keys,

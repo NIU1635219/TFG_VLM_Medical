@@ -8,7 +8,7 @@ import os
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from .menu_kit import AppContext, UIKit
+    from ..menu_kit import AppContext, UIKit
 
 
 def _format_metric_value(value: object, *, suffix: str = "") -> str:
@@ -332,6 +332,7 @@ def _make_live_panel(
 ):
     """Crea un panel incremental con banner estatico y subtitulo reutilizable."""
     def render_static() -> None:
+        """Pinta cabecera, subtítulo y bloque estático del panel en vivo."""
         app.print_banner()
         kit.subtitle(subtitle)
         if static_lines:

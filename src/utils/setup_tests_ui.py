@@ -35,7 +35,6 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
         manifest_execution_snapshot as manifest_execution_snapshot_screen,
         prune_output_records_for_model as prune_output_records_for_model_screen,
         select_manifest_for_batch as select_manifest_for_batch_screen,
-        status_label as status_label_screen,
     )
     from .tests_ui.response_inspector import (
         run_response_inspector_wrapper as run_response_inspector_screen,
@@ -122,7 +121,6 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             linked_batch_output_path=linked_batch_output_path_screen,
             manifest_execution_snapshot=manifest_execution_snapshot_screen,
             prune_output_records_for_model=prune_output_records_for_model_screen,
-            status_label=lambda snapshot: status_label_screen(kit, snapshot),
         )
 
     def run_response_inspector_wrapper() -> None:

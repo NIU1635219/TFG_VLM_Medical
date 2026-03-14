@@ -4,12 +4,22 @@ from pathlib import Path
 import pytest
 
 from src.scripts.batch_runner import (
+    _build_base_inference_kwargs,
+    _build_base_record_kwargs,
+    _build_error_record,
+    _build_inference_kwargs,
+    _build_ok_record,
+    _build_progress_payload,
+    _extract_record_iteration_values,
+    _extract_run_iteration_values,
+    _next_status_counts,
     BatchInputItem,
     build_record,
     build_parser,
     iter_image_paths,
     iter_manifest_items,
     run_batch_job,
+    seed_batch_meta_header,
     upsert_batch_execution_summary,
 )
 
@@ -19,6 +29,143 @@ def _read_jsonl_records(path: Path) -> list[dict[str, object]]:
     lines = path.read_text(encoding="utf-8").strip().splitlines()
     raw = [json.loads(line) for line in lines]
     return [row for row in raw if "__batch_meta__" not in row]
+
+
+def test_extract_run_iteration_values_defaults_when_missing():
+    run_index, run_total = _extract_run_iteration_values(None)
+    assert run_index == 1
+    assert run_total == 1
+
+
+def test_extract_record_iteration_values_from_record_payload():
+    run_index, run_total = _extract_record_iteration_values(
+        {"run_iteration_index": 3, "run_iteration_total": 5}
+    )
+    assert run_index == 3
+    assert run_total == 5
+
+
+def test_build_inference_kwargs_includes_seed_when_present(tmp_path):
+    image_path = tmp_path / "sample.tif"
+    image_path.write_bytes(b"image")
+
+    kwargs = _build_inference_kwargs(
+        base_inference_kwargs={
+            "prompt": "p",
+            "schema": object,
+            "temperature": 0.2,
+            "include_telemetry": True,
+        },
+        image_path=image_path,
+        inference_seed=42,
+    )
+
+    assert kwargs["image_path"] == image_path
+    assert kwargs["seed"] == 42
+    assert kwargs["temperature"] == 0.2
+
+
+def test_build_base_inference_kwargs_is_stable_payload():
+    kwargs = _build_base_inference_kwargs(
+        prompt="my prompt",
+        schema_cls=object,
+        temperature=0.3,
+    )
+
+    assert kwargs == {
+        "prompt": "my prompt",
+        "schema": object,
+        "temperature": 0.3,
+        "include_telemetry": True,
+    }
+
+
+def test_build_base_record_kwargs_contains_public_fields():
+    kwargs = _build_base_record_kwargs(model_id="m1", schema_name="S1")
+
+    assert kwargs == {
+        "model_id": "m1",
+        "schema_name": "S1",
+    }
+
+
+def test_build_ok_record_returns_record_and_telemetry(tmp_path):
+    class _FakeTelemetry:
+        def __init__(self):
+            self.ttft_seconds = 0.25
+            self.tokens_per_second = 9.5
+
+    class _FakeData:
+        def model_dump(self):
+            return {"predicted_class": "adenomatous"}
+
+    class _FakeResult:
+        data = _FakeData()
+        telemetry = _FakeTelemetry()
+
+    image_path = tmp_path / "img.png"
+    image_path.write_bytes(b"img")
+    base_record_kwargs = _build_base_record_kwargs(model_id="m1", schema_name="PolypClassification")
+
+    record, telemetry = _build_ok_record(
+        base_record_kwargs=base_record_kwargs,
+        image_path=image_path,
+        duration_seconds=0.5,
+        result=_FakeResult(),
+        metadata={"run_iteration_index": 2, "run_iteration_total": 3},
+    )
+
+    assert record["status"] == "ok"
+    assert record["payload"]["predicted_class"] == "adenomatous"
+    assert record["run_iteration_index"] == 2
+    assert telemetry["ttft_seconds"] == 0.25
+
+
+def test_build_error_record_returns_classified_status_and_record(tmp_path):
+    image_path = tmp_path / "img.png"
+    image_path.write_bytes(b"img")
+    base_record_kwargs = _build_base_record_kwargs(model_id="m1", schema_name="PolypClassification")
+
+    error = RuntimeError("La salida no cumple el esquema")
+    record, status = _build_error_record(
+        base_record_kwargs=base_record_kwargs,
+        image_path=image_path,
+        duration_seconds=0.2,
+        metadata={"run_iteration_index": 1},
+        error=error,
+    )
+
+    assert status == "invalid"
+    assert record["status"] == "invalid"
+    assert record["error_type"] == "RuntimeError"
+
+
+@pytest.mark.parametrize(
+    ("ok", "invalid", "fail", "status", "expected"),
+    [
+        (0, 0, 0, "ok", (1, 0, 0)),
+        (1, 0, 0, "invalid", (1, 1, 0)),
+        (1, 1, 0, "error", (1, 1, 1)),
+        (1, 1, 1, "unknown", (1, 1, 2)),
+    ],
+)
+def test_next_status_counts_handles_statuses(ok, invalid, fail, status, expected):
+    assert _next_status_counts(ok=ok, invalid=invalid, fail=fail, status=status) == expected
+
+
+def test_build_progress_payload_clones_record_dict():
+    record = {"status": "ok", "value": 1}
+    payload = _build_progress_payload(
+        event="image_done",
+        index=1,
+        total=10,
+        summary={"processed": 1},
+        record=record,
+    )
+
+    assert payload["event"] == "image_done"
+    assert payload["record"] == record
+    assert payload["record"] is not record
 
 
 def test_iter_image_paths_filters_supported_extensions(tmp_path):
@@ -825,3 +972,109 @@ def test_run_batch_job_filters_pending_entries_by_iteration(monkeypatch, tmp_pat
     rows = _read_jsonl_records(output_path)
     assert len(rows) == 1
     assert int(rows[0].get("run_iteration_index") or 0) == 2
+
+
+def test_run_batch_job_uses_distinct_seed_per_iteration(monkeypatch, tmp_path):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    image_path = image_dir / "sample_0.tif"
+    image_path.write_bytes(b"image")
+
+    manifest_path = tmp_path / "manifest.jsonl"
+    manifest_rows = [
+        {
+            "image_path": str(image_path),
+            "ground_truth_cls": "AD",
+            "run_iteration_index": 1,
+            "run_iteration_total": 3,
+        },
+        {
+            "image_path": str(image_path),
+            "ground_truth_cls": "AD",
+            "run_iteration_index": 2,
+            "run_iteration_total": 3,
+        },
+        {
+            "image_path": str(image_path),
+            "ground_truth_cls": "AD",
+            "run_iteration_index": 3,
+            "run_iteration_total": 3,
+        },
+    ]
+    manifest_path.write_text("\n".join(json.dumps(row) for row in manifest_rows) + "\n", encoding="utf-8")
+
+    output_path = tmp_path / "results.jsonl"
+    seen_seeds: list[int | None] = []
+
+    class FakeResult:
+        def model_dump(self):
+            return {
+                "object_detected": "sample_0.tif",
+                "confidence_score": 93,
+                "justification": "ok",
+            }
+
+    class FakeTelemetry:
+        def __init__(self):
+            self.total_duration_seconds = 1.2
+            self.ttft_seconds = 0.4
+            self.generation_duration_seconds = 0.8
+            self.tokens_per_second = 21.0
+            self.reasoning_tokens = 3
+            self.stop_reason = "eos"
+            self.model_id = "fake-model"
+            self.architecture = "qwen3_vl"
+            self.gpu_layers = 28
+            self.prompt_tokens = 10
+            self.completion_tokens = 11
+            self.total_tokens = 21
+
+    class FakeInferenceResult:
+        def __init__(self):
+            self.data = FakeResult()
+            self.telemetry = FakeTelemetry()
+
+    class FakeLoader:
+        def __init__(self, model_path, verbose=False, server_api_host=None, api_token=None):
+            self.model_path = model_path
+
+        def load_model(self):
+            return None
+
+        def inference(self, image_path, prompt, schema, temperature, seed=None, include_telemetry=False):
+            seen_seeds.append(seed)
+            return FakeInferenceResult()
+
+        def unload_model(self):
+            return None
+
+    monkeypatch.setattr("src.scripts.batch_runner.VLMLoader", FakeLoader)
+
+    summary = run_batch_job(
+        model_id="fake-model",
+        manifest=manifest_path,
+        schema_name="GenericObjectDetection",
+        output_path=output_path,
+        seed=100,
+    )
+
+    assert summary["processed"] == 3
+    assert seen_seeds == [100, 101, 102]
+
+
+def test_seed_batch_meta_header_seeds_all_models_once(tmp_path):
+    output_path = tmp_path / "results.jsonl"
+    manifest_path = tmp_path / "manifest.jsonl"
+    manifest_path.write_text("", encoding="utf-8")
+
+    seed_batch_meta_header(
+        output_path=output_path,
+        model_ids=["model-a", "model-b", "model-c"],
+        schema_name="PolypClassificationWithReasoning",
+        input_source="manifest",
+        manifest_path=manifest_path,
+    )
+
+    first_line = output_path.read_text(encoding="utf-8").splitlines()[0]
+    meta_payload = json.loads(first_line).get("__batch_meta__", {})
+    assert meta_payload.get("model_ids") == ["model-a", "model-b", "model-c"]

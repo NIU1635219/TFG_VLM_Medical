@@ -593,14 +593,30 @@ def extract_manifest_run_config(manifest_path: str) -> dict[str, Any] | None:
     entries = load_manifest_entries(manifest_path)
     if not entries:
         return None
-    first = entries[0]
 
-    models = _parse_models(first.get("run_models"))
-    schema_name = str(first.get("run_schema_name") or "").strip()
-    include_reasoning = bool(first.get("run_include_reasoning"))
-    iterations_per_image = _safe_positive_int(
-        first.get("run_iterations_per_image") or first.get("run_iteration_total")
-    )
+    # Fallback compatible con manifiestos antiguos: agregamos modelos de todas las filas.
+    models: list[str] = []
+    seen_models: set[str] = set()
+    schema_name = ""
+    include_reasoning = False
+    iterations_candidates: list[int] = []
+
+    for entry in entries:
+        for model in _parse_models(entry.get("run_models")):
+            if model not in seen_models:
+                seen_models.add(model)
+                models.append(model)
+
+        if not schema_name:
+            schema_name = str(entry.get("run_schema_name") or "").strip()
+
+        include_reasoning = include_reasoning or bool(entry.get("run_include_reasoning"))
+
+        iterations_candidates.append(
+            _safe_positive_int(entry.get("run_iterations_per_image") or entry.get("run_iteration_total"))
+        )
+
+    iterations_per_image = max(iterations_candidates) if iterations_candidates else 1
     if not models or not schema_name:
         return None
 

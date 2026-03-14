@@ -700,6 +700,7 @@ class VLMLoader:
         model_handle: _LMSModelHandle,
         payload: Any,
         temperature: float,
+        seed: int | None = None,
         schema: type[BaseModel] | None = None,
     ) -> Any:
         """
@@ -738,6 +739,8 @@ class VLMLoader:
         target_schema = schema if schema is not None else GenericObjectDetection
 
         base_config: dict[str, Any] = {"temperature": temperature}
+        if seed is not None:
+            base_config["seed"] = int(seed)
 
         kwargs: dict[str, Any] = {
             "response_format": target_schema,
@@ -936,6 +939,7 @@ class VLMLoader:
         prompt: str,
         schema: Type[T] = GenericObjectDetection,
         temperature: float = 0.7,
+        seed: int | None = None,
         *,
         include_telemetry: Literal[False] = False,
     ) -> T:
@@ -948,6 +952,7 @@ class VLMLoader:
         prompt: str,
         schema: Type[T] = GenericObjectDetection,
         temperature: float = 0.7,
+        seed: int | None = None,
         *,
         include_telemetry: Literal[True],
     ) -> InferenceResult[T]:
@@ -959,6 +964,7 @@ class VLMLoader:
         prompt: str,
         schema: Type[T] = GenericObjectDetection,  # type: ignore[assignment]
         temperature: float = 0.7,
+        seed: int | None = None,
         *,
         include_telemetry: bool = False,
     ) -> T | InferenceResult[T]:
@@ -1033,6 +1039,7 @@ class VLMLoader:
                 model_handle,
                 multimodal_input,
                 temperature_value,
+                seed=seed,
                 schema=schema,
             )
         except Exception as image_error:

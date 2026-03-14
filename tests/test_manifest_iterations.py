@@ -81,6 +81,42 @@ def test_extract_manifest_run_config_reads_iterations_from_meta(tmp_path):
     assert config["iterations_per_image"] == 5
 
 
+def test_extract_manifest_run_config_aggregates_models_from_rows(tmp_path):
+    manifest_path = tmp_path / "manifest_rows.jsonl"
+    rows = [
+        {
+            "image_path": str(tmp_path / "a.tif"),
+            "run_models": ["model-a"],
+            "run_schema_name": "PolypClassification",
+            "run_include_reasoning": False,
+            "run_iteration_total": 2,
+        },
+        {
+            "image_path": str(tmp_path / "b.tif"),
+            "run_models": ["model-b"],
+            "run_schema_name": "PolypClassification",
+            "run_include_reasoning": True,
+            "run_iteration_total": 3,
+        },
+        {
+            "image_path": str(tmp_path / "c.tif"),
+            "run_models": ["model-c"],
+            "run_schema_name": "PolypClassification",
+            "run_include_reasoning": False,
+            "run_iteration_total": 1,
+        },
+    ]
+    manifest_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    config = extract_manifest_run_config(str(manifest_path))
+
+    assert config is not None
+    assert config["models"] == ["model-a", "model-b", "model-c"]
+    assert config["schema_name"] == "PolypClassification"
+    assert config["include_reasoning"] is True
+    assert config["iterations_per_image"] == 3
+
+
 def test_manifest_snapshot_supports_multiple_iterations_same_image(tmp_path):
     image_path = tmp_path / "img_1.tif"
     image_path.write_bytes(b"x")

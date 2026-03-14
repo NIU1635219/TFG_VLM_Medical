@@ -161,25 +161,20 @@ def _format_accuracy_text(accuracy_payload: dict[str, Any] | None) -> str:
     return f"{correct}/{evaluated} ({float(value) * 100.0:.1f}%)"
 
 
-def _render_batch_final_summary(
-    *,
-    kit: "UIKit",
-    app: "AppContext",
-    selected_manifest: str,
-    schema_exec_name: str,
-    queued_models: list[str],
+def _collect_queue_rows(
     queue_results: list[tuple[str, dict[str, Any], dict[str, Any], str]],
-    upsert_batch_execution_summary: Callable[..., dict[str, Any] | None],
-) -> None:
-    """Construye y renderiza el dashboard final del batch runner."""
+) -> tuple[list[tuple[str, dict[str, Any], str]], int, int, int, int, int, int, list[str]]:
+    """Normaliza filas por modelo y acumula totales globales de la cola."""
     total_ok = 0
     total_items = 0
     total_pending = 0
     complete_models = 0
     partial_models = 0
     failed_models = 0
-    output_paths: list[str] = []
-    for _model_name, _initial_snapshot, final_snapshot, output_path in queue_results:
+    queue_rows: list[tuple[str, dict[str, Any], str]] = []
+    for model_name, _initial_snapshot, final_snapshot, output_path in queue_results:
+        resolved_output = str(final_snapshot.get("output_path") or output_path or "")
+        queue_rows.append((model_name, final_snapshot, resolved_output))
         total_ok += int(final_snapshot.get("ok", 0) or 0)
         total_items += int(final_snapshot.get("total", 0) or 0)
         pending_value = int(final_snapshot.get("pending", 0) or 0)
@@ -191,7 +186,197 @@ def _render_batch_final_summary(
             partial_models += 1
         else:
             failed_models += 1
-        output_paths.append(str(final_snapshot.get("output_path") or output_path or ""))
+    output_paths = [resolved_output for _model_name, _final_snapshot, resolved_output in queue_rows]
+    return (
+        queue_rows,
+        total_ok,
+        total_items,
+        total_pending,
+        complete_models,
+        partial_models,
+        failed_models,
+        output_paths,
+    )
+
+
+def _build_status_line(
+    *,
+    event: str,
+    current_index: int,
+    total: int,
+    image_path: str,
+    status: str,
+    completed: int,
+) -> str:
+    """Construye la línea de estado del dashboard en vivo."""
+    if event == "image_start":
+        return f"Estado actual: procesando imagen {current_index}/{total} · {image_path}"
+    if event == "image_done" and status == "ok":
+        return f"Estado actual: exportada imagen {current_index}/{total} · {image_path}"
+    if event == "image_done" and status == "invalid":
+        return f"Estado actual: respuesta inválida en {current_index}/{total} · {image_path}"
+    if event == "complete":
+        return f"Estado actual: finalizado · {completed}/{total} imágenes exportadas"
+    return f"Estado actual: preparando ejecución · muestra {total}"
+
+
+def _resolve_iteration_progress(
+    *,
+    event: str,
+    current_index: int,
+    iterations_per_image: int,
+    payload_iteration_index: int,
+    payload_iteration_total: int,
+) -> tuple[int, int]:
+    """Resuelve progreso/total de iteraciones de la imagen actual."""
+    iterations_value = max(1, int(iterations_per_image or 1))
+    iteration_progress = iterations_value
+    if event == "complete":
+        return iteration_progress, iterations_value
+
+    if payload_iteration_total > 0:
+        iterations_value = payload_iteration_total
+    if payload_iteration_index > 0:
+        iteration_progress = min(iterations_value, payload_iteration_index)
+    else:
+        iteration_progress = ((max(1, current_index) - 1) % iterations_value) + 1
+
+    return iteration_progress, iterations_value
+
+
+def _build_metrics_line(summary_progress: dict[str, object]) -> str:
+    """Formatea línea compacta de métricas promedio parciales."""
+    return (
+        "Promedios parciales: "
+        f"TTFT={_format_metric_value(cast(dict[str, object], summary_progress.get('ttft') or {}).get('avg'), suffix=' s')} | "
+        f"TPS={_format_metric_value(cast(dict[str, object], summary_progress.get('tps') or {}).get('avg'))} | "
+        f"latencia={_format_metric_value(cast(dict[str, object], summary_progress.get('total_duration') or {}).get('avg'), suffix=' s')}"
+    )
+
+
+def _build_extra_progress_lines(
+    *,
+    kit: "UIKit",
+    show_model_queue_bar: bool,
+    model_queue_current: int,
+    models_target: int,
+    compact_model: str,
+    model_completed_total: int,
+    current_model_target: int,
+    iteration_progress: int,
+    iterations_value: int,
+) -> list[str]:
+    """Compone líneas extra de barras de progreso del dashboard vivo."""
+    model_progress_line = (
+        f"Cola de modelos: {_build_progress_bar(kit, model_queue_current, models_target)}"
+    )
+    current_images_line = (
+        f"Modelo actual ({compact_model}): {_build_progress_bar(kit, model_completed_total, current_model_target)}"
+    )
+    iterations_line = (
+        f"Iteraciones de imagen actual ({iterations_value}x): "
+        f"{_build_progress_bar(kit, iteration_progress, iterations_value)}"
+    )
+
+    if show_model_queue_bar:
+        return [model_progress_line, current_images_line, iterations_line]
+    return [current_images_line, iterations_line]
+
+
+def _resolve_pending_entries_and_paths(snapshot: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Extrae entradas pendientes y su lista de paths limpios desde snapshot."""
+    pending_entries = cast(list[dict[str, Any]], snapshot.get("pending_entries") or [])
+    pending_paths = [
+        str(item.get("image_path") or "").strip()
+        for item in pending_entries
+        if str(item.get("image_path") or "").strip()
+    ]
+    return pending_entries, pending_paths
+
+
+def _retry_made_progress(*, pending_before_retry: int, pending_after_retry: int) -> bool:
+    """Determina si un reintento redujo pendientes y por tanto hubo progreso."""
+    return pending_after_retry < pending_before_retry
+
+
+def _build_output_path_by_model(
+    *,
+    queued_models: list[str],
+    selected_manifest: str,
+    schema_exec_name: str,
+    linked_batch_output_path: Callable[..., Any],
+) -> dict[str, str]:
+    """Precalcula la ruta de salida compartida por cada modelo."""
+    return {
+        model: str(
+            linked_batch_output_path(
+                manifest_path=selected_manifest,
+                model_tag=model,
+                schema_name=schema_exec_name,
+            )
+        )
+        for model in queued_models
+    }
+
+
+def _build_snapshot_kwargs_by_model(
+    *,
+    queued_models: list[str],
+    selected_manifest: str,
+    schema_exec_name: str,
+) -> dict[str, dict[str, str]]:
+    """Precalcula kwargs de snapshot por modelo para evitar duplicaciones."""
+    return {
+        model: {
+            "manifest_path": selected_manifest,
+            "model_tag": model,
+            "schema_name": schema_exec_name,
+        }
+        for model in queued_models
+    }
+
+
+def _build_queue_targets(
+    *,
+    runnable_models: list[str],
+    initial_snapshots: dict[str, dict[str, Any]],
+) -> dict[str, int]:
+    """Calcula objetivo de imágenes por modelo runnable desde snapshot inicial."""
+    return {
+        model: int(cast(dict[str, Any], initial_snapshots.get(model) or {}).get("total", 0))
+        for model in runnable_models
+    }
+
+
+def _render_batch_final_summary(
+    *,
+    kit: "UIKit",
+    app: "AppContext",
+    selected_manifest: str,
+    schema_exec_name: str,
+    queued_models: list[str],
+    queue_results: list[tuple[str, dict[str, Any], dict[str, Any], str]],
+    upsert_batch_execution_summary: Callable[..., dict[str, Any] | None],
+) -> None:
+    """Construye y renderiza el dashboard final del batch runner."""
+    def _format_metric_triplet(stats: dict[str, Any], *, suffix: str = "") -> str:
+        """Formatea min/media/max para una métrica agregada."""
+        return (
+            f"min={_format_metric_value(stats.get('min'), suffix=suffix)} | "
+            f"media={_format_metric_value(stats.get('avg'), suffix=suffix)} | "
+            f"max={_format_metric_value(stats.get('max'), suffix=suffix)}"
+        )
+
+    (
+        queue_rows,
+        total_ok,
+        total_items,
+        total_pending,
+        complete_models,
+        partial_models,
+        failed_models,
+        output_paths,
+    ) = _collect_queue_rows(queue_results)
 
     unique_outputs = sorted({path for path in output_paths if path})
     aggregate_summaries: dict[str, dict[str, Any]] = {}
@@ -205,13 +390,17 @@ def _render_batch_final_summary(
             aggregate_summaries[output_item] = aggregate_summary
     primary_output = unique_outputs[0] if unique_outputs else ""
     aggregate_models_accuracy: dict[str, str] = {}
+    global_warn = "OK" if total_pending == 0 else "WARN"
+    model_count_text = (
+        f"{len(queued_models)} (completos={complete_models}, parciales={partial_models}, error={failed_models})"
+    )
 
     execution_rows: list[tuple[str, str, str]] = [
         ("Manifiesto", rel_path(selected_manifest), "OK"),
         ("Schema", schema_exec_name, "OK"),
-        ("Modelos", f"{len(queued_models)} (completos={complete_models}, parciales={partial_models}, error={failed_models})", "OK" if failed_models == 0 else "WARN"),
-        ("Cobertura global", f"{total_ok}/{total_items} imágenes exportadas", "OK" if total_pending == 0 else "WARN"),
-        ("Pendientes globales", str(total_pending), "OK" if total_pending == 0 else "WARN"),
+        ("Modelos", model_count_text, "OK" if failed_models == 0 else "WARN"),
+        ("Cobertura global", f"{total_ok}/{total_items} imágenes exportadas", global_warn),
+        ("Pendientes globales", str(total_pending), global_warn),
     ]
     if primary_output:
         execution_rows.append(("Salida JSONL", rel_path(primary_output), "OK"))
@@ -232,39 +421,9 @@ def _render_batch_final_summary(
             ttft_stats = cast(dict[str, Any], global_metrics.get("ttft_seconds") or {})
             tps_stats = cast(dict[str, Any], global_metrics.get("tokens_per_second") or {})
             execution_rows.append(("Acierto global", global_accuracy, "OK"))
-            execution_rows.append(
-                (
-                    "Duración global",
-                    (
-                        f"min={_format_metric_value(duration_stats.get('min'), suffix=' s')} | "
-                        f"media={_format_metric_value(duration_stats.get('avg'), suffix=' s')} | "
-                        f"max={_format_metric_value(duration_stats.get('max'), suffix=' s')}"
-                    ),
-                    "OK",
-                )
-            )
-            execution_rows.append(
-                (
-                    "TTFT global",
-                    (
-                        f"min={_format_metric_value(ttft_stats.get('min'), suffix=' s')} | "
-                        f"media={_format_metric_value(ttft_stats.get('avg'), suffix=' s')} | "
-                        f"max={_format_metric_value(ttft_stats.get('max'), suffix=' s')}"
-                    ),
-                    "OK",
-                )
-            )
-            execution_rows.append(
-                (
-                    "TPS global",
-                    (
-                        f"min={_format_metric_value(tps_stats.get('min'))} | "
-                        f"media={_format_metric_value(tps_stats.get('avg'))} | "
-                        f"max={_format_metric_value(tps_stats.get('max'))}"
-                    ),
-                    "OK",
-                )
-            )
+            execution_rows.append(("Duración global", _format_metric_triplet(duration_stats, suffix=" s"), "OK"))
+            execution_rows.append(("TTFT global", _format_metric_triplet(ttft_stats, suffix=" s"), "OK"))
+            execution_rows.append(("TPS global", _format_metric_triplet(tps_stats), "OK"))
 
     execution_lines = [f"  {name:<18} : {value}" for name, value, _status in execution_rows]
 
@@ -274,7 +433,8 @@ def _render_batch_final_summary(
     progress_w = 8
     acc_w = 15
     pending_w = 6
-    jsonl_w = max(16, ui_width - (model_w + state_w + progress_w + acc_w + pending_w + 25))
+    table_padding = 25
+    jsonl_w = max(16, ui_width - (model_w + state_w + progress_w + acc_w + pending_w + table_padding))
 
     header = (
         f"  {'Modelo':<{model_w}} │ "
@@ -295,13 +455,13 @@ def _render_batch_final_summary(
 
     model_table_lines: list[str] = [header, divider]
     colored_state_lines: list[str] = []
-    for model_name, _initial_snapshot, final_snapshot, output_path in queue_results:
+    for model_name, final_snapshot, resolved_output in queue_rows:
         status_plain = snapshot_status_text(final_snapshot)
         ok_value = int(final_snapshot.get("ok", 0) or 0)
         total_value = int(final_snapshot.get("total", 0) or 0)
         pending_value = int(final_snapshot.get("pending", 0) or 0)
         accuracy_text = aggregate_models_accuracy.get(model_name, "N/D")
-        jsonl_text = rel_path(str(final_snapshot.get("output_path") or output_path or ""))
+        jsonl_text = rel_path(resolved_output)
         colored_model_name = colorize_model(kit.style, model_name, final_snapshot)
         colored_state_lines.append(f"  - {colored_model_name} · {status_plain}")
         model_table_lines.append(
@@ -371,6 +531,11 @@ def _execute_model_with_retries(
     }
     show_model_queue_bar = models_target > 1
     compact_model = compact_model_label(queued_model, ui_width=kit.width())
+    snapshot_kwargs = {
+        "manifest_path": selected_manifest,
+        "model_tag": queued_model,
+        "schema_name": schema_exec_name,
+    }
 
     try:
         recent_records = _make_recent_records(limit=2)
@@ -380,6 +545,16 @@ def _execute_model_with_retries(
             subtitle=f"BATCH RUNNER · {schema_exec_name} · {queued_model}",
             intro=f"Exportando resultados incrementales en JSONL desde manifiesto: {selected_manifest}",
         )
+        base_batch_kwargs: dict[str, Any] = {
+            "model_id": queued_model,
+            "manifest": selected_manifest,
+            "schema_name": schema_base_name,
+            "include_reasoning": include_reasoning,
+            "output_path": output_path,
+            "max_images": None,
+            # Respetar orden del manifiesto para ejecutar iteraciones por imagen en bloque.
+            "shuffle": False,
+        }
 
         def on_batch_progress(payload: dict[str, object]) -> None:
             """Renderiza progreso en vivo durante el batch actual."""
@@ -388,6 +563,7 @@ def _execute_model_with_retries(
             event = str(payload.get("event") or "")
             current_index = _coerce_int(payload.get("index"))
             image_path = _rel_probe_path(cast(str | None, payload.get("image_path")))
+            status_value = str(payload.get("status") or "")
             record_payload = payload.get("record")
             last_record = record_payload if isinstance(record_payload, dict) else None
             completed = _coerce_int(summary_progress.get("processed"))
@@ -401,41 +577,24 @@ def _execute_model_with_retries(
             if event == "complete" and models_target > 0:
                 model_queue_current = min(models_target, models_done_before + 1)
 
-            model_progress_line = (
-                f"Cola de modelos: {_build_progress_bar(kit, model_queue_current, models_target)}"
-            )
-            current_images_line = (
-                f"Modelo actual ({compact_model}): {_build_progress_bar(kit, model_completed_total, current_model_target)}"
-            )
-
-            iterations_value = max(1, int(iterations_per_image or 1))
-            iteration_progress = iterations_value
-            if event != "complete":
-                # Barra por iteración exacta de la imagen actual cuando el payload la incluye.
-                payload_iteration_index = _coerce_int(payload.get("run_iteration_index"))
-                payload_iteration_total = _coerce_int(payload.get("run_iteration_total"))
-                if payload_iteration_total > 0:
-                    iterations_value = payload_iteration_total
-                if payload_iteration_index > 0:
-                    iteration_progress = min(iterations_value, payload_iteration_index)
-                else:
-                    # Fallback robusto cuando no llega metadata de iteración.
-                    iteration_progress = ((max(1, current_index) - 1) % iterations_value) + 1
-            iterations_line = (
-                f"Iteraciones de imagen actual ({iterations_value}x): "
-                f"{_build_progress_bar(kit, iteration_progress, iterations_value)}"
+            payload_iteration_index = _coerce_int(payload.get("run_iteration_index"))
+            payload_iteration_total = _coerce_int(payload.get("run_iteration_total"))
+            iteration_progress, iterations_value = _resolve_iteration_progress(
+                event=event,
+                current_index=current_index,
+                iterations_per_image=iterations_per_image,
+                payload_iteration_index=payload_iteration_index,
+                payload_iteration_total=payload_iteration_total,
             )
 
-            if event == "image_start":
-                status_line = f"Estado actual: procesando imagen {current_index}/{total} · {image_path}"
-            elif event == "image_done" and str(payload.get("status") or "") == "ok":
-                status_line = f"Estado actual: exportada imagen {current_index}/{total} · {image_path}"
-            elif event == "image_done" and str(payload.get("status") or "") == "invalid":
-                status_line = f"Estado actual: respuesta inválida en {current_index}/{total} · {image_path}"
-            elif event == "complete":
-                status_line = f"Estado actual: finalizado · {completed}/{total} imágenes exportadas"
-            else:
-                status_line = f"Estado actual: preparando ejecución · muestra {total}"
+            status_line = _build_status_line(
+                event=event,
+                current_index=current_index,
+                total=total,
+                image_path=image_path,
+                status=status_value,
+                completed=completed,
+            )
 
             if event == "image_done" and last_record is not None:
                 _append_recent_record(recent_records, last_record)
@@ -450,16 +609,17 @@ def _execute_model_with_retries(
                     f"Inválidas={invalid_count} | Errores={fail_count}"
                 ),
                 status_line=status_line,
-                metrics_line=(
-                    "Promedios parciales: "
-                    f"TTFT={_format_metric_value(cast(dict[str, object], summary_progress.get('ttft') or {}).get('avg'), suffix=' s')} | "
-                    f"TPS={_format_metric_value(cast(dict[str, object], summary_progress.get('tps') or {}).get('avg'))} | "
-                    f"latencia={_format_metric_value(cast(dict[str, object], summary_progress.get('total_duration') or {}).get('avg'), suffix=' s')}"
-                ),
-                extra_lines=(
-                    [model_progress_line, current_images_line, iterations_line]
-                    if show_model_queue_bar
-                    else [current_images_line, iterations_line]
+                metrics_line=_build_metrics_line(summary_progress),
+                extra_lines=_build_extra_progress_lines(
+                    kit=kit,
+                    show_model_queue_bar=show_model_queue_bar,
+                    model_queue_current=model_queue_current,
+                    models_target=models_target,
+                    compact_model=compact_model,
+                    model_completed_total=model_completed_total,
+                    current_model_target=current_model_target,
+                    iteration_progress=iteration_progress,
+                    iterations_value=iterations_value,
                 ),
                 recent_title="Últimos registros exportados:",
                 recent_records=list(recent_records),
@@ -473,14 +633,7 @@ def _execute_model_with_retries(
             """Ejecuta una iteración de batch (completa o reanudada)."""
             try:
                 return run_batch_job(
-                    model_id=queued_model,
-                    manifest=selected_manifest,
-                    schema_name=schema_base_name,
-                    include_reasoning=include_reasoning,
-                    output_path=output_path,
-                    max_images=None,
-                    # Respetar orden del manifiesto para ejecutar iteraciones por imagen en bloque.
-                    shuffle=False,
+                    **base_batch_kwargs,
                     pending_image_paths=pending_image_paths,
                     pending_entries=pending_entries,
                     on_progress=on_batch_progress,
@@ -489,14 +642,7 @@ def _execute_model_with_retries(
                 if "on_progress" not in str(error):
                     raise
                 return run_batch_job(
-                    model_id=queued_model,
-                    manifest=selected_manifest,
-                    schema_name=schema_base_name,
-                    include_reasoning=include_reasoning,
-                    output_path=output_path,
-                    max_images=None,
-                    # Respetar orden del manifiesto para ejecutar iteraciones por imagen en bloque.
-                    shuffle=False,
+                    **base_batch_kwargs,
                     pending_image_paths=pending_image_paths,
                     pending_entries=pending_entries,
                 )
@@ -504,12 +650,7 @@ def _execute_model_with_retries(
         pending_image_paths: list[str] | None = None
         pending_entries: list[dict[str, Any]] | None = None
         if rerun_only_pending:
-            pending_entries = cast(list[dict[str, Any]], manifest_snapshot.get("pending_entries") or [])
-            pending_image_paths = [
-                str(item.get("image_path") or "").strip()
-                for item in pending_entries
-                if str(item.get("image_path") or "").strip()
-            ]
+            pending_entries, pending_image_paths = _resolve_pending_entries_and_paths(manifest_snapshot)
 
         summary = execute_batch_once(
             pending_image_paths=pending_image_paths,
@@ -517,11 +658,7 @@ def _execute_model_with_retries(
         )
 
         while True:
-            refreshed = manifest_execution_snapshot(
-                manifest_path=selected_manifest,
-                model_tag=queued_model,
-                schema_name=schema_exec_name,
-            )
+            refreshed = manifest_execution_snapshot(**snapshot_kwargs)
             pending_before_retry = int(refreshed.get("pending", 0))
             if pending_before_retry <= 0:
                 break
@@ -536,25 +673,20 @@ def _execute_model_with_retries(
             )
             if not retry_now:
                 break
-            retry_pending_paths = [
-                str(item.get("image_path") or "").strip()
-                for item in cast(list[dict[str, Any]], refreshed.get("pending_entries") or [])
-                if str(item.get("image_path") or "").strip()
-            ]
+            refreshed_entries, retry_pending_paths = _resolve_pending_entries_and_paths(refreshed)
             if not retry_pending_paths:
                 break
             summary = execute_batch_once(
                 pending_image_paths=retry_pending_paths,
-                pending_entries=cast(list[dict[str, Any]], refreshed.get("pending_entries") or []),
+                pending_entries=refreshed_entries,
             )
 
-            refreshed_after_retry = manifest_execution_snapshot(
-                manifest_path=selected_manifest,
-                model_tag=queued_model,
-                schema_name=schema_exec_name,
-            )
+            refreshed_after_retry = manifest_execution_snapshot(**snapshot_kwargs)
             pending_after_retry = int(refreshed_after_retry.get("pending", 0))
-            if pending_after_retry >= pending_before_retry:
+            if not _retry_made_progress(
+                pending_before_retry=pending_before_retry,
+                pending_after_retry=pending_after_retry,
+            ):
                 kit.log(
                     (
                         f"[{queued_model}] Reintento sin progreso "
@@ -564,18 +696,10 @@ def _execute_model_with_retries(
                 )
                 break
 
-        final_snapshot = manifest_execution_snapshot(
-            manifest_path=selected_manifest,
-            model_tag=queued_model,
-            schema_name=schema_exec_name,
-        )
+        final_snapshot = manifest_execution_snapshot(**snapshot_kwargs)
         return final_snapshot, summary, True
     except Exception as error:
-        final_snapshot = manifest_execution_snapshot(
-            manifest_path=selected_manifest,
-            model_tag=queued_model,
-            schema_name=schema_exec_name,
-        )
+        final_snapshot = manifest_execution_snapshot(**snapshot_kwargs)
         kit.log(f"[{queued_model}] Batch Runner terminó con error: {error}", "error")
         return final_snapshot, summary, False
 
@@ -589,7 +713,6 @@ def run_batch_runner_wrapper(
     linked_batch_output_path: Callable[..., Any],
     manifest_execution_snapshot: Callable[..., dict[str, Any]],
     prune_output_records_for_model: Callable[..., bool],
-    status_label: Callable[[dict[str, Any]], str],
 ) -> None:
     """Run queued batch inference jobs defined by autosufficient manifests.
 
@@ -601,9 +724,8 @@ def run_batch_runner_wrapper(
         linked_batch_output_path: Callback that computes output JSONL path.
         manifest_execution_snapshot: Callback that computes current execution status.
         prune_output_records_for_model: Callback that removes rows for one model in shared JSONL.
-        status_label: Callback that renders colored status labels.
     """
-    from src.scripts.batch_runner import run_batch_job, upsert_batch_execution_summary
+    from src.scripts.batch_runner import run_batch_job, seed_batch_meta_header, upsert_batch_execution_summary
 
     initial_snapshots: dict[str, dict[str, Any]] = {}
 
@@ -650,13 +772,33 @@ def run_batch_runner_wrapper(
         kit.log(cast(str, manifest_overview.get("description") or "Sin descripción disponible."), "info")
         kit.log(f"Modelos en cola: {', '.join(queued_models)}", "info")
 
+        seed_batch_meta_header(
+            output_path=linked_batch_output_path(
+                manifest_path=selected_manifest,
+                model_tag=queued_models[0],
+                schema_name=schema_exec_name,
+            ),
+            model_ids=queued_models,
+            schema_name=schema_exec_name,
+            input_source="manifest",
+            manifest_path=selected_manifest,
+        )
+
+        output_path_by_model = _build_output_path_by_model(
+            queued_models=queued_models,
+            selected_manifest=selected_manifest,
+            schema_exec_name=schema_exec_name,
+            linked_batch_output_path=linked_batch_output_path,
+        )
+        snapshot_kwargs_by_model = _build_snapshot_kwargs_by_model(
+            queued_models=queued_models,
+            selected_manifest=selected_manifest,
+            schema_exec_name=schema_exec_name,
+        )
+
         queue_results: list[tuple[str, dict[str, Any], dict[str, Any], str]] = []
         initial_snapshots = {
-            model: manifest_execution_snapshot(
-                manifest_path=selected_manifest,
-                model_tag=model,
-                schema_name=schema_exec_name,
-            )
+            model: manifest_execution_snapshot(**snapshot_kwargs_by_model[model])
             for model in queued_models
         }
         colored_queue_models = [
@@ -684,30 +826,20 @@ def run_batch_runner_wrapper(
             for model in queued_models
             if model in models_to_execute
         ]
+        runnable_models_count = len(runnable_models)
         runnable_index_by_model = {model: index for index, model in enumerate(runnable_models)}
 
-        queue_targets: dict[str, int] = {
-            model: int(
-                cast(dict[str, Any], initial_snapshots.get(model) or {}).get("total", 0)
-            )
-            for model in runnable_models
-        }
+        queue_targets = _build_queue_targets(
+            runnable_models=runnable_models,
+            initial_snapshots=initial_snapshots,
+        )
         total_global_target = sum(queue_targets.values())
         completed_global_images = 0
 
         for queued_model in queued_models:
-            output_path = str(
-                linked_batch_output_path(
-                    manifest_path=selected_manifest,
-                    model_tag=queued_model,
-                    schema_name=schema_exec_name,
-                )
-            )
-            manifest_snapshot = manifest_execution_snapshot(
-                manifest_path=selected_manifest,
-                model_tag=queued_model,
-                schema_name=schema_exec_name,
-            )
+            model_snapshot_kwargs = snapshot_kwargs_by_model[queued_model]
+            output_path = output_path_by_model[queued_model]
+            manifest_snapshot = manifest_execution_snapshot(**model_snapshot_kwargs)
 
             if queued_model not in models_to_execute:
                 kit.log(f"[{queued_model}] Omitido por selección de ejecución.", "info")
@@ -724,7 +856,8 @@ def run_batch_runner_wrapper(
             rerun_only_pending = str(manifest_snapshot.get("status") or "") == "yellow"
             current_model_target = int(manifest_snapshot.get("total", queue_targets.get(queued_model, 0)) or 0)
             models_done_before = int(runnable_index_by_model.get(queued_model, 0))
-            models_target = len(runnable_models)
+            models_target = runnable_models_count
+            baseline_completed = int(manifest_snapshot.get("ok", 0) or 0) if rerun_only_pending else 0
             final_snapshot, summary, succeeded = _execute_model_with_retries(
                 kit=kit,
                 app=app,
@@ -744,11 +877,7 @@ def run_batch_runner_wrapper(
                 models_done_before=models_done_before,
                 models_target=models_target,
                 iterations_per_image=iterations_per_image,
-                baseline_completed_for_model=(
-                    int(manifest_snapshot.get("ok", 0) or 0)
-                    if rerun_only_pending
-                    else 0
-                ),
+                baseline_completed_for_model=baseline_completed,
             )
             completed_global_images += int(final_snapshot.get("ok", 0))
             queue_results.append((queued_model, manifest_snapshot, final_snapshot, output_path))

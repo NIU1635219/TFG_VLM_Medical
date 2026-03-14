@@ -194,13 +194,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--seed",
         type=int,
         default=None,
-        help="Semilla aleatoria usada cuando --shuffle está activo.",
+        help="Semilla base para shuffle y para derivar semillas por iteración en inferencia.",
     )
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.0,
-        help="Temperatura de inferencia. Por defecto 0.0 para mayor determinismo.",
+        default=0.2,
+        help="Temperatura de inferencia. Por defecto 0.2 para permitir variación entre iteraciones.",
     )
     parser.add_argument("--prompt", help="Prompt manual. Si se omite, se construye desde el esquema.")
     parser.add_argument("--server-api-host", help="Host del servidor LM Studio si no es el local por defecto.")
@@ -260,6 +260,170 @@ def _safe_positive_int(value: Any, default: int = 1) -> int:
         return max(1, int(value or default))
     except (TypeError, ValueError):
         return default
+
+
+def _derive_inference_seed(*, base_seed: int | None, metadata: dict[str, Any] | None) -> int | None:
+    """Deriva una semilla estable por iteración para aumentar variación entre repeticiones."""
+    iteration_index = _safe_positive_int((metadata or {}).get("run_iteration_index"))
+    has_iteration = bool(metadata and metadata.get("run_iteration_index") is not None)
+    if base_seed is None:
+        return iteration_index if has_iteration else None
+    return int(base_seed) + max(0, iteration_index - 1)
+
+
+def _serialize_telemetry_payload(telemetry: Any) -> dict[str, Any]:
+    """Serializa telemetría admitiendo dataclass instancia y objetos con __dict__."""
+    if dataclasses.is_dataclass(telemetry) and not isinstance(telemetry, type):
+        return dataclasses.asdict(telemetry)
+    return dict(getattr(telemetry, "__dict__", {}))
+
+
+def _extract_run_iteration_values(metadata: dict[str, Any] | None) -> tuple[int, int]:
+    """Extrae índices de iteración con fallback seguro desde metadata de entrada."""
+    metadata_dict = metadata if isinstance(metadata, dict) else {}
+    run_iteration_index = _safe_positive_int(metadata_dict.get("run_iteration_index"))
+    run_iteration_total = _safe_positive_int(metadata_dict.get("run_iteration_total"))
+    return run_iteration_index, run_iteration_total
+
+
+def _extract_record_iteration_values(record: dict[str, Any]) -> tuple[int, int]:
+    """Extrae índices de iteración desde un registro final exportado."""
+    run_iteration_index = _safe_positive_int(record.get("run_iteration_index"))
+    run_iteration_total = _safe_positive_int(record.get("run_iteration_total"))
+    return run_iteration_index, run_iteration_total
+
+
+def _build_progress_payload(
+    *,
+    event: str,
+    index: int,
+    total: int,
+    summary: dict[str, Any],
+    image_path: str | None = None,
+    status: str | None = None,
+    record: dict[str, Any] | None = None,
+    run_iteration_index: int | None = None,
+    run_iteration_total: int | None = None,
+) -> dict[str, Any]:
+    """Construye el payload de progreso para callbacks de UI/reporting."""
+    return {
+        "event": event,
+        "index": index,
+        "total": total,
+        "image_path": image_path,
+        "status": status,
+        "record": dict(record) if record is not None else None,
+        "run_iteration_index": run_iteration_index,
+        "run_iteration_total": run_iteration_total,
+        "summary": summary,
+    }
+
+
+def _build_inference_kwargs(
+    *,
+    base_inference_kwargs: dict[str, Any],
+    image_path: Path,
+    inference_seed: int | None,
+) -> dict[str, Any]:
+    """Compone kwargs de inferencia por imagen con semilla opcional."""
+    inference_kwargs: dict[str, Any] = {
+        **base_inference_kwargs,
+        "image_path": image_path,
+    }
+    if inference_seed is not None:
+        inference_kwargs["seed"] = inference_seed
+    return inference_kwargs
+
+
+def _build_base_inference_kwargs(
+    *,
+    prompt: str,
+    schema_cls: type[BaseModel],
+    temperature: float,
+) -> dict[str, Any]:
+    """Construye kwargs base de inferencia que son constantes durante todo el batch."""
+    return {
+        "prompt": prompt,
+        "schema": schema_cls,
+        "temperature": temperature,
+        "include_telemetry": True,
+    }
+
+
+def _build_base_record_kwargs(*, model_id: str, schema_name: str) -> dict[str, Any]:
+    """Construye kwargs base de registro compartidos por todas las iteraciones."""
+    return {
+        "model_id": model_id,
+        "schema_name": schema_name,
+    }
+
+
+def _build_ok_record(
+    *,
+    base_record_kwargs: dict[str, Any],
+    image_path: Path,
+    duration_seconds: float,
+    result: Any,
+    metadata: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Construye el record de éxito junto con su telemetría serializada."""
+    payload = result.data.model_dump()
+    telemetry_payload = _serialize_telemetry_payload(result.telemetry)
+    record = build_record(
+        **base_record_kwargs,
+        image_path=image_path,
+        duration_seconds=duration_seconds,
+        status="ok",
+        payload=payload,
+        telemetry=telemetry_payload,
+        metadata=metadata,
+    )
+    return record, telemetry_payload
+
+
+def _build_error_record(
+    *,
+    base_record_kwargs: dict[str, Any],
+    image_path: Path,
+    duration_seconds: float,
+    metadata: dict[str, Any] | None,
+    error: BaseException,
+) -> tuple[dict[str, Any], str]:
+    """Construye el record de error devolviendo también el estado clasificado."""
+    status = classify_error(error)
+    record = build_record(
+        **base_record_kwargs,
+        image_path=image_path,
+        duration_seconds=duration_seconds,
+        status=status,
+        metadata=metadata,
+        error=error,
+    )
+    return record, status
+
+
+def _next_status_counts(*, ok: int, invalid: int, fail: int, status: str) -> tuple[int, int, int]:
+    """Calcula los contadores siguientes en función del estado final del record."""
+    normalized_status = str(status or "").strip().lower()
+    if normalized_status == "ok":
+        return ok + 1, invalid, fail
+    if normalized_status == "invalid":
+        return ok, invalid + 1, fail
+    return ok, invalid, fail + 1
+
+
+def _call_inference_with_seed_fallback(*, loader: VLMLoader, inference_kwargs: dict[str, Any]) -> Any:
+    """Ejecuta inferencia y elimina `seed` solo si el loader no la soporta."""
+    try:
+        return loader.inference(**inference_kwargs)
+    except TypeError as seed_error:
+        # Compatibilidad hacia atrás con mocks/loaders sin parámetro `seed`.
+        error_text = str(seed_error)
+        unsupported_seed = "unexpected keyword argument" in error_text and "seed" in error_text
+        if not unsupported_seed or "seed" not in inference_kwargs:
+            raise
+        inference_kwargs.pop("seed", None)
+        return loader.inference(**inference_kwargs)
 
 
 def _as_posix_key(path_like: str | Path) -> str:
@@ -457,6 +621,7 @@ def _ensure_batch_meta_header(
     schema_name: str,
     input_source: str,
     manifest_path: Path | None,
+    seed_model_ids: list[str] | None = None,
 ) -> None:
     """Upsert de metadatos globales para JSONL compartido entre modelos."""
     lines = _read_jsonl_lines(output_path)
@@ -479,6 +644,8 @@ def _ensure_batch_meta_header(
     raw_model_ids = existing_meta.get("model_ids")
     if isinstance(raw_model_ids, list):
         model_ids.update(str(item).strip() for item in raw_model_ids if str(item).strip())
+    if isinstance(seed_model_ids, list):
+        model_ids.update(str(item).strip() for item in seed_model_ids if str(item).strip())
     current_model = str(model_id or "").strip()
     if current_model:
         model_ids.add(current_model)
@@ -530,6 +697,31 @@ def _ensure_batch_meta_header(
         lines[meta_index] = header_line
 
     _write_jsonl_lines(output_path, lines)
+
+
+def seed_batch_meta_header(
+    *,
+    output_path: str | Path,
+    model_ids: list[str],
+    schema_name: str,
+    input_source: str,
+    manifest_path: str | Path | None = None,
+) -> Path:
+    """Siembra/actualiza __batch_meta__ una sola vez con la cola completa de modelos."""
+    resolved_output_path = Path(output_path)
+    if resolved_output_path.suffix.lower() != ".jsonl":
+        resolved_output_path = resolved_output_path.with_suffix(".jsonl")
+
+    manifest_path_obj = Path(manifest_path) if manifest_path is not None else None
+    _ensure_batch_meta_header(
+        output_path=resolved_output_path,
+        model_id="",
+        seed_model_ids=model_ids,
+        schema_name=schema_name,
+        input_source=input_source,
+        manifest_path=manifest_path_obj,
+    )
+    return resolved_output_path
 
 
 def _normalize_label_for_accuracy(value: Any) -> str:
@@ -965,7 +1157,7 @@ def run_batch_job(
     max_images: int | None = None,
     shuffle: bool = False,
     seed: int | None = None,
-    temperature: float = 0.0,
+    temperature: float = 0.2,
     prompt: str | None = None,
     server_api_host: str | None = None,
     api_token: str | None = None,
@@ -988,6 +1180,8 @@ def run_batch_job(
     )
 
     images = select_images(discovered_items, max_images=max_images, shuffle=shuffle, seed=seed)
+    total_images = len(images)
+    total_available = len(discovered_items)
 
     resolved_output_path = Path(output_path) if output_path is not None else build_default_output_path(public_schema_name)
     if resolved_output_path.suffix.lower() != ".jsonl":
@@ -1033,8 +1227,8 @@ def run_batch_job(
             ok=ok,
             invalid=invalid,
             fail=fail,
-            total_available=len(discovered_items),
-            sample_size=len(images),
+            total_available=total_available,
+            sample_size=total_images,
             ttft_total=metric_totals["ttft_total"],
             ttft_count=metric_counts["ttft_count"],
             tps_total=metric_totals["tps_total"],
@@ -1058,62 +1252,70 @@ def run_batch_job(
         if on_progress is None:
             return
         on_progress(
-            {
-                "event": event,
-                "index": index,
-                "total": len(images),
-                "image_path": image_path,
-                "status": status,
-                "record": dict(record) if record is not None else None,
-                "run_iteration_index": run_iteration_index,
-                "run_iteration_total": run_iteration_total,
-                "summary": build_summary(),
-            }
+            _build_progress_payload(
+                event=event,
+                index=index,
+                total=total_images,
+                image_path=image_path,
+                status=status,
+                record=record,
+                run_iteration_index=run_iteration_index,
+                run_iteration_total=run_iteration_total,
+                summary=build_summary(),
+            )
         )
 
     emit_progress("start")
 
     try:
         loader.load_model()
+        base_inference_kwargs = _build_base_inference_kwargs(
+            prompt=selected_prompt,
+            schema_cls=schema_cls,
+            temperature=temperature,
+        )
+        base_record_kwargs = _build_base_record_kwargs(
+            model_id=model_id,
+            schema_name=public_schema_name,
+        )
         progress_iter = tqdm(images, desc="Procesando imágenes", unit="img") if on_progress is None else images
         for index, item in enumerate(progress_iter, start=1):
             image_path = item.image_path
-            metadata_dict = item.metadata if isinstance(item.metadata, dict) else {}
+            run_iteration_index, run_iteration_total = _extract_run_iteration_values(item.metadata)
+            inference_seed = _derive_inference_seed(base_seed=seed, metadata=item.metadata)
             emit_progress(
                 "image_start",
                 index=index,
                 image_path=str(image_path),
                 status="running",
-                run_iteration_index=_safe_positive_int(metadata_dict.get("run_iteration_index")),
-                run_iteration_total=_safe_positive_int(metadata_dict.get("run_iteration_total")),
+                run_iteration_index=run_iteration_index,
+                run_iteration_total=run_iteration_total,
             )
             started_at = time.perf_counter()
             try:
-                result = loader.inference(
+                inference_kwargs = _build_inference_kwargs(
+                    base_inference_kwargs=base_inference_kwargs,
                     image_path=image_path,
-                    prompt=selected_prompt,
-                    schema=schema_cls,
-                    temperature=temperature,
-                    include_telemetry=True,
+                    inference_seed=inference_seed,
+                )
+                result = _call_inference_with_seed_fallback(
+                    loader=loader,
+                    inference_kwargs=inference_kwargs,
                 )
                 duration_seconds = time.perf_counter() - started_at
-                payload = result.data.model_dump()
-                telemetry_payload = (
-                    dataclasses.asdict(result.telemetry)
-                    if dataclasses.is_dataclass(result.telemetry)
-                    else dict(getattr(result.telemetry, "__dict__", {}))
-                )
-                record = build_record(
-                    model_id=model_id,
-                    schema_name=public_schema_name,
+                record, telemetry_payload = _build_ok_record(
+                    base_record_kwargs=base_record_kwargs,
                     image_path=image_path,
                     duration_seconds=duration_seconds,
-                    status="ok",
-                    payload=payload,
-                    telemetry=telemetry_payload,
+                    result=result,
                     metadata=item.metadata,
                 )
-                ok += 1
+                ok, invalid, fail = _next_status_counts(
+                    ok=ok,
+                    invalid=invalid,
+                    fail=fail,
+                    status="ok",
+                )
                 _update_metric_totals(
                     totals=metric_totals,
                     counts=metric_counts,
@@ -1121,31 +1323,31 @@ def run_batch_job(
                 )
             except Exception as error:
                 duration_seconds = time.perf_counter() - started_at
-                status = classify_error(error)
-                record = build_record(
-                    model_id=model_id,
-                    schema_name=public_schema_name,
+                record, status = _build_error_record(
+                    base_record_kwargs=base_record_kwargs,
                     image_path=image_path,
                     duration_seconds=duration_seconds,
-                    status=status,
                     metadata=item.metadata,
                     error=error,
                 )
-                if status == "invalid":
-                    invalid += 1
-                else:
-                    fail += 1
+                ok, invalid, fail = _next_status_counts(
+                    ok=ok,
+                    invalid=invalid,
+                    fail=fail,
+                    status=status,
+                )
 
             append_jsonl_record(resolved_output_path, record)
             processed += 1
+            record_iteration_index, record_iteration_total = _extract_record_iteration_values(record)
             emit_progress(
                 "image_done",
                 index=index,
                 image_path=str(image_path),
                 status=str(record.get("status") or "error"),
                 record=record,
-                run_iteration_index=_safe_positive_int(record.get("run_iteration_index")),
-                run_iteration_total=_safe_positive_int(record.get("run_iteration_total")),
+                run_iteration_index=record_iteration_index,
+                run_iteration_total=record_iteration_total,
             )
     finally:
         loader.unload_model()

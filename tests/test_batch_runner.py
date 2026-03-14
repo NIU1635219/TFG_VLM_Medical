@@ -738,3 +738,90 @@ def test_upsert_batch_execution_summary_includes_accuracy(tmp_path):
     assert summary["global"]["accuracy"]["evaluated"] == 3
     assert summary["global"]["accuracy"]["correct"] == 2
     assert summary["global"]["accuracy"]["value"] == pytest.approx(2.0 / 3.0)
+
+
+def test_run_batch_job_filters_pending_entries_by_iteration(monkeypatch, tmp_path):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    image_path = image_dir / "sample_0.tif"
+    image_path.write_bytes(b"image")
+
+    manifest_path = tmp_path / "manifest.jsonl"
+    manifest_rows = [
+        {
+            "image_path": str(image_path),
+            "ground_truth_cls": "AD",
+            "image_id": "0",
+            "run_iteration_index": 1,
+            "run_iteration_total": 2,
+        },
+        {
+            "image_path": str(image_path),
+            "ground_truth_cls": "AD",
+            "image_id": "0",
+            "run_iteration_index": 2,
+            "run_iteration_total": 2,
+        },
+    ]
+    manifest_path.write_text("\n".join(json.dumps(row) for row in manifest_rows) + "\n", encoding="utf-8")
+
+    output_path = tmp_path / "results.jsonl"
+
+    class FakeResult:
+        def __init__(self, image_name):
+            self._image_name = image_name
+
+        def model_dump(self):
+            return {
+                "object_detected": self._image_name,
+                "confidence_score": 93,
+                "justification": "ok",
+            }
+
+    class FakeTelemetry:
+        def __init__(self):
+            self.total_duration_seconds = 1.2
+            self.ttft_seconds = 0.4
+            self.generation_duration_seconds = 0.8
+            self.tokens_per_second = 21.0
+            self.reasoning_tokens = 3
+            self.stop_reason = "eos"
+            self.model_id = "fake-model"
+            self.architecture = "qwen3_vl"
+            self.gpu_layers = 28
+            self.prompt_tokens = 10
+            self.completion_tokens = 11
+            self.total_tokens = 21
+
+    class FakeInferenceResult:
+        def __init__(self, image_name):
+            self.data = FakeResult(image_name)
+            self.telemetry = FakeTelemetry()
+
+    class FakeLoader:
+        def __init__(self, model_path, verbose=False, server_api_host=None, api_token=None):
+            self.model_path = model_path
+
+        def load_model(self):
+            return None
+
+        def inference(self, image_path, prompt, schema, temperature, include_telemetry=False):
+            return FakeInferenceResult(image_path.name)
+
+        def unload_model(self):
+            return None
+
+    monkeypatch.setattr("src.scripts.batch_runner.VLMLoader", FakeLoader)
+
+    summary = run_batch_job(
+        model_id="fake-model",
+        manifest=manifest_path,
+        schema_name="GenericObjectDetection",
+        output_path=output_path,
+        pending_entries=[{"image_path": str(image_path), "run_iteration_index": 2}],
+    )
+
+    assert summary["processed"] == 1
+    rows = _read_jsonl_records(output_path)
+    assert len(rows) == 1
+    assert int(rows[0].get("run_iteration_index") or 0) == 2

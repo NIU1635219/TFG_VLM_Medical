@@ -1,11 +1,111 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any, Callable
 
 from ..setup_ui_io import ask_text
 
 if TYPE_CHECKING:
     from ..menu_kit import AppContext, UIKit
+
+
+def normalize_state_value(value: object) -> str:
+    """Normaliza el estado textual para comparaciones internas."""
+    return str(value or "").strip().lower()
+
+
+def as_yes(value: object) -> bool:
+    """Interpreta respuestas interactivas como afirmativas/negativas explícitas."""
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    return text in {"y", "yes", "s", "si", "true", "1"}
+
+
+def compact_model_label(model_tag: str, *, ui_width: int) -> str:
+    """Compacta el model tag para pantallas estrechas preservando inicio/fin."""
+    text = str(model_tag or "").strip()
+    if not text:
+        return "N/D"
+    max_len = max(14, min(30, int(ui_width * 0.33)))
+    if len(text) <= max_len:
+        return text
+    head = max(6, (max_len - 1) // 2)
+    tail = max(5, max_len - head - 1)
+    return f"{text[:head]}…{text[-tail:]}"
+
+
+def is_model_snapshot_complete(snapshot: dict[str, Any]) -> bool:
+    """Valida de forma estricta si un modelo está realmente completado."""
+    status = normalize_state_value(snapshot.get("status"))
+    total = int(snapshot.get("total", 0) or 0)
+    ok = int(snapshot.get("ok", 0) or 0)
+    errors = int(snapshot.get("errors", 0) or 0)
+    pending = int(snapshot.get("pending", 0) or 0)
+    return status == "green" and total > 0 and ok == total and errors == 0 and pending == 0
+
+
+def rel_path(path_value: str) -> str:
+    """Convierte rutas absolutas a relativas para mejorar legibilidad en terminal."""
+    path_text = str(path_value or "").strip()
+    if not path_text:
+        return "N/D"
+    try:
+        return os.path.relpath(path_text, ".")
+    except ValueError:
+        return path_text
+
+
+def truncate_middle(text: str, limit: int) -> str:
+    """Recorta texto largo preservando inicio/fin para columnas estrechas."""
+    value = str(text or "")
+    if len(value) <= limit:
+        return value
+    if limit <= 6:
+        return value[:limit]
+    head = max(3, (limit - 1) // 2)
+    tail = max(2, limit - head - 1)
+    return f"{value[:head]}…{value[-tail:]}"
+
+
+def snapshot_status_text(snapshot: dict[str, Any]) -> str:
+    """Etiqueta de estado sin ANSI para tabla resumen final."""
+    state = normalize_state_value(snapshot.get("status"))
+    if state == "green":
+        return "COMPLETO"
+    if state == "yellow":
+        return "PARCIAL"
+    return "ERROR"
+
+
+def snapshot_status_color_code(style: Any, snapshot: dict[str, Any]) -> str:
+    """Obtiene color ANSI asociado al estado del snapshot."""
+    state = normalize_state_value(snapshot.get("status"))
+    if state == "green":
+        return str(getattr(style, "OKGREEN", ""))
+    if state == "yellow":
+        return str(getattr(style, "WARNING", ""))
+    return str(getattr(style, "FAIL", ""))
+
+
+def colorize_model(style: Any, model_tag: str, snapshot: dict[str, Any]) -> str:
+    """Pinta el nombre del modelo según estado (verde/amarillo/rojo)."""
+    color = snapshot_status_color_code(style, snapshot)
+    endc = str(getattr(style, "ENDC", "")) if color else ""
+    return f"{color}{model_tag}{endc}" if color else model_tag
+
+
+def snapshot_summary_line(style: Any, model_tag: str, snapshot: dict[str, Any]) -> str:
+    """Resumen compacto del estado actual para prompts interactivos."""
+    ok = int(snapshot.get("ok", 0) or 0)
+    total = int(snapshot.get("total", 0) or 0)
+    pending = int(snapshot.get("pending", 0) or 0)
+    errors = int(snapshot.get("errors", 0) or 0)
+    status_plain = snapshot_status_text(snapshot)
+    return (
+        f"{colorize_model(style, model_tag, snapshot)} · {status_plain} · "
+        f"OK/TOT={ok}/{total} · Pend={pending} · Err={errors}"
+    )
 
 
 def make_header(kit: "UIKit", app: "AppContext", subtitle: str) -> Callable[[], None]:

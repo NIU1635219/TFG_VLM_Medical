@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterator, cast
 
 from ..setup_ui_io import ask_text
 
@@ -24,27 +24,57 @@ def _parse_models(raw_models: Any) -> list[str]:
     return []
 
 
+def _safe_positive_int(value: Any, default: int = 1) -> int:
+    """Parsea enteros positivos con fallback seguro."""
+    try:
+        return max(1, int(value or default))
+    except (TypeError, ValueError):
+        return default
+
+
 def _read_manifest_meta(manifest_path: str) -> dict[str, Any] | None:
     """Read global manifest metadata if present in the first JSONL lines."""
     path = Path(manifest_path)
     if not path.exists() or not path.is_file():
         return None
+    for _line, payload in _iter_jsonl_lines_with_payload(path):
+        if payload is None:
+            continue
+        meta = payload.get(_MANIFEST_META_KEY)
+        if isinstance(meta, dict):
+            return meta
+        return None
+    return None
+
+
+def _iter_jsonl_lines_with_payload(path: Path) -> Iterator[tuple[str, dict[str, Any] | None]]:
+    """Itera líneas JSONL devolviendo cada línea y su payload dict parseado.
+
+    Args:
+        path: Ruta al archivo JSONL.
+
+    Yields:
+        Tuplas ``(linea_sin_salto, payload_dict_o_none)``.
+    """
+    if not path.exists() or not path.is_file():
+        return
+
     try:
         with path.open("r", encoding="utf-8") as handle:
             for raw_line in handle:
                 line = raw_line.strip()
                 if not line:
                     continue
-                payload = json.loads(line)
-                if not isinstance(payload, dict):
-                    continue
-                meta = payload.get(_MANIFEST_META_KEY)
-                if isinstance(meta, dict):
-                    return meta
-                return None
+                payload: dict[str, Any] | None = None
+                try:
+                    parsed = json.loads(line)
+                    if isinstance(parsed, dict):
+                        payload = parsed
+                except Exception:
+                    payload = None
+                yield line, payload
     except Exception:
-        return None
-    return None
+        return
 
 
 def _load_manifest_class_counts(csv_path: Path) -> dict[str, int]:
@@ -180,6 +210,64 @@ def _select_manifest_sample_size(kit: "UIKit") -> int | str:
     return int(value)
 
 
+def _select_manifest_iterations_per_image(kit: "UIKit") -> int | str:
+    """Solicita cuántas iteraciones ejecutar por imagen/modelo.
+
+    Args:
+        kit: Terminal UI toolkit.
+
+    Returns:
+        Entero positivo o "BACK" si se cancela.
+    """
+
+    def _validate_iterations(raw_value: str) -> str | None:
+        if not raw_value:
+            return "Debes indicar un número entero positivo."
+        if not raw_value.isdigit():
+            return "Entrada inválida. Usa solo dígitos."
+        if int(raw_value) <= 0:
+            return "El número de iteraciones debe ser mayor que cero."
+        if int(raw_value) > 100:
+            return "Por seguridad, el máximo permitido es 100 iteraciones por imagen."
+        return None
+
+    def _render_iterations_preview(current_value: str, _ui_width: int) -> list[str]:
+        style = kit.style
+        value = int(current_value) if current_value.isdigit() else 0
+        lines: list[str] = [
+            (
+                f" {style.DIM}Este valor multiplica el número de filas del manifiesto por imagen."
+                f"{style.ENDC}"
+            )
+        ]
+        if value > 0:
+            lines.append(f" {style.OKCYAN}Iteraciones por imagen: {value}x{style.ENDC}")
+        else:
+            lines.append(f" {style.DIM}Introduce un entero para continuar.{style.ENDC}")
+        return lines
+
+    value = ask_text(
+        kit=kit,
+        title="BATCH RUNNER · MANIFEST ITERATIONS",
+        intro_lines=[
+            (
+                f"{kit.style.DIM}Define cuántas veces se ejecutará cada imagen por modelo"
+                f" para estudiar variabilidad de respuestas.{kit.style.ENDC}"
+            ),
+        ],
+        prompt_label="Entrada:",
+        help_line="[ENTER] confirmar · [Backspace] borrar · [ESC] cancelar",
+        allow_char_fn=lambda ch: ch.isdigit(),
+        normalize_on_submit_fn=lambda text: text.strip(),
+        validate_on_submit_fn=_validate_iterations,
+        render_extra_lines_fn=_render_iterations_preview,
+        force_full_on_update=True,
+    )
+    if value is None:
+        return "BACK"
+    return int(value)
+
+
 def discover_experiment_manifests() -> list[str]:
     """Discover available experiment manifests under data/experiments.
 
@@ -248,57 +336,56 @@ def load_manifest_entries(manifest_path: str) -> list[dict[str, Any]]:
         Parsed valid row dictionaries containing at least `image_path`.
     """
     entries: list[dict[str, Any]] = []
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as handle:
-            for raw_line in handle:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                payload = json.loads(line)
-                if not isinstance(payload, dict):
-                    continue
-                image_path = payload.get("image_path")
-                if image_path is None:
-                    continue
-                entries.append(payload)
-    except Exception:
-        return []
+    for _line, payload in _iter_jsonl_lines_with_payload(Path(manifest_path)):
+        if payload is None:
+            continue
+        image_path = payload.get("image_path")
+        if image_path is None:
+            continue
+        entries.append(payload)
     return entries
 
 
-def _load_last_records_by_image_for_model(output_path: str, *, model_tag: str) -> dict[str, dict[str, Any]]:
-    """Index latest result record by image path filtered by model id.
+def _entry_execution_key(entry: dict[str, Any]) -> tuple[str, int]:
+    """Genera una clave estable por entrada soportando iteraciones repetidas."""
+    image_path = str(entry.get("image_path") or "").strip()
+    iteration_index = _safe_positive_int(entry.get("run_iteration_index"))
+    return image_path, iteration_index
+
+
+def _load_last_records_by_entry_for_model(
+    output_path: str,
+    *,
+    model_tag: str,
+) -> dict[tuple[str, int], dict[str, Any]]:
+    """Index latest result record by entry key filtered by model id.
 
     Args:
         output_path: Path to batch output JSONL.
 
     Returns:
-        Mapping `image_path -> last seen record` for selected model.
+        Mapping `(image_path, run_iteration_index) -> last seen record`.
     """
-    records_by_image: dict[str, dict[str, Any]] = {}
+    records_by_entry: dict[tuple[str, int], dict[str, Any]] = {}
     output_file = Path(output_path)
     if not output_file.exists() or not output_file.is_file():
-        return records_by_image
-    try:
-        with output_file.open("r", encoding="utf-8") as handle:
-            for raw_line in handle:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                payload = json.loads(line)
-                if not isinstance(payload, dict):
-                    continue
-                if isinstance(payload.get("__batch_meta__"), dict):
-                    continue
-                if str(payload.get("model_id") or "").strip() != str(model_tag).strip():
-                    continue
-                image_path = payload.get("image_path")
-                if not isinstance(image_path, str) or not image_path.strip():
-                    continue
-                records_by_image[image_path] = payload
-    except Exception:
-        return {}
-    return records_by_image
+        return records_by_entry
+
+    for _line, payload in _iter_jsonl_lines_with_payload(output_file):
+        if payload is None:
+            continue
+        if isinstance(payload.get("__batch_meta__"), dict):
+            continue
+        if str(payload.get("model_id") or "").strip() != str(model_tag).strip():
+            continue
+        image_path = payload.get("image_path")
+        if not isinstance(image_path, str) or not image_path.strip():
+            continue
+        iteration_index = _safe_positive_int(payload.get("run_iteration_index"))
+        record_key = (image_path.strip(), iteration_index)
+        records_by_entry[record_key] = payload
+
+    return records_by_entry
 
 
 def prune_output_records_for_model(*, output_path: str, model_tag: str) -> bool:
@@ -317,25 +404,16 @@ def prune_output_records_for_model(*, output_path: str, model_tag: str) -> bool:
 
     kept_lines: list[str] = []
     try:
-        with out_file.open("r", encoding="utf-8") as handle:
-            for raw_line in handle:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except Exception:
-                    kept_lines.append(line)
-                    continue
-                if not isinstance(payload, dict):
-                    kept_lines.append(line)
-                    continue
-                if isinstance(payload.get("__batch_meta__"), dict):
-                    kept_lines.append(line)
-                    continue
-                if str(payload.get("model_id") or "").strip() == str(model_tag).strip():
-                    continue
+        for line, payload in _iter_jsonl_lines_with_payload(out_file):
+            if payload is None:
                 kept_lines.append(line)
+                continue
+            if isinstance(payload.get("__batch_meta__"), dict):
+                kept_lines.append(line)
+                continue
+            if str(payload.get("model_id") or "").strip() == str(model_tag).strip():
+                continue
+            kept_lines.append(line)
         with out_file.open("w", encoding="utf-8", newline="\n") as handle:
             for entry in kept_lines:
                 handle.write(entry + "\n")
@@ -382,7 +460,7 @@ def manifest_execution_snapshot(*, manifest_path: str, model_tag: str, schema_na
         except Exception:
             pass
 
-    records_by_image = _load_last_records_by_image_for_model(output_path, model_tag=model_tag)
+    records_by_entry = _load_last_records_by_entry_for_model(output_path, model_tag=model_tag)
 
     total = len(entries)
     if total <= 0:
@@ -400,8 +478,7 @@ def manifest_execution_snapshot(*, manifest_path: str, model_tag: str, schema_na
     error_count = 0
     pending_entries: list[dict[str, Any]] = []
     for entry in entries:
-        image_path = str(entry.get("image_path") or "")
-        record = records_by_image.get(image_path)
+        record = records_by_entry.get(_entry_execution_key(entry))
         if record is None:
             pending_entries.append(entry)
             continue
@@ -504,11 +581,13 @@ def extract_manifest_run_config(manifest_path: str) -> dict[str, Any] | None:
         models = _parse_models(meta.get("run_models"))
         schema_name = str(meta.get("run_schema_name") or "").strip()
         include_reasoning = bool(meta.get("run_include_reasoning"))
+        iterations_per_image = _safe_positive_int(meta.get("run_iterations_per_image"))
         if models and schema_name:
             return {
                 "models": models,
                 "schema_name": schema_name,
                 "include_reasoning": include_reasoning,
+                "iterations_per_image": iterations_per_image,
             }
 
     entries = load_manifest_entries(manifest_path)
@@ -519,6 +598,9 @@ def extract_manifest_run_config(manifest_path: str) -> dict[str, Any] | None:
     models = _parse_models(first.get("run_models"))
     schema_name = str(first.get("run_schema_name") or "").strip()
     include_reasoning = bool(first.get("run_include_reasoning"))
+    iterations_per_image = _safe_positive_int(
+        first.get("run_iterations_per_image") or first.get("run_iteration_total")
+    )
     if not models or not schema_name:
         return None
 
@@ -526,6 +608,7 @@ def extract_manifest_run_config(manifest_path: str) -> dict[str, Any] | None:
         "models": models,
         "schema_name": schema_name,
         "include_reasoning": include_reasoning,
+        "iterations_per_image": iterations_per_image,
     }
 
 
@@ -656,7 +739,8 @@ def manifest_overview(manifest_path: str) -> dict[str, Any]:
         "description": (
             f"schema={config['schema_name']}"
             f"{' + reasoning' if config['include_reasoning'] else ''} · "
-            f"modelos={len(config['models'])} · pendientes={total_pending}"
+            f"modelos={len(config['models'])} · iteraciones={int(config.get('iterations_per_image', 1))}x · "
+            f"pendientes={total_pending}"
         ),
     }
 
@@ -687,6 +771,10 @@ def _generate_manifest_with_prompt(
     if sample_size == "BACK":
         return None
 
+    iterations_per_image = _select_manifest_iterations_per_image(kit)
+    if iterations_per_image == "BACK":
+        return None
+
     models = _select_models_for_manifest(kit, app, make_header=make_header)
     if not models:
         kit.log("Generación cancelada: debes seleccionar al menos un modelo.", "warning")
@@ -698,6 +786,7 @@ def _generate_manifest_with_prompt(
     base_schema_name, include_reasoning = schema_config
 
     selected_size = cast(int, sample_size)
+    selected_iterations = cast(int, iterations_per_image)
     output_dir = Path("data/experiments")
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -724,8 +813,10 @@ def _generate_manifest_with_prompt(
         run_models=models,
         run_schema_name=base_schema_name,
         run_include_reasoning=include_reasoning,
+        run_iterations_per_image=selected_iterations,
     )
     kit.log(f"Manifiesto generado: {summary.get('output_path')}", "success")
+    kit.log(f"Iteraciones por imagen: {summary.get('run_iterations_per_image', 1)}x", "info")
     kit.log("Distribución del subconjunto: " + _format_class_distribution(summary), "info")
     return summary
 

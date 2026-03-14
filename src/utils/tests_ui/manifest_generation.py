@@ -18,6 +18,72 @@ _IMG_EXTENSIONS: tuple[str, ...] = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".
 _MANIFEST_META_KEY = "__manifest_meta__"
 
 
+def _validate_generate_manifest_inputs(
+    *,
+    input_csv: Path,
+    images_dir: Path,
+    run_iterations_per_image: int,
+) -> int:
+    """Valida entradas base para generación de manifiesto.
+
+    Args:
+        input_csv: CSV de entrada.
+        images_dir: Carpeta de imágenes.
+        run_iterations_per_image: Iteraciones solicitadas.
+
+    Returns:
+        Número de iteraciones normalizado a entero positivo.
+    """
+    if not input_csv.exists() or not input_csv.is_file():
+        raise FileNotFoundError(f"Input CSV not found: {input_csv}")
+    if not images_dir.exists() or not images_dir.is_dir():
+        raise FileNotFoundError(f"Images directory not found: {images_dir}")
+
+    normalized_iterations = int(run_iterations_per_image)
+    if normalized_iterations <= 0:
+        raise ValueError("run_iterations_per_image must be greater than zero")
+    return normalized_iterations
+
+
+def _format_output_image_path(*, resolved: Path, relative_paths: bool) -> str:
+    """Construye el valor final de image_path en el manifiesto."""
+    if not relative_paths:
+        return str(resolved)
+
+    try:
+        return str(resolved.relative_to(Path.cwd()))
+    except ValueError:
+        return str(resolved)
+
+
+def _build_manifest_record(
+    *,
+    image_path_value: str,
+    ground_truth: Any,
+    image_id: str,
+    iteration_index: int,
+    run_iterations_per_image: int,
+    inline_run_config: bool,
+    run_models_list: list[str],
+    run_schema_name_str: str,
+    run_include_reasoning_flag: bool,
+) -> dict[str, Any]:
+    """Compone una fila JSONL del manifiesto con y sin config inline."""
+    record: dict[str, Any] = {
+        "image_path": image_path_value,
+        "ground_truth_cls": str(ground_truth),
+        "image_id": image_id,
+        "run_iteration_index": iteration_index,
+        "run_iteration_total": run_iterations_per_image,
+    }
+    if inline_run_config:
+        record["run_models"] = run_models_list
+        record["run_schema_name"] = run_schema_name_str
+        record["run_include_reasoning"] = run_include_reasoning_flag
+        record["run_iterations_per_image"] = run_iterations_per_image
+    return record
+
+
 def _normalize_image_id(value: Any) -> str | None:
     """Normalize image identifiers to stable filename stems.
 
@@ -206,6 +272,7 @@ def generate_manifest(
     run_models: list[str] | None = None,
     run_schema_name: str | None = None,
     run_include_reasoning: bool = False,
+    run_iterations_per_image: int = 1,
     compact_run_config: bool = True,
 ) -> dict[str, Any]:
     """Create experiment JSONL manifest and return summary.
@@ -223,15 +290,23 @@ def generate_manifest(
         run_models: Optional execution model queue embedded into each row.
         run_schema_name: Optional schema name embedded into each row.
         run_include_reasoning: Optional reasoning flag embedded into each row.
+        run_iterations_per_image: Number of repeated runs per image/model.
         compact_run_config: If `True`, writes run config once as manifest metadata.
 
     Returns:
         Summary dictionary for logging and UI.
     """
-    if not input_csv.exists() or not input_csv.is_file():
-        raise FileNotFoundError(f"Input CSV not found: {input_csv}")
-    if not images_dir.exists() or not images_dir.is_dir():
-        raise FileNotFoundError(f"Images directory not found: {images_dir}")
+    run_iterations_per_image = _validate_generate_manifest_inputs(
+        input_csv=input_csv,
+        images_dir=images_dir,
+        run_iterations_per_image=run_iterations_per_image,
+    )
+    iterations_range = range(1, run_iterations_per_image + 1)
+    run_models_list = list(run_models or [])
+    run_schema_name_str = str(run_schema_name or "")
+    run_include_reasoning_flag = bool(run_include_reasoning)
+    has_run_config = bool(run_models_list) and bool(run_schema_name_str.strip())
+    inline_run_config = has_run_config and not compact_run_config
 
     df = pd.read_csv(input_csv)
     missing_columns = [column for column in (id_col, label_col, stratify_col) if column not in df.columns]
@@ -248,14 +323,14 @@ def generate_manifest(
     written_by_class: dict[str, int] = defaultdict(int)
 
     with output_path.open("w", encoding="utf-8", newline="\n") as handle:
-        has_run_config = bool(run_models) and bool(str(run_schema_name or "").strip())
         if has_run_config and compact_run_config:
             meta_record = {
                 _MANIFEST_META_KEY: {
                     "version": 1,
-                    "run_models": list(run_models or []),
-                    "run_schema_name": str(run_schema_name or ""),
-                    "run_include_reasoning": bool(run_include_reasoning),
+                    "run_models": run_models_list,
+                    "run_schema_name": run_schema_name_str,
+                    "run_include_reasoning": run_include_reasoning_flag,
+                    "run_iterations_per_image": run_iterations_per_image,
                 }
             }
             handle.write(json.dumps(meta_record, ensure_ascii=False) + "\n")
@@ -273,29 +348,26 @@ def generate_manifest(
                 missing_by_class[str(ground_truth)] += 1
                 continue
 
-            if relative_paths:
-                try:
-                    image_path_value = str(resolved.relative_to(Path.cwd()))
-                except ValueError:
-                    image_path_value = str(resolved)
-            else:
-                image_path_value = str(resolved)
+            image_path_value = _format_output_image_path(
+                resolved=resolved,
+                relative_paths=relative_paths,
+            )
 
-            record: dict[str, Any] = {
-                "image_path": image_path_value,
-                "ground_truth_cls": str(ground_truth),
-                "image_id": image_id,
-            }
-            if run_models:
-                if not compact_run_config:
-                    record["run_models"] = list(run_models)
-            if run_schema_name:
-                if not compact_run_config:
-                    record["run_schema_name"] = str(run_schema_name)
-                    record["run_include_reasoning"] = bool(run_include_reasoning)
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-            written += 1
-            written_by_class[str(ground_truth)] += 1
+            for iteration_index in iterations_range:
+                record = _build_manifest_record(
+                    image_path_value=image_path_value,
+                    ground_truth=ground_truth,
+                    image_id=image_id,
+                    iteration_index=iteration_index,
+                    run_iterations_per_image=run_iterations_per_image,
+                    inline_run_config=inline_run_config,
+                    run_models_list=run_models_list,
+                    run_schema_name_str=run_schema_name_str,
+                    run_include_reasoning_flag=run_include_reasoning_flag,
+                )
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+                written += 1
+                written_by_class[str(ground_truth)] += 1
 
     return {
         "input_rows": len(df),
@@ -305,8 +377,9 @@ def generate_manifest(
         "output_path": str(output_path),
         "written_by_class": dict(sorted(written_by_class.items())),
         "missing_by_class": dict(sorted(missing_by_class.items())),
-        "run_models": list(run_models or []),
-        "run_schema_name": str(run_schema_name or ""),
-        "run_include_reasoning": bool(run_include_reasoning),
+        "run_models": run_models_list,
+        "run_schema_name": run_schema_name_str,
+        "run_include_reasoning": run_include_reasoning_flag,
+        "run_iterations_per_image": run_iterations_per_image,
         "compact_run_config": bool(compact_run_config),
     }

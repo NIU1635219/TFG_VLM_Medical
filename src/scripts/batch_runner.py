@@ -57,12 +57,6 @@ _MANIFEST_BASE_KEYS: set[str] = {
 _MANIFEST_BASE_KEYS.update(_TELEMETRY_RECORD_FIELDS.keys())
 _BATCH_META_KEY = "__batch_meta__"
 _BATCH_SUMMARY_KEY = "__batch_summary__"
-_SKIP_MANIFEST_METADATA_KEYS: set[str] = {
-    "run_models",
-    "run_schema_name",
-    "run_include_reasoning",
-    "__manifest_meta__",
-}
 _MANIFEST_META_KEY = "__manifest_meta__"
 
 
@@ -72,6 +66,88 @@ class BatchInputItem:
 
     image_path: Path
     metadata: dict[str, Any] | None = None
+
+
+def _filter_items_by_pending_entries(
+    *,
+    discovered_items: list[BatchInputItem],
+    pending_entries: list[dict[str, Any]],
+    manifest_path: Path,
+) -> list[BatchInputItem]:
+    """Filtra entradas descubiertas usando clave (ruta, iteración) pendiente."""
+    pending_keys: set[tuple[str, int]] = set()
+    resolved_manifest_path = manifest_path.expanduser().resolve()
+    for pending_entry in pending_entries:
+        if not isinstance(pending_entry, dict):
+            continue
+        resolved_pending_path = _resolve_manifest_image_path(
+            pending_entry.get("image_path"),
+            resolved_manifest_path,
+        )
+        if resolved_pending_path is None:
+            continue
+        pending_keys.add(
+            (
+                _as_posix_key(resolved_pending_path),
+                _safe_positive_int(pending_entry.get("run_iteration_index")),
+            )
+        )
+
+    if not pending_keys:
+        return []
+
+    return [
+        item
+        for item in discovered_items
+        if _manifest_entry_key(image_path=item.image_path, metadata=item.metadata) in pending_keys
+    ]
+
+
+def _filter_items_by_pending_image_paths(
+    *,
+    discovered_items: list[BatchInputItem],
+    pending_image_paths: list[str],
+) -> list[BatchInputItem]:
+    """Filtra entradas descubiertas por path de imagen pendiente."""
+    pending_set = {
+        _as_posix_key(path)
+        for path in pending_image_paths
+        if str(path).strip()
+    }
+    if not pending_set:
+        return []
+
+    return [
+        item
+        for item in discovered_items
+        if _as_posix_key(item.image_path) in pending_set
+    ]
+
+
+def _update_metric_totals(
+    *,
+    totals: dict[str, float],
+    counts: dict[str, int],
+    telemetry_payload: dict[str, Any],
+) -> None:
+    """Acumula métricas numéricas de telemetría para promedios de resumen."""
+    metric_key_mapping = {
+        "ttft_total": "ttft_seconds",
+        "tps_total": "tokens_per_second",
+        "total_duration_total": "total_duration_seconds",
+    }
+    count_key_mapping = {
+        "ttft_total": "ttft_count",
+        "tps_total": "tps_count",
+        "total_duration_total": "total_duration_count",
+    }
+
+    for total_key, telemetry_key in metric_key_mapping.items():
+        metric_value = telemetry_payload.get(telemetry_key)
+        if not isinstance(metric_value, (int, float)):
+            continue
+        totals[total_key] += float(metric_value)
+        counts[count_key_mapping[total_key]] += 1
 
 
 T = TypeVar("T")
@@ -176,6 +252,25 @@ def _resolve_manifest_image_path(raw_value: Any, manifest_path: Path) -> Path | 
             return resolved
 
     return None
+
+
+def _safe_positive_int(value: Any, default: int = 1) -> int:
+    """Convierte valores a entero positivo con fallback seguro."""
+    try:
+        return max(1, int(value or default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_posix_key(path_like: str | Path) -> str:
+    """Normaliza rutas a string POSIX estable para comparaciones."""
+    return str(Path(path_like).as_posix()).strip()
+
+
+def _manifest_entry_key(*, image_path: Path, metadata: dict[str, Any] | None) -> tuple[str, int]:
+    """Construye clave de entrada para diferenciar iteraciones de una misma imagen."""
+    iteration_index = _safe_positive_int((metadata or {}).get("run_iteration_index"))
+    return _as_posix_key(image_path), iteration_index
 
 
 def iter_manifest_items(manifest_path: Path) -> tuple[list[BatchInputItem], int]:
@@ -437,35 +532,26 @@ def _ensure_batch_meta_header(
     _write_jsonl_lines(output_path, lines)
 
 
-def upsert_batch_execution_summary(
+def _normalize_label_for_accuracy(value: Any) -> str:
+    """Normaliza etiquetas de clase para comparar aciertos sin ruido de formato."""
+    if value is None:
+        return ""
+    return str(value).strip().lower()
+
+
+def _aggregate_models_from_jsonl_lines(
     *,
-    output_path: str | Path,
+    lines: list[str],
+    selected_models: set[str],
     schema_name: str,
-    model_ids: list[str] | None = None,
-) -> dict[str, Any] | None:
-    """Escribe/actualiza una línea de resumen agregado del JSONL batch.
-
-    Incluye métricas min/max/media por modelo y global para facilitar auditoría.
-    """
-    out_path = Path(output_path)
-    if not out_path.exists() or not out_path.is_file():
-        return None
-
-    selected_models = {str(item).strip() for item in (model_ids or []) if str(item).strip()}
-    metric_keys = ["duration_seconds", "ttft_seconds", "tokens_per_second", "total_duration_seconds"]
-
-    def _normalize_label(value: Any) -> str:
-        """Normaliza etiquetas de clase para comparar aciertos sin ruido de formato."""
-        if value is None:
-            return ""
-        return str(value).strip().lower()
-
+    metric_keys: list[str],
+) -> tuple[list[str], dict[str, dict[str, Any]], dict[str, dict[str, float | int | None]]]:
+    """Agrega métricas y exactitud por modelo desde líneas JSONL."""
+    kept_lines: list[str] = []
     model_acc: dict[str, dict[str, Any]] = {}
     global_metric_acc: dict[str, dict[str, float | int | None]] = {
         key: _empty_metric_agg() for key in metric_keys
     }
-    lines = _read_jsonl_lines(out_path)
-    kept_lines: list[str] = []
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -523,17 +609,23 @@ def upsert_batch_execution_summary(
         payload_obj = payload.get("payload")
         predicted_label = ""
         if isinstance(payload_obj, dict):
-            predicted_label = _normalize_label(payload_obj.get("predicted_class"))
-        ground_truth_label = _normalize_label(payload.get("ground_truth_cls"))
+            predicted_label = _normalize_label_for_accuracy(payload_obj.get("predicted_class"))
+        ground_truth_label = _normalize_label_for_accuracy(payload.get("ground_truth_cls"))
         if predicted_label and ground_truth_label:
             model_entry["eval_total"] = int(model_entry["eval_total"]) + 1
             if predicted_label == ground_truth_label:
                 model_entry["eval_correct"] = int(model_entry["eval_correct"]) + 1
 
-    if not model_acc:
-        return None
+    return kept_lines, model_acc, global_metric_acc
 
-    # Repara/actualiza cabecera __batch_meta__ en formato canónico.
+
+def _repair_summary_meta_line(
+    *,
+    kept_lines: list[str],
+    model_acc: dict[str, dict[str, Any]],
+    schema_name: str,
+) -> None:
+    """Repara/actualiza cabecera __batch_meta__ en formato canónico."""
     for index, raw_line in enumerate(kept_lines):
         payload = _parse_jsonl_dict(raw_line.strip())
         if payload is None:
@@ -585,6 +677,15 @@ def upsert_batch_execution_summary(
         kept_lines[index] = json.dumps({_BATCH_META_KEY: repaired_meta}, ensure_ascii=False)
         break
 
+
+def _materialize_summary_payload(
+    *,
+    model_acc: dict[str, dict[str, Any]],
+    global_metric_acc: dict[str, dict[str, float | int | None]],
+    metric_keys: list[str],
+    schema_name: str,
+) -> dict[str, Any]:
+    """Construye el payload final de __batch_summary__."""
     models_summary: dict[str, Any] = {}
     total_processed = 0
     total_ok = 0
@@ -625,7 +726,7 @@ def upsert_batch_execution_summary(
     if total_eval > 0:
         global_accuracy = total_correct / total_eval
 
-    summary_payload: dict[str, Any] = {
+    return {
         "version": 1,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "schema_name": schema_name,
@@ -647,6 +748,47 @@ def upsert_batch_execution_summary(
         },
         "models": models_summary,
     }
+
+
+def upsert_batch_execution_summary(
+    *,
+    output_path: str | Path,
+    schema_name: str,
+    model_ids: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Escribe/actualiza una línea de resumen agregado del JSONL batch.
+
+    Incluye métricas min/max/media por modelo y global para facilitar auditoría.
+    """
+    out_path = Path(output_path)
+    if not out_path.exists() or not out_path.is_file():
+        return None
+
+    selected_models = {str(item).strip() for item in (model_ids or []) if str(item).strip()}
+    metric_keys = ["duration_seconds", "ttft_seconds", "tokens_per_second", "total_duration_seconds"]
+
+    lines = _read_jsonl_lines(out_path)
+    kept_lines, model_acc, global_metric_acc = _aggregate_models_from_jsonl_lines(
+        lines=lines,
+        selected_models=selected_models,
+        schema_name=schema_name,
+        metric_keys=metric_keys,
+    )
+
+    if not model_acc:
+        return None
+
+    _repair_summary_meta_line(
+        kept_lines=kept_lines,
+        model_acc=model_acc,
+        schema_name=schema_name,
+    )
+    summary_payload = _materialize_summary_payload(
+        model_acc=model_acc,
+        global_metric_acc=global_metric_acc,
+        metric_keys=metric_keys,
+        schema_name=schema_name,
+    )
 
     kept_lines.append(json.dumps({_BATCH_SUMMARY_KEY: summary_payload}, ensure_ascii=False))
     _write_jsonl_lines(out_path, kept_lines)
@@ -777,6 +919,41 @@ def _build_batch_summary(
     }
 
 
+def _resolve_batch_input_items(
+    *,
+    image_dir: str | Path | None,
+    manifest: str | Path | None,
+    pending_image_paths: list[str] | None,
+    pending_entries: list[dict[str, Any]] | None,
+) -> tuple[str, list[BatchInputItem], int, Path | None]:
+    """Resuelve origen de entrada y aplica filtros de pendientes cuando corresponde."""
+    discarded_manifest_rows = 0
+    manifest_path_obj: Path | None = None
+
+    if manifest is not None:
+        input_source = "manifest"
+        manifest_path_obj = Path(manifest)
+        discovered_items, discarded_manifest_rows = iter_manifest_items(manifest_path_obj)
+        if pending_entries:
+            discovered_items = _filter_items_by_pending_entries(
+                discovered_items=discovered_items,
+                pending_entries=pending_entries,
+                manifest_path=manifest_path_obj,
+            )
+        elif pending_image_paths:
+            discovered_items = _filter_items_by_pending_image_paths(
+                discovered_items=discovered_items,
+                pending_image_paths=pending_image_paths,
+            )
+        return input_source, discovered_items, discarded_manifest_rows, manifest_path_obj
+
+    if image_dir is None:
+        raise ValueError("image_dir no puede ser None cuando no se usa manifest")
+    input_source = "image_dir"
+    discovered_items = [BatchInputItem(image_path=path) for path in iter_image_paths(Path(image_dir))]
+    return input_source, discovered_items, discarded_manifest_rows, manifest_path_obj
+
+
 def run_batch_job(
     *,
     model_id: str,
@@ -794,6 +971,7 @@ def run_batch_job(
     api_token: str | None = None,
     verbose: bool = False,
     pending_image_paths: list[str] | None = None,
+    pending_entries: list[dict[str, Any]] | None = None,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Ejecuta el lote completo y devuelve un resumen final."""
@@ -802,28 +980,12 @@ def run_batch_job(
 
     public_schema_name, schema_cls = resolve_schema(schema_name, include_reasoning)
     selected_prompt = prompt.strip() if prompt and prompt.strip() else build_prompt_for_schema(public_schema_name, schema_cls)
-    discarded_manifest_rows = 0
-    manifest_path_obj: Path | None = None
-    if manifest is not None:
-        input_source = "manifest"
-        manifest_path_obj = Path(manifest)
-        discovered_items, discarded_manifest_rows = iter_manifest_items(manifest_path_obj)
-        if pending_image_paths:
-            pending_set = {
-                str(Path(path).as_posix()).strip()
-                for path in pending_image_paths
-                if str(path).strip()
-            }
-            discovered_items = [
-                item
-                for item in discovered_items
-                if str(Path(item.image_path).as_posix()).strip() in pending_set
-            ]
-    else:
-        if image_dir is None:
-            raise ValueError("image_dir no puede ser None cuando no se usa manifest")
-        input_source = "image_dir"
-        discovered_items = [BatchInputItem(image_path=path) for path in iter_image_paths(Path(image_dir))]
+    input_source, discovered_items, discarded_manifest_rows, manifest_path_obj = _resolve_batch_input_items(
+        image_dir=image_dir,
+        manifest=manifest,
+        pending_image_paths=pending_image_paths,
+        pending_entries=pending_entries,
+    )
 
     images = select_images(discovered_items, max_images=max_images, shuffle=shuffle, seed=seed)
 
@@ -850,12 +1012,16 @@ def run_batch_job(
     invalid = 0
     fail = 0
     processed = 0
-    ttft_total = 0.0
-    ttft_count = 0
-    tps_total = 0.0
-    tps_count = 0
-    total_duration_total = 0.0
-    total_duration_count = 0
+    metric_totals = {
+        "ttft_total": 0.0,
+        "tps_total": 0.0,
+        "total_duration_total": 0.0,
+    }
+    metric_counts = {
+        "ttft_count": 0,
+        "tps_count": 0,
+        "total_duration_count": 0,
+    }
 
     def build_summary() -> dict[str, Any]:
         return _build_batch_summary(
@@ -869,12 +1035,12 @@ def run_batch_job(
             fail=fail,
             total_available=len(discovered_items),
             sample_size=len(images),
-            ttft_total=ttft_total,
-            ttft_count=ttft_count,
-            tps_total=tps_total,
-            tps_count=tps_count,
-            total_duration_total=total_duration_total,
-            total_duration_count=total_duration_count,
+            ttft_total=metric_totals["ttft_total"],
+            ttft_count=metric_counts["ttft_count"],
+            tps_total=metric_totals["tps_total"],
+            tps_count=metric_counts["tps_count"],
+            total_duration_total=metric_totals["total_duration_total"],
+            total_duration_count=metric_counts["total_duration_count"],
             input_source=input_source,
             discarded_manifest_rows=discarded_manifest_rows,
         )
@@ -886,6 +1052,8 @@ def run_batch_job(
         image_path: str | None = None,
         status: str | None = None,
         record: dict[str, Any] | None = None,
+        run_iteration_index: int | None = None,
+        run_iteration_total: int | None = None,
     ) -> None:
         if on_progress is None:
             return
@@ -897,6 +1065,8 @@ def run_batch_job(
                 "image_path": image_path,
                 "status": status,
                 "record": dict(record) if record is not None else None,
+                "run_iteration_index": run_iteration_index,
+                "run_iteration_total": run_iteration_total,
                 "summary": build_summary(),
             }
         )
@@ -908,7 +1078,15 @@ def run_batch_job(
         progress_iter = tqdm(images, desc="Procesando imágenes", unit="img") if on_progress is None else images
         for index, item in enumerate(progress_iter, start=1):
             image_path = item.image_path
-            emit_progress("image_start", index=index, image_path=str(image_path), status="running")
+            metadata_dict = item.metadata if isinstance(item.metadata, dict) else {}
+            emit_progress(
+                "image_start",
+                index=index,
+                image_path=str(image_path),
+                status="running",
+                run_iteration_index=_safe_positive_int(metadata_dict.get("run_iteration_index")),
+                run_iteration_total=_safe_positive_int(metadata_dict.get("run_iteration_total")),
+            )
             started_at = time.perf_counter()
             try:
                 result = loader.inference(
@@ -936,18 +1114,11 @@ def run_batch_job(
                     metadata=item.metadata,
                 )
                 ok += 1
-                ttft_value = telemetry_payload.get("ttft_seconds")
-                if isinstance(ttft_value, (int, float)):
-                    ttft_total += float(ttft_value)
-                    ttft_count += 1
-                tps_value = telemetry_payload.get("tokens_per_second")
-                if isinstance(tps_value, (int, float)):
-                    tps_total += float(tps_value)
-                    tps_count += 1
-                total_duration_value = telemetry_payload.get("total_duration_seconds")
-                if isinstance(total_duration_value, (int, float)):
-                    total_duration_total += float(total_duration_value)
-                    total_duration_count += 1
+                _update_metric_totals(
+                    totals=metric_totals,
+                    counts=metric_counts,
+                    telemetry_payload=telemetry_payload,
+                )
             except Exception as error:
                 duration_seconds = time.perf_counter() - started_at
                 status = classify_error(error)
@@ -973,6 +1144,8 @@ def run_batch_job(
                 image_path=str(image_path),
                 status=str(record.get("status") or "error"),
                 record=record,
+                run_iteration_index=_safe_positive_int(record.get("run_iteration_index")),
+                run_iteration_total=_safe_positive_int(record.get("run_iteration_total")),
             )
     finally:
         loader.unload_model()

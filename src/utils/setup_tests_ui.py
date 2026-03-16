@@ -47,6 +47,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
         make_header,
         select_model,
         select_response_inspector_mode,
+        select_schema_base,
         select_schema_variant,
     )
     from .tests_ui.schema import run_schema_tester_wrapper as run_schema_tester_screen
@@ -67,6 +68,12 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
         subtitle_prefix=subtitle_prefix,
         make_header_fn=make_header_fn,
     )
+    select_schema_base_fn = lambda menu_prefix, subtitle_prefix: select_schema_base(
+        kit,
+        menu_prefix=menu_prefix,
+        subtitle_prefix=subtitle_prefix,
+        make_header_fn=make_header_fn,
+    )
     select_response_inspector_mode_fn = lambda: select_response_inspector_mode(
         kit,
         make_header_fn=make_header_fn,
@@ -78,7 +85,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             kit,
             app,
             make_header=make_header_fn,
-            select_schema_variant=select_schema_variant_fn,
+            select_schema_base=select_schema_base_fn,
         )
 
     # ------------------------------------------------------------------

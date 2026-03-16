@@ -14,6 +14,8 @@ from typing import Any
 
 import pandas as pd
 
+from .shared import normalize_model_variants
+
 _IMG_EXTENSIONS: tuple[str, ...] = (".tif", ".tiff", ".jpg", ".jpeg", ".png", ".bmp", ".webp")
 _MANIFEST_META_KEY = "__manifest_meta__"
 
@@ -63,12 +65,8 @@ def _build_manifest_record(
     image_id: str,
     iteration_index: int,
     run_iterations_per_image: int,
-    inline_run_config: bool,
-    run_models_list: list[str],
-    run_schema_name_str: str,
-    run_include_reasoning_flag: bool,
 ) -> dict[str, Any]:
-    """Compone una fila JSONL del manifiesto con y sin config inline."""
+    """Compone una fila JSONL del manifiesto."""
     record: dict[str, Any] = {
         "image_path": image_path_value,
         "ground_truth_cls": str(ground_truth),
@@ -76,11 +74,6 @@ def _build_manifest_record(
         "run_iteration_index": iteration_index,
         "run_iteration_total": run_iterations_per_image,
     }
-    if inline_run_config:
-        record["run_models"] = run_models_list
-        record["run_schema_name"] = run_schema_name_str
-        record["run_include_reasoning"] = run_include_reasoning_flag
-        record["run_iterations_per_image"] = run_iterations_per_image
     return record
 
 
@@ -269,11 +262,10 @@ def generate_manifest(
     id_col: str,
     label_col: str,
     relative_paths: bool,
-    run_models: list[str] | None = None,
-    run_schema_name: str | None = None,
-    run_include_reasoning: bool = False,
+    run_schema_name: str,
+    run_model_variants: list[dict[str, Any]],
     run_iterations_per_image: int = 1,
-    compact_run_config: bool = True,
+    run_derived_from: str | None = None,
 ) -> dict[str, Any]:
     """Create experiment JSONL manifest and return summary.
 
@@ -287,11 +279,10 @@ def generate_manifest(
         id_col: Image id column name.
         label_col: Label column name.
         relative_paths: Whether to store image paths relative to project root.
-        run_models: Optional execution model queue embedded into each row.
-        run_schema_name: Optional schema name embedded into each row.
-        run_include_reasoning: Optional reasoning flag embedded into each row.
+        run_schema_name: Schema base name stored in manifest metadata.
+        run_model_variants: Per-model reasoning variants stored in metadata.
         run_iterations_per_image: Number of repeated runs per image/model.
-        compact_run_config: If `True`, writes run config once as manifest metadata.
+        run_derived_from: Optional source manifest path when deriving.
 
     Returns:
         Summary dictionary for logging and UI.
@@ -302,11 +293,14 @@ def generate_manifest(
         run_iterations_per_image=run_iterations_per_image,
     )
     iterations_range = range(1, run_iterations_per_image + 1)
-    run_models_list = list(run_models or [])
     run_schema_name_str = str(run_schema_name or "")
-    run_include_reasoning_flag = bool(run_include_reasoning)
-    has_run_config = bool(run_models_list) and bool(run_schema_name_str.strip())
-    inline_run_config = has_run_config and not compact_run_config
+    run_seed_value = int(seed)
+    run_derived_from_value = str(run_derived_from or "").strip()
+    run_model_variants_list = normalize_model_variants(run_model_variants)
+    if not run_schema_name_str.strip():
+        raise ValueError("run_schema_name is required")
+    if not run_model_variants_list:
+        raise ValueError("run_model_variants must include at least one variant")
 
     df = pd.read_csv(input_csv)
     missing_columns = [column for column in (id_col, label_col, stratify_col) if column not in df.columns]
@@ -323,17 +317,17 @@ def generate_manifest(
     written_by_class: dict[str, int] = defaultdict(int)
 
     with output_path.open("w", encoding="utf-8", newline="\n") as handle:
-        if has_run_config and compact_run_config:
-            meta_record = {
-                _MANIFEST_META_KEY: {
-                    "version": 1,
-                    "run_models": run_models_list,
-                    "run_schema_name": run_schema_name_str,
-                    "run_include_reasoning": run_include_reasoning_flag,
-                    "run_iterations_per_image": run_iterations_per_image,
-                }
+        meta_record = {
+            _MANIFEST_META_KEY: {
+                "version": 1,
+                "run_schema_name": run_schema_name_str,
+                "run_model_variants": run_model_variants_list,
+                "run_iterations_per_image": run_iterations_per_image,
+                "run_seed": run_seed_value,
+                "run_derived_from": run_derived_from_value,
             }
-            handle.write(json.dumps(meta_record, ensure_ascii=False) + "\n")
+        }
+        handle.write(json.dumps(meta_record, ensure_ascii=False) + "\n")
 
         for row_dict in sampled.to_dict(orient="records"):
             image_id = _normalize_image_id(row_dict.get(id_col))
@@ -360,10 +354,6 @@ def generate_manifest(
                     image_id=image_id,
                     iteration_index=iteration_index,
                     run_iterations_per_image=run_iterations_per_image,
-                    inline_run_config=inline_run_config,
-                    run_models_list=run_models_list,
-                    run_schema_name_str=run_schema_name_str,
-                    run_include_reasoning_flag=run_include_reasoning_flag,
                 )
                 handle.write(json.dumps(record, ensure_ascii=False) + "\n")
                 written += 1
@@ -377,9 +367,9 @@ def generate_manifest(
         "output_path": str(output_path),
         "written_by_class": dict(sorted(written_by_class.items())),
         "missing_by_class": dict(sorted(missing_by_class.items())),
-        "run_models": run_models_list,
         "run_schema_name": run_schema_name_str,
-        "run_include_reasoning": run_include_reasoning_flag,
+        "run_model_variants": run_model_variants_list,
         "run_iterations_per_image": run_iterations_per_image,
-        "compact_run_config": bool(compact_run_config),
+        "run_seed": run_seed_value,
+        "run_derived_from": run_derived_from_value,
     }

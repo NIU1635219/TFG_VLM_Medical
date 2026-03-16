@@ -32,9 +32,9 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
     - resumen `Total estimado / solicitado`,
     - repintado completo opcional para evitar duplicación visual/ghosting.
 - Manifests de experimentos con formato compacto:
-    - configuración global (`run_models`, `run_schema_name`, `run_include_reasoning`) en metadatos de cabecera,
+    - configuración global en cabecera (`run_schema_name`, `run_model_variants`, `run_iterations_per_image`, `run_seed`, `run_derived_from`),
     - filas de imágenes más limpias y sin repetir configuración por registro,
-    - compatibilidad mantenida con manifests legacy que aún embeben esos campos en cada línea.
+    - extracción estricta de configuración desde metadata de cabecera para evitar ambigüedades.
 - Refactor modular de menús de modelos y tests:
     - extracción de pantallas a `src/utils/models_ui/` y `src/utils/tests_ui/`,
     - menor acoplamiento y mayor reutilización,
@@ -46,9 +46,19 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
     - min/max/media de métricas de latencia por modelo y global,
     - aciertos y accuracy por modelo y global (`correct/evaluated`).
 - Reejecución de batch mejorada:
-    - una única decisión al inicio (sí/no/selección múltiple de modelos),
-    - selección múltiple real con `SPACE`,
-    - barra de cola oculta cuando solo se ejecuta un modelo.
+    - una única decisión al inicio (sí/no/selección múltiple de variantes),
+    - selección múltiple real con `SPACE` por variante (`sin razonamiento` / `con razonamiento`),
+    - barra de cola oculta cuando solo se ejecuta una variante.
+- Gestión de manifiestos en Batch Runner:
+    - opción para eliminar manifiestos existentes desde el selector,
+    - confirmación extra que muestra explícitamente los JSONL compartidos a borrar,
+    - limpieza conjunta del manifest y sus `batch_*.jsonl` vinculados.
+- Notebook de análisis `02_zeroshot_analysis.ipynb` actualizado:
+    - lectura robusta de `batch_results` en JSONL con soporte de `__batch_meta__` y `__batch_summary__`,
+    - export de métricas/tablas en JSONL (sin CSV),
+    - bundle ZIP con estructura controlada: `images/` plana + dos JSONL en raíz (batch + manifest).
+- Catálogo de esquemas simplificado:
+    - retirada de `PolypClassificationDetailed` y su variante `WithReasoning`.
 
 ## Novedades recientes (marzo 2026)
 
@@ -60,7 +70,10 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Validación continua con `pytest` en bloques focalizados y suite completa durante la refactorización.
 - Batch Runner: metadata de salida unificado en `__batch_meta__` v2 y eliminación de campos legacy.
 - Batch Runner: generación automática de `__batch_summary__` con métricas globales y por modelo (incluye accuracy).
-- Batch Runner UI: estrategia de reejecución por dataset con selector múltiple de modelos.
+- Batch Runner UI: estrategia de reejecución por dataset con selector múltiple de variantes por modelo.
+- Manifests: metadata compacta con `run_model_variants` y `run_seed`, y soporte de derivación (`run_derived_from`).
+- Batch Runner: registros por imagen incluyen `include_reasoning` y agregación de summary por variante.
+- Batch Runner: borrado de manifiesto desde TUI con limpieza de outputs JSONL vinculados.
 
 ## Stack técnico
 
@@ -93,7 +106,8 @@ Dependencias declaradas en `pyproject.toml`.
 │   │   └── m_test/
 │   └── smoke_test/                     # Imágenes pequeñas de validación end-to-end.
 ├── notebooks/
-│   └── 01_eda_polypsegm.ipynb          # EDA, extracción y comparativas visuales del dataset.
+│   ├── 01_eda_polypsegm.ipynb          # EDA, extracción y comparativas visuales del dataset.
+│   └── 02_zeroshot_analysis.ipynb      # Análisis de batch_results zero-shot, métricas y export bundle JSONL/ZIP.
 ├── src/
 │   ├── inference/
 │   │   ├── schemas.py                  # Esquemas Pydantic base y variantes WithReasoning.
@@ -101,7 +115,7 @@ Dependencias declaradas en `pyproject.toml`.
 │   ├── preprocessing/
 │   │   └── preprocess.py               # CLI de recorte de bordes negros y copia de CSV.
 │   ├── scripts/
-│   │   ├── batch_runner.py             # Orquestador masivo con exportado incremental CSV/JSONL.
+│   │   ├── batch_runner.py             # Orquestador masivo con exportado incremental en JSONL compartido.
 │   │   ├── test_inference.py           # Smoke test CLI con descarga automática de imágenes de muestra.
 │   │   ├── test_response_inspector.py  # Inspector CLI de respuestas reales del SDK LM Studio.
 │   │   ├── test_schema.py              # Lógica batch reutilizable para el Schema Tester interactivo.
@@ -125,7 +139,7 @@ Dependencias declaradas en `pyproject.toml`.
 │       │   └── lms_models.py           # Wrappers de LM Studio para listar, descargar y resolver opciones.
 │       └── tests_ui/                   # Pantallas y helpers extraídos de Setup Tests UI.
 │           ├── batch.py                # Flujo UI del Batch Runner y selección de parámetros de ejecución.
-│           ├── manifest.py             # Gestión de manifests y selección reactiva de tamaño de subgrupo.
+│           ├── manifest.py             # Gestión completa de manifests (crear/derivar/usar/eliminar) y limpieza de outputs.
 │           ├── manifest_generation.py  # Generación estratificada de manifests para muestreo reproducible.
 │           ├── response_inspector.py   # Pantalla UI para inspección de respuestas reales del SDK.
 │           ├── run_pytest.py           # Ejecución de pytest desde TUI con resumen y navegación.
@@ -159,12 +173,16 @@ Dependencias declaradas en `pyproject.toml`.
 ## Notebooks
 
 - `notebooks/01_eda_polypsegm.ipynb`: libreta principal de EDA y preparación de datos.
+- `notebooks/02_zeroshot_analysis.ipynb`: análisis de resultados zero-shot desde `batch_results` JSONL.
 
 Incluye:
 
 - Extracción automática del dataset y comprimidos anidados (ZIP/RAR).
 - Verificación de formato, resoluciones y revisión básica de metadatos EXIF.
 - Ejecución del preprocesado completo y comparativa visual antes/después.
+- Cálculo de métricas y reportes por `model_id` y `variant`.
+- Exportación en JSONL de métricas, tablas y reportes.
+- Empaquetado ZIP con imágenes planas (`images/`) y JSONL en raíz.
 
 Para abrirla:
 
@@ -502,10 +520,30 @@ resultado en caliente para no perder trabajo si se interrumpe el proceso.
 - Carga el modelo una vez y lo descarga en bloque `finally`.
 - Exporta incrementalmente en `JSONL`.
 - Incluye telemetría por imagen junto al payload estructurado.
+- Marca explícitamente `include_reasoning` por registro para diferenciar variantes.
 - Añade cabecera `__batch_meta__` canónica para trazabilidad del archivo compartido.
 - Añade línea final `__batch_summary__` con:
-    - min/max/media de métricas por modelo y global,
-    - aciertos y accuracy por modelo y global cuando existe `ground_truth_cls`.
+    - min/max/media de métricas por variante y global,
+    - aciertos y accuracy por variante y global cuando existe `ground_truth_cls`.
+
+### Ejecución basada en manifest (recomendado)
+
+El flujo principal del manager usa manifests autosuficientes (`data/experiments/*.jsonl`) con metadata de ejecución en cabecera.
+
+Campos de cabecera soportados:
+
+- `run_schema_name`
+- `run_model_variants` (lista de `{model_id, include_reasoning}`)
+- `run_iterations_per_image`
+- `run_seed`
+- `run_derived_from` (opcional)
+
+La TUI permite:
+
+- usar manifiestos existentes,
+- generar nuevos manifests,
+- derivar manifests precargando valores del origen,
+- eliminar manifests y borrar también sus `batch_*.jsonl` asociados (con confirmación explícita).
 
 ### Ejecutar
 
@@ -518,6 +556,8 @@ Ejemplo con reasoning y JSONL:
 ```bash
 uv run python src/scripts/batch_runner.py --model opengvlab_internvl3_5-14b --image-dir data --schema PolypClassification --with-reasoning --shuffle --max-images 25
 ```
+
+Nota: en el flujo TUI no se mezclan resultados de variantes; cada variante se agrega y resume de forma independiente dentro del JSONL compartido.
 
 ## Testing
 
@@ -533,7 +573,8 @@ Tests más relevantes:
 - `tests/test_inference_script.py`: smoke test y validación por etiquetas.
 - `tests/test_telemetry.py`: extracción de TTFT/TPS y resumen de telemetría.
 - `tests/test_batch_runner.py`: exportado incremental y persistencia de resultados por imagen.
-- `tests/test_schemas.py`: validación de esquemas Pydantic (`VLMStructuredResponse`).
+- `tests/test_schemas.py`: validación de esquemas Pydantic base y variantes `WithReasoning`.
+- `tests/test_manifest_iterations.py`: manifests compactos, snapshots por variante y limpieza de JSONL vinculados.
 - `tests/test_menu_kit.py`: `UIKit.table()`, `TableColumn`/`TableRow`, `build_table_items`, `AppContext`.
 - `tests/test_setup_menu_engine.py`: `MenuItem`, `MenuSeparator`, `interactive_menu`.
 - `tests/test_setup_diagnostics.py`: diagnóstico de entorno y smart-fix.

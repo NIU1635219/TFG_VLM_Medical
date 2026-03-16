@@ -1,21 +1,26 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, cast
 
 from ..setup_ui_io import ask_choice
 from .shared import (
     as_yes,
+    build_live_status_line,
     colorize_model,
     compact_model_label,
     is_model_snapshot_complete,
+    normalize_model_variants,
     normalize_state_value,
     rel_path,
     snapshot_status_text,
     snapshot_summary_line,
     truncate_middle,
+    variant_label,
 )
 from .test_dashboards_ui import (
     _append_recent_record,
+    _build_partial_metrics_line,
     _build_progress_bar,
     _coerce_int,
     _format_metric_value,
@@ -24,6 +29,7 @@ from .test_dashboards_ui import (
     _rel_probe_path,
     _render_final_sections_screen,
     _render_live_dashboard,
+    _should_show_progress_bar,
     _standard_final_intro,
 )
 
@@ -31,18 +37,80 @@ if TYPE_CHECKING:
     from ..menu_kit import AppContext, UIKit
 
 
+@dataclass(frozen=True)
+class _BatchQueueResultContext:
+    """Resultado de ejecución por variante para resumen final."""
+
+    model_label: str
+    model_id: str
+    include_reasoning: bool
+    initial_snapshot: dict[str, Any]
+    final_snapshot: dict[str, Any]
+    output_path: str
+
+
+@dataclass(frozen=True)
+class _BatchFinalRenderContext:
+    """Contexto compacto para render de pantalla final de batch."""
+
+    selected_manifest: str
+    summary_schema_base_name: str
+    schema_exec_name: str
+    selected_model_ids: list[str]
+    queue_results: list[_BatchQueueResultContext]
+
+
+@dataclass(frozen=True)
+class _BatchModelSelectionContext:
+    """Contexto para resolver qué variantes ejecutar."""
+
+    schema_exec_name: str
+    queued_models: list[str]
+    completed_models: list[str]
+    snapshot_for: Callable[[str], dict[str, Any]]
+    default_models: set[str]
+    display_label_for: Callable[[str], str]
+
+
+@dataclass(frozen=True)
+class _BatchProgressBarsContext:
+    """Contexto para construir líneas de barras de progreso extra."""
+
+    show_model_queue_bar: bool
+    model_queue_current: int
+    models_target: int
+    compact_model: str
+    model_completed_total: int
+    current_model_target: int
+    iteration_progress: int
+    iterations_value: int
+
+
+@dataclass(frozen=True)
+class _BatchExecutionCatalog:
+    """Índices por execution_id para evitar pasar múltiples dicts sueltos."""
+
+    queued_models: list[str]
+    label_by_id: dict[str, str]
+    schema_by_id: dict[str, str]
+    model_id_by_id: dict[str, str]
+    include_reasoning_by_id: dict[str, bool]
+
+
 def _select_models_to_execute(
     *,
     kit: "UIKit",
     app: "AppContext",
-    schema_exec_name: str,
-    queued_models: list[str],
-    completed_models: list[str],
-    snapshot_for: Callable[[str], dict[str, Any]],
-    default_models: set[str],
+    context: _BatchModelSelectionContext,
 ) -> set[str]:
     """Resuelve la lista final de modelos a ejecutar incluyendo reejecuciones."""
-    models_to_execute = set(default_models)
+    schema_exec_name = context.schema_exec_name
+    queued_models = context.queued_models
+    completed_models = context.completed_models
+    snapshot_for = context.snapshot_for
+    display_label_for = context.display_label_for
+
+    models_to_execute = set(context.default_models)
     if not completed_models:
         return models_to_execute
 
@@ -61,7 +129,7 @@ def _select_models_to_execute(
             [
                 "  - " + snapshot_summary_line(
                     kit.style,
-                    model,
+                    display_label_for(model),
                     snapshot_for(model),
                 )
                 for model in queued_models
@@ -97,7 +165,7 @@ def _select_models_to_execute(
 
         model_items = [
             kit.MenuItem(
-                model_tag,
+                display_label_for(model_tag),
                 description=(
                     "Estado actual: COMPLETO (se limpiará y reejecutará)."
                     if model_tag in completed_models
@@ -106,8 +174,10 @@ def _select_models_to_execute(
             )
             for model_tag in queued_models
         ]
+        for item, model_tag in zip(model_items, queued_models):
+            setattr(item, "_execution_id", model_tag)
         for model_item in model_items:
-            model_label = str(model_item.label).strip()
+            model_label = str(getattr(model_item, "_execution_id", "") or "").strip()
             model_snapshot = snapshot_for(model_label)
 
             def _dynamic_model_label(
@@ -130,9 +200,9 @@ def _select_models_to_execute(
             if not isinstance(selected_models, list):
                 selected_models = [selected_models]
             models_to_execute = {
-                str(item.label).strip()
+                str(getattr(item, "_execution_id", "") or "").strip()
                 for item in selected_models
-                if str(item.label).strip()
+                if str(getattr(item, "_execution_id", "") or "").strip()
             }
         else:
             models_to_execute = set()
@@ -162,8 +232,8 @@ def _format_accuracy_text(accuracy_payload: dict[str, Any] | None) -> str:
 
 
 def _collect_queue_rows(
-    queue_results: list[tuple[str, dict[str, Any], dict[str, Any], str]],
-) -> tuple[list[tuple[str, dict[str, Any], str]], int, int, int, int, int, int, list[str]]:
+    queue_results: list[_BatchQueueResultContext],
+) -> tuple[list[tuple[str, str, bool, dict[str, Any], str]], int, int, int, int, int, int, list[str]]:
     """Normaliza filas por modelo y acumula totales globales de la cola."""
     total_ok = 0
     total_items = 0
@@ -171,10 +241,15 @@ def _collect_queue_rows(
     complete_models = 0
     partial_models = 0
     failed_models = 0
-    queue_rows: list[tuple[str, dict[str, Any], str]] = []
-    for model_name, _initial_snapshot, final_snapshot, output_path in queue_results:
+    queue_rows: list[tuple[str, str, bool, dict[str, Any], str]] = []
+    for item in queue_results:
+        model_name = item.model_label
+        model_id = item.model_id
+        include_reasoning = item.include_reasoning
+        final_snapshot = item.final_snapshot
+        output_path = item.output_path
         resolved_output = str(final_snapshot.get("output_path") or output_path or "")
-        queue_rows.append((model_name, final_snapshot, resolved_output))
+        queue_rows.append((model_name, model_id, include_reasoning, final_snapshot, resolved_output))
         total_ok += int(final_snapshot.get("ok", 0) or 0)
         total_items += int(final_snapshot.get("total", 0) or 0)
         pending_value = int(final_snapshot.get("pending", 0) or 0)
@@ -186,7 +261,10 @@ def _collect_queue_rows(
             partial_models += 1
         else:
             failed_models += 1
-    output_paths = [resolved_output for _model_name, _final_snapshot, resolved_output in queue_rows]
+    output_paths = [
+        resolved_output
+        for _model_name, _model_id, _include_reasoning, _final_snapshot, resolved_output in queue_rows
+    ]
     return (
         queue_rows,
         total_ok,
@@ -197,27 +275,6 @@ def _collect_queue_rows(
         failed_models,
         output_paths,
     )
-
-
-def _build_status_line(
-    *,
-    event: str,
-    current_index: int,
-    total: int,
-    image_path: str,
-    status: str,
-    completed: int,
-) -> str:
-    """Construye la línea de estado del dashboard en vivo."""
-    if event == "image_start":
-        return f"Estado actual: procesando imagen {current_index}/{total} · {image_path}"
-    if event == "image_done" and status == "ok":
-        return f"Estado actual: exportada imagen {current_index}/{total} · {image_path}"
-    if event == "image_done" and status == "invalid":
-        return f"Estado actual: respuesta inválida en {current_index}/{total} · {image_path}"
-    if event == "complete":
-        return f"Estado actual: finalizado · {completed}/{total} imágenes exportadas"
-    return f"Estado actual: preparando ejecución · muestra {total}"
 
 
 def _resolve_iteration_progress(
@@ -244,43 +301,49 @@ def _resolve_iteration_progress(
     return iteration_progress, iterations_value
 
 
-def _build_metrics_line(summary_progress: dict[str, object]) -> str:
-    """Formatea línea compacta de métricas promedio parciales."""
-    return (
-        "Promedios parciales: "
-        f"TTFT={_format_metric_value(cast(dict[str, object], summary_progress.get('ttft') or {}).get('avg'), suffix=' s')} | "
-        f"TPS={_format_metric_value(cast(dict[str, object], summary_progress.get('tps') or {}).get('avg'))} | "
-        f"latencia={_format_metric_value(cast(dict[str, object], summary_progress.get('total_duration') or {}).get('avg'), suffix=' s')}"
-    )
-
-
 def _build_extra_progress_lines(
     *,
     kit: "UIKit",
-    show_model_queue_bar: bool,
-    model_queue_current: int,
-    models_target: int,
-    compact_model: str,
-    model_completed_total: int,
-    current_model_target: int,
-    iteration_progress: int,
-    iterations_value: int,
+    context: _BatchProgressBarsContext,
 ) -> list[str]:
     """Compone líneas extra de barras de progreso del dashboard vivo."""
-    model_progress_line = (
-        f"Cola de modelos: {_build_progress_bar(kit, model_queue_current, models_target)}"
-    )
-    current_images_line = (
-        f"Modelo actual ({compact_model}): {_build_progress_bar(kit, model_completed_total, current_model_target)}"
-    )
-    iterations_line = (
-        f"Iteraciones de imagen actual ({iterations_value}x): "
-        f"{_build_progress_bar(kit, iteration_progress, iterations_value)}"
-    )
+    show_model_queue_bar = context.show_model_queue_bar
+    model_queue_current = context.model_queue_current
+    models_target = context.models_target
+    compact_model = context.compact_model
+    model_completed_total = context.model_completed_total
+    current_model_target = context.current_model_target
+    iteration_progress = context.iteration_progress
+    iterations_value = context.iterations_value
 
-    if show_model_queue_bar:
-        return [model_progress_line, current_images_line, iterations_line]
-    return [current_images_line, iterations_line]
+    model_progress_line: str | None = None
+    if _should_show_progress_bar(models_target):
+        model_progress_line = (
+            f"Cola de modelos: {_build_progress_bar(kit, model_queue_current, models_target)}"
+        )
+
+    current_images_line: str | None = None
+    if _should_show_progress_bar(current_model_target):
+        current_images_line = (
+            f"Modelo actual ({compact_model}): {_build_progress_bar(kit, model_completed_total, current_model_target)}"
+        )
+
+    iterations_line: str | None = None
+    if _should_show_progress_bar(iterations_value):
+        iterations_line = (
+            f"Iteraciones de imagen actual ({iterations_value}x): "
+            f"{_build_progress_bar(kit, iteration_progress, iterations_value)}"
+        )
+
+    lines: list[str] = []
+    if current_images_line:
+        lines.append(current_images_line)
+    if iterations_line:
+        lines.append(iterations_line)
+
+    if show_model_queue_bar and model_progress_line:
+        return [model_progress_line, *lines]
+    return lines
 
 
 def _resolve_pending_entries_and_paths(snapshot: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -301,9 +364,8 @@ def _retry_made_progress(*, pending_before_retry: int, pending_after_retry: int)
 
 def _build_output_path_by_model(
     *,
-    queued_models: list[str],
+    catalog: _BatchExecutionCatalog,
     selected_manifest: str,
-    schema_exec_name: str,
     linked_batch_output_path: Callable[..., Any],
 ) -> dict[str, str]:
     """Precalcula la ruta de salida compartida por cada modelo."""
@@ -311,29 +373,53 @@ def _build_output_path_by_model(
         model: str(
             linked_batch_output_path(
                 manifest_path=selected_manifest,
-                model_tag=model,
-                schema_name=schema_exec_name,
+                schema_name=catalog.schema_by_id[model],
             )
         )
-        for model in queued_models
+        for model in catalog.queued_models
     }
 
 
 def _build_snapshot_kwargs_by_model(
     *,
-    queued_models: list[str],
+    catalog: _BatchExecutionCatalog,
     selected_manifest: str,
-    schema_exec_name: str,
-) -> dict[str, dict[str, str]]:
+    schema_name_by_model: dict[str, str],
+) -> dict[str, dict[str, Any]]:
     """Precalcula kwargs de snapshot por modelo para evitar duplicaciones."""
     return {
         model: {
             "manifest_path": selected_manifest,
-            "model_tag": model,
-            "schema_name": schema_exec_name,
+            "model_tag": catalog.model_id_by_id[model],
+            "schema_name": schema_name_by_model[model],
+            "include_reasoning": catalog.include_reasoning_by_id[model],
         }
-        for model in queued_models
+        for model in catalog.queued_models
     }
+
+
+def _build_execution_catalog(execution_variants: list[dict[str, Any]]) -> _BatchExecutionCatalog:
+    """Construye catálogo de ejecución y sus índices por id."""
+    queued_models = [str(item.get("execution_id") or "") for item in execution_variants]
+    return _BatchExecutionCatalog(
+        queued_models=queued_models,
+        label_by_id={
+            str(item.get("execution_id") or ""): str(item.get("label") or "")
+            for item in execution_variants
+        },
+        schema_by_id={
+            str(item.get("execution_id") or ""): str(item.get("schema_exec_name") or "")
+            for item in execution_variants
+        },
+        model_id_by_id={
+            str(item.get("execution_id") or ""): str(item.get("model_id") or "")
+            for item in execution_variants
+        },
+        include_reasoning_by_id={
+            str(item.get("execution_id") or ""): bool(item.get("include_reasoning"))
+            for item in execution_variants
+        },
+    )
 
 
 def _build_queue_targets(
@@ -348,14 +434,33 @@ def _build_queue_targets(
     }
 
 
+@dataclass(frozen=True)
+class _BatchModelExecutionContext:
+    """Contexto inmutable para ejecutar una variante de modelo con menos parámetros."""
+
+    selected_manifest: str
+    schema_exec_name: str
+    schema_base_name: str
+    include_reasoning: bool
+    model_id: str
+    model_label: str
+    output_path: str
+    manifest_snapshot: dict[str, Any]
+    rerun_only_pending: bool
+    completed_global_images_before_model: int
+    total_global_target: int
+    current_model_target: int
+    models_done_before: int
+    models_target: int
+    iterations_per_image: int
+    baseline_completed_for_model: int
+
+
 def _render_batch_final_summary(
     *,
     kit: "UIKit",
     app: "AppContext",
-    selected_manifest: str,
-    schema_exec_name: str,
-    queued_models: list[str],
-    queue_results: list[tuple[str, dict[str, Any], dict[str, Any], str]],
+    context: _BatchFinalRenderContext,
     upsert_batch_execution_summary: Callable[..., dict[str, Any] | None],
 ) -> None:
     """Construye y renderiza el dashboard final del batch runner."""
@@ -366,6 +471,12 @@ def _render_batch_final_summary(
             f"media={_format_metric_value(stats.get('avg'), suffix=suffix)} | "
             f"max={_format_metric_value(stats.get('max'), suffix=suffix)}"
         )
+
+    queue_results = context.queue_results
+    selected_manifest = context.selected_manifest
+    summary_schema_base_name = context.summary_schema_base_name
+    schema_exec_name = context.schema_exec_name
+    selected_model_ids = context.selected_model_ids
 
     (
         queue_rows,
@@ -383,8 +494,8 @@ def _render_batch_final_summary(
     for output_item in unique_outputs:
         aggregate_summary = upsert_batch_execution_summary(
             output_path=output_item,
-            schema_name=schema_exec_name,
-            model_ids=queued_models,
+            schema_name=summary_schema_base_name,
+            model_ids=selected_model_ids,
         )
         if aggregate_summary:
             aggregate_summaries[output_item] = aggregate_summary
@@ -392,7 +503,8 @@ def _render_batch_final_summary(
     aggregate_models_accuracy: dict[str, str] = {}
     global_warn = "OK" if total_pending == 0 else "WARN"
     model_count_text = (
-        f"{len(queued_models)} (completos={complete_models}, parciales={partial_models}, error={failed_models})"
+        f"{len(queue_rows)} variantes (modelos base={len(selected_model_ids)}, "
+        f"completos={complete_models}, parciales={partial_models}, error={failed_models})"
     )
 
     execution_rows: list[tuple[str, str, str]] = [
@@ -428,16 +540,18 @@ def _render_batch_final_summary(
     execution_lines = [f"  {name:<18} : {value}" for name, value, _status in execution_rows]
 
     ui_width = max(80, kit.width())
-    model_w = max(16, min(30, int(ui_width * 0.30)))
+    model_w = max(14, min(24, int(ui_width * 0.24)))
+    variant_w = 16
     state_w = 10
     progress_w = 8
     acc_w = 15
     pending_w = 6
-    table_padding = 25
-    jsonl_w = max(16, ui_width - (model_w + state_w + progress_w + acc_w + pending_w + table_padding))
+    table_padding = 28
+    jsonl_w = max(14, ui_width - (model_w + variant_w + state_w + progress_w + acc_w + pending_w + table_padding))
 
     header = (
         f"  {'Modelo':<{model_w}} │ "
+        f"{'Variante':<{variant_w}} │ "
         f"{'Estado':<{state_w}} │ "
         f"{'OK/TOT':>{progress_w}} │ "
         f"{'ACC':>{acc_w}} │ "
@@ -446,6 +560,7 @@ def _render_batch_final_summary(
     )
     divider = (
         f"  {'─' * model_w}─┼─"
+        f"{'─' * variant_w}─┼─"
         f"{'─' * state_w}─┼─"
         f"{'─' * progress_w}─┼─"
         f"{'─' * acc_w}─┼─"
@@ -455,17 +570,20 @@ def _render_batch_final_summary(
 
     model_table_lines: list[str] = [header, divider]
     colored_state_lines: list[str] = []
-    for model_name, final_snapshot, resolved_output in queue_rows:
+    for model_name, model_id, include_reasoning, final_snapshot, resolved_output in queue_rows:
         status_plain = snapshot_status_text(final_snapshot)
         ok_value = int(final_snapshot.get("ok", 0) or 0)
         total_value = int(final_snapshot.get("total", 0) or 0)
         pending_value = int(final_snapshot.get("pending", 0) or 0)
-        accuracy_text = aggregate_models_accuracy.get(model_name, "N/D")
+        variant_name = variant_label(model_id, include_reasoning)
+        variant_mode = "con razonamiento" if include_reasoning else "sin razonamiento"
+        accuracy_text = aggregate_models_accuracy.get(variant_name, "N/D")
         jsonl_text = rel_path(resolved_output)
         colored_model_name = colorize_model(kit.style, model_name, final_snapshot)
         colored_state_lines.append(f"  - {colored_model_name} · {status_plain}")
         model_table_lines.append(
-            f"  {truncate_middle(model_name, model_w):<{model_w}} │ "
+            f"  {truncate_middle(model_id, model_w):<{model_w}} │ "
+            f"{truncate_middle(variant_mode, variant_w):<{variant_w}} │ "
             f"{status_plain:<{state_w}} │ "
             f"{f'{ok_value}/{total_value}':>{progress_w}} │ "
             f"{truncate_middle(accuracy_text, acc_w):>{acc_w}} │ "
@@ -498,28 +616,15 @@ def _execute_model_with_retries(
     app: "AppContext",
     run_batch_job: Callable[..., dict[str, Any]],
     manifest_execution_snapshot: Callable[..., dict[str, Any]],
-    selected_manifest: str,
-    schema_exec_name: str,
-    schema_base_name: str,
-    include_reasoning: bool,
-    queued_model: str,
-    output_path: str,
-    manifest_snapshot: dict[str, Any],
-    rerun_only_pending: bool,
-    completed_global_images_before_model: int,
-    total_global_target: int,
-    current_model_target: int,
-    models_done_before: int,
-    models_target: int,
-    iterations_per_image: int,
-    baseline_completed_for_model: int,
+    execution: _BatchModelExecutionContext,
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
     """Ejecuta un modelo de la cola con progreso en vivo y reintentos de pendientes."""
+    model_label = execution.model_label.strip() or execution.model_id
     kit.clear()
     app.print_banner()
-    kit.subtitle(f"BATCH RUNNER · {schema_exec_name} · {queued_model}")
+    kit.subtitle(f"BATCH RUNNER · {execution.schema_exec_name} · {model_label}")
     kit.log(
-        f"Exportando resultados incrementales en JSONL desde manifiesto: {selected_manifest}",
+        f"Exportando resultados incrementales en JSONL desde manifiesto: {execution.selected_manifest}",
         "step",
     )
 
@@ -527,14 +632,15 @@ def _execute_model_with_retries(
         "ok": 0,
         "invalid": 0,
         "fail": 0,
-        "output_path": output_path,
+        "output_path": execution.output_path,
     }
-    show_model_queue_bar = models_target > 1
-    compact_model = compact_model_label(queued_model, ui_width=kit.width())
+    show_model_queue_bar = execution.models_target > 1
+    compact_model = compact_model_label(model_label, ui_width=kit.width())
     snapshot_kwargs = {
-        "manifest_path": selected_manifest,
-        "model_tag": queued_model,
-        "schema_name": schema_exec_name,
+        "manifest_path": execution.selected_manifest,
+        "model_tag": execution.model_id,
+        "schema_name": execution.schema_base_name,
+        "include_reasoning": execution.include_reasoning,
     }
 
     try:
@@ -542,15 +648,15 @@ def _execute_model_with_retries(
         panel = _make_live_panel(
             kit,
             app,
-            subtitle=f"BATCH RUNNER · {schema_exec_name} · {queued_model}",
-            intro=f"Exportando resultados incrementales en JSONL desde manifiesto: {selected_manifest}",
+            subtitle=f"BATCH RUNNER · {execution.schema_exec_name} · {model_label}",
+            intro=f"Exportando resultados incrementales en JSONL desde manifiesto: {execution.selected_manifest}",
         )
         base_batch_kwargs: dict[str, Any] = {
-            "model_id": queued_model,
-            "manifest": selected_manifest,
-            "schema_name": schema_base_name,
-            "include_reasoning": include_reasoning,
-            "output_path": output_path,
+            "model_id": execution.model_id,
+            "manifest": execution.selected_manifest,
+            "schema_name": execution.schema_base_name,
+            "include_reasoning": execution.include_reasoning,
+            "output_path": execution.output_path,
             "max_images": None,
             # Respetar orden del manifiesto para ejecutar iteraciones por imagen en bloque.
             "shuffle": False,
@@ -569,31 +675,46 @@ def _execute_model_with_retries(
             completed = _coerce_int(summary_progress.get("processed"))
             invalid_count = _coerce_int(summary_progress.get("invalid"))
             fail_count = _coerce_int(summary_progress.get("fail"))
-            global_target = total_global_target if total_global_target > 0 else current_model_target
-            model_completed_total = min(current_model_target, baseline_completed_for_model + completed)
-            global_completed = min(global_target, completed_global_images_before_model + model_completed_total)
+            global_target = (
+                execution.total_global_target
+                if execution.total_global_target > 0
+                else execution.current_model_target
+            )
+            model_completed_total = min(
+                execution.current_model_target,
+                execution.baseline_completed_for_model + completed,
+            )
+            global_completed = min(
+                global_target,
+                execution.completed_global_images_before_model + model_completed_total,
+            )
 
-            model_queue_current = models_done_before
-            if event == "complete" and models_target > 0:
-                model_queue_current = min(models_target, models_done_before + 1)
+            model_queue_current = execution.models_done_before
+            if event == "complete" and execution.models_target > 0:
+                model_queue_current = min(execution.models_target, execution.models_done_before + 1)
 
             payload_iteration_index = _coerce_int(payload.get("run_iteration_index"))
             payload_iteration_total = _coerce_int(payload.get("run_iteration_total"))
             iteration_progress, iterations_value = _resolve_iteration_progress(
                 event=event,
                 current_index=current_index,
-                iterations_per_image=iterations_per_image,
+                iterations_per_image=execution.iterations_per_image,
                 payload_iteration_index=payload_iteration_index,
                 payload_iteration_total=payload_iteration_total,
             )
 
-            status_line = _build_status_line(
+            status_line = build_live_status_line(
                 event=event,
                 current_index=current_index,
                 total=total,
-                image_path=image_path,
+                item_label=image_path,
                 status=status_value,
                 completed=completed,
+                on_start="Estado actual: procesando imagen {current_index}/{total} · {item}",
+                on_done_ok="Estado actual: exportada imagen {current_index}/{total} · {item}",
+                on_done_invalid="Estado actual: respuesta inválida en {current_index}/{total} · {item}",
+                on_complete="Estado actual: finalizado · {completed}/{total} imágenes exportadas",
+                on_prepare="Estado actual: preparando ejecución · muestra {total}",
             )
 
             if event == "image_done" and last_record is not None:
@@ -609,17 +730,19 @@ def _execute_model_with_retries(
                     f"Inválidas={invalid_count} | Errores={fail_count}"
                 ),
                 status_line=status_line,
-                metrics_line=_build_metrics_line(summary_progress),
+                metrics_line=_build_partial_metrics_line(summary_progress),
                 extra_lines=_build_extra_progress_lines(
                     kit=kit,
-                    show_model_queue_bar=show_model_queue_bar,
-                    model_queue_current=model_queue_current,
-                    models_target=models_target,
-                    compact_model=compact_model,
-                    model_completed_total=model_completed_total,
-                    current_model_target=current_model_target,
-                    iteration_progress=iteration_progress,
-                    iterations_value=iterations_value,
+                    context=_BatchProgressBarsContext(
+                        show_model_queue_bar=show_model_queue_bar,
+                        model_queue_current=model_queue_current,
+                        models_target=execution.models_target,
+                        compact_model=compact_model,
+                        model_completed_total=model_completed_total,
+                        current_model_target=execution.current_model_target,
+                        iteration_progress=iteration_progress,
+                        iterations_value=iterations_value,
+                    ),
                 ),
                 recent_title="Últimos registros exportados:",
                 recent_records=list(recent_records),
@@ -649,8 +772,8 @@ def _execute_model_with_retries(
 
         pending_image_paths: list[str] | None = None
         pending_entries: list[dict[str, Any]] | None = None
-        if rerun_only_pending:
-            pending_entries, pending_image_paths = _resolve_pending_entries_and_paths(manifest_snapshot)
+        if execution.rerun_only_pending:
+            pending_entries, pending_image_paths = _resolve_pending_entries_and_paths(execution.manifest_snapshot)
 
         summary = execute_batch_once(
             pending_image_paths=pending_image_paths,
@@ -665,7 +788,7 @@ def _execute_model_with_retries(
             retry_now = as_yes(
                 kit.ask(
                     (
-                        f"[{queued_model}] Quedan imágenes pendientes o con error. "
+                        f"[{execution.model_id}] Quedan imágenes pendientes o con error. "
                         "¿Quieres reejecutarlas ahora sin salir del menú?"
                     ),
                     "y",
@@ -689,7 +812,7 @@ def _execute_model_with_retries(
             ):
                 kit.log(
                     (
-                        f"[{queued_model}] Reintento sin progreso "
+                        f"[{execution.model_id}] Reintento sin progreso "
                         f"({pending_after_retry} pendientes). Se detiene para evitar bucle."
                     ),
                     "warning",
@@ -700,7 +823,7 @@ def _execute_model_with_retries(
         return final_snapshot, summary, True
     except Exception as error:
         final_snapshot = manifest_execution_snapshot(**snapshot_kwargs)
-        kit.log(f"[{queued_model}] Batch Runner terminó con error: {error}", "error")
+        kit.log(f"[{model_label}] Batch Runner terminó con error: {error}", "error")
         return final_snapshot, summary, False
 
 
@@ -728,10 +851,15 @@ def run_batch_runner_wrapper(
     from src.scripts.batch_runner import run_batch_job, seed_batch_meta_header, upsert_batch_execution_summary
 
     initial_snapshots: dict[str, dict[str, Any]] = {}
+    execution_label_by_id: dict[str, str] = {}
 
-    def _snapshot_for(model_tag: str) -> dict[str, Any]:
-        """Obtiene snapshot inicial del modelo con cast consistente."""
-        return cast(dict[str, Any], initial_snapshots.get(model_tag) or {})
+    def _snapshot_for(execution_id: str) -> dict[str, Any]:
+        """Obtiene snapshot inicial por ejecución (modelo + modo)."""
+        return cast(dict[str, Any], initial_snapshots.get(execution_id) or {})
+
+    def _label_for(execution_id: str) -> str:
+        """Resuelve etiqueta de ejecución para mostrar en menús y logs."""
+        return str(execution_label_by_id.get(execution_id) or execution_id)
 
     while True:
         selected_manifest_bundle = select_manifest_for_batch()
@@ -756,53 +884,89 @@ def run_batch_runner_wrapper(
             continue
 
         schema_base_name = cast(str, manifest_config.get("schema_name") or "").strip()
-        include_reasoning = bool(manifest_config.get("include_reasoning"))
         iterations_per_image = int(manifest_config.get("iterations_per_image", 1) or 1)
-        schema_exec_name = execution_schema_name(schema_base_name, include_reasoning)
-        queued_models = cast(list[str], manifest_config.get("models") or [])
-        if not schema_base_name or not queued_models:
+        model_variants_raw = cast(list[dict[str, Any]], manifest_config.get("model_variants") or [])
+        normalized_variants = normalize_model_variants(model_variants_raw)
+
+        execution_variants: list[dict[str, Any]] = []
+        for raw_variant in normalized_variants:
+            model_id = str(raw_variant.get("model_id") or "").strip()
+            include_reasoning = bool(raw_variant.get("include_reasoning"))
+            schema_exec_name = execution_schema_name(schema_base_name, include_reasoning)
+            execution_id = f"{model_id}|{'r' if include_reasoning else 'n'}"
+            execution_variants.append(
+                {
+                    "execution_id": execution_id,
+                    "model_id": model_id,
+                    "include_reasoning": include_reasoning,
+                    "schema_exec_name": schema_exec_name,
+                    "label": variant_label(model_id, include_reasoning),
+                }
+            )
+
+        if not schema_base_name or not execution_variants:
             kit.log("Configuración incompleta en manifiesto (faltan schema/modelos).", "error")
             kit.wait("Press any key to return to tests manager...")
             continue
 
+        queue_schema_name = schema_base_name
+
+        catalog = _build_execution_catalog(execution_variants)
+        queued_models = catalog.queued_models
+        execution_label_by_id = catalog.label_by_id
+        schema_name_by_execution = catalog.schema_by_id
+        model_id_by_execution = catalog.model_id_by_id
+        include_reasoning_by_execution = catalog.include_reasoning_by_id
+
         kit.clear()
         app.print_banner()
-        kit.subtitle(f"BATCH RUNNER · {schema_exec_name}")
+        kit.subtitle(f"BATCH RUNNER · {queue_schema_name}")
         kit.log(f"Manifiesto seleccionado: {selected_manifest}", "step")
         kit.log(cast(str, manifest_overview.get("description") or "Sin descripción disponible."), "info")
-        kit.log(f"Modelos en cola: {', '.join(queued_models)}", "info")
+        kit.log("Ejecuciones en cola: " + " | ".join(_label_for(item) for item in queued_models), "info")
 
-        seed_batch_meta_header(
-            output_path=linked_batch_output_path(
-                manifest_path=selected_manifest,
-                model_tag=queued_models[0],
-                schema_name=schema_exec_name,
-            ),
-            model_ids=queued_models,
-            schema_name=schema_exec_name,
-            input_source="manifest",
-            manifest_path=selected_manifest,
-        )
+        output_to_models: dict[str, set[str]] = {}
+        output_to_schemas: dict[str, set[str]] = {}
+        for execution_id in queued_models:
+            model_id = model_id_by_execution[execution_id]
+            schema_exec_name = schema_name_by_execution[execution_id]
+            output_path = str(
+                linked_batch_output_path(
+                    manifest_path=selected_manifest,
+                    schema_name=schema_exec_name,
+                )
+            )
+            output_to_models.setdefault(output_path, set()).add(model_id)
+            output_to_schemas.setdefault(output_path, set()).add(schema_base_name)
+
+        for output_path, model_ids in output_to_models.items():
+            for schema_name in sorted(output_to_schemas.get(output_path, set()) or {queue_schema_name}):
+                seed_batch_meta_header(
+                    output_path=output_path,
+                    model_ids=sorted(model_ids),
+                    schema_name=schema_name,
+                    input_source="manifest",
+                    manifest_path=selected_manifest,
+                )
 
         output_path_by_model = _build_output_path_by_model(
-            queued_models=queued_models,
+            catalog=catalog,
             selected_manifest=selected_manifest,
-            schema_exec_name=schema_exec_name,
             linked_batch_output_path=linked_batch_output_path,
         )
         snapshot_kwargs_by_model = _build_snapshot_kwargs_by_model(
-            queued_models=queued_models,
+            catalog=catalog,
             selected_manifest=selected_manifest,
-            schema_exec_name=schema_exec_name,
+            schema_name_by_model={model: schema_base_name for model in queued_models},
         )
 
-        queue_results: list[tuple[str, dict[str, Any], dict[str, Any], str]] = []
+        queue_results: list[_BatchQueueResultContext] = []
         initial_snapshots = {
             model: manifest_execution_snapshot(**snapshot_kwargs_by_model[model])
             for model in queued_models
         }
         colored_queue_models = [
-            colorize_model(kit.style, model, _snapshot_for(model))
+            colorize_model(kit.style, _label_for(model), _snapshot_for(model))
             for model in queued_models
         ]
         kit.log("Modelos por estado: " + " | ".join(colored_queue_models), "info")
@@ -814,11 +978,14 @@ def run_batch_runner_wrapper(
         models_to_execute = _select_models_to_execute(
             kit=kit,
             app=app,
-            schema_exec_name=schema_exec_name,
-            queued_models=queued_models,
-            completed_models=completed_models,
-            snapshot_for=_snapshot_for,
-            default_models=models_to_execute,
+            context=_BatchModelSelectionContext(
+                schema_exec_name=queue_schema_name,
+                queued_models=queued_models,
+                completed_models=completed_models,
+                snapshot_for=_snapshot_for,
+                default_models=models_to_execute,
+                display_label_for=_label_for,
+            ),
         )
 
         runnable_models = [
@@ -837,20 +1004,47 @@ def run_batch_runner_wrapper(
         completed_global_images = 0
 
         for queued_model in queued_models:
+            model_label = _label_for(queued_model)
             model_snapshot_kwargs = snapshot_kwargs_by_model[queued_model]
             output_path = output_path_by_model[queued_model]
             manifest_snapshot = manifest_execution_snapshot(**model_snapshot_kwargs)
+            schema_exec_name = schema_name_by_execution[queued_model]
+            model_id = model_id_by_execution[queued_model]
+            include_reasoning = include_reasoning_by_execution[queued_model]
 
             if queued_model not in models_to_execute:
-                kit.log(f"[{queued_model}] Omitido por selección de ejecución.", "info")
-                queue_results.append((queued_model, manifest_snapshot, manifest_snapshot, output_path))
+                kit.log(f"[{model_label}] Omitido por selección de ejecución.", "info")
+                queue_results.append(
+                    _BatchQueueResultContext(
+                        model_label=model_label,
+                        model_id=model_id,
+                        include_reasoning=include_reasoning,
+                        initial_snapshot=manifest_snapshot,
+                        final_snapshot=manifest_snapshot,
+                        output_path=output_path,
+                    )
+                )
                 continue
 
             if is_model_snapshot_complete(manifest_snapshot):
-                ok_prune = prune_output_records_for_model(output_path=output_path, model_tag=queued_model)
+                ok_prune = prune_output_records_for_model(
+                    output_path=output_path,
+                    model_tag=model_id,
+                    schema_name=schema_base_name,
+                    include_reasoning=include_reasoning,
+                )
                 if not ok_prune:
-                    kit.log(f"[{queued_model}] No se pudo limpiar el JSONL compartido para este modelo.", "error")
-                    queue_results.append((queued_model, manifest_snapshot, manifest_snapshot, output_path))
+                    kit.log(f"[{model_label}] No se pudo limpiar el JSONL compartido para este modelo.", "error")
+                    queue_results.append(
+                        _BatchQueueResultContext(
+                            model_label=model_label,
+                            model_id=model_id,
+                            include_reasoning=include_reasoning,
+                            initial_snapshot=manifest_snapshot,
+                            final_snapshot=manifest_snapshot,
+                            output_path=output_path,
+                        )
+                    )
                     continue
 
             rerun_only_pending = str(manifest_snapshot.get("status") or "") == "yellow"
@@ -863,39 +1057,56 @@ def run_batch_runner_wrapper(
                 app=app,
                 run_batch_job=run_batch_job,
                 manifest_execution_snapshot=manifest_execution_snapshot,
-                selected_manifest=selected_manifest,
-                schema_exec_name=schema_exec_name,
-                schema_base_name=schema_base_name,
-                include_reasoning=include_reasoning,
-                queued_model=queued_model,
-                output_path=output_path,
-                manifest_snapshot=manifest_snapshot,
-                rerun_only_pending=rerun_only_pending,
-                completed_global_images_before_model=completed_global_images,
-                total_global_target=total_global_target,
-                current_model_target=current_model_target,
-                models_done_before=models_done_before,
-                models_target=models_target,
-                iterations_per_image=iterations_per_image,
-                baseline_completed_for_model=baseline_completed,
+                execution=_BatchModelExecutionContext(
+                    selected_manifest=selected_manifest,
+                    schema_exec_name=schema_exec_name,
+                    schema_base_name=schema_base_name,
+                    include_reasoning=include_reasoning,
+                    model_id=model_id,
+                    model_label=model_label,
+                    output_path=output_path,
+                    manifest_snapshot=manifest_snapshot,
+                    rerun_only_pending=rerun_only_pending,
+                    completed_global_images_before_model=completed_global_images,
+                    total_global_target=total_global_target,
+                    current_model_target=current_model_target,
+                    models_done_before=models_done_before,
+                    models_target=models_target,
+                    iterations_per_image=iterations_per_image,
+                    baseline_completed_for_model=baseline_completed,
+                ),
             )
             completed_global_images += int(final_snapshot.get("ok", 0))
-            queue_results.append((queued_model, manifest_snapshot, final_snapshot, output_path))
+            queue_results.append(
+                _BatchQueueResultContext(
+                    model_label=model_label,
+                    model_id=model_id,
+                    include_reasoning=include_reasoning,
+                    initial_snapshot=manifest_snapshot,
+                    final_snapshot=final_snapshot,
+                    output_path=output_path,
+                )
+            )
             if succeeded:
                 level = "success" if int(final_snapshot.get("pending", 0)) == 0 else "warning"
                 kit.log(
-                    f"[{queued_model}] Batch completado: {summary['ok']} OK, {summary['invalid']} inválidas, "
+                    f"[{model_label}] Batch completado: {summary['ok']} OK, {summary['invalid']} inválidas, "
                     f"{summary['fail']} errores. Salida: {summary['output_path']}",
                     level,
                 )
 
+        summary_model_ids = sorted({model_id_by_execution[item] for item in queued_models})
+
         _render_batch_final_summary(
             kit=kit,
             app=app,
-            selected_manifest=selected_manifest,
-            schema_exec_name=schema_exec_name,
-            queued_models=queued_models,
-            queue_results=queue_results,
+            context=_BatchFinalRenderContext(
+                selected_manifest=selected_manifest,
+                summary_schema_base_name=schema_base_name,
+                schema_exec_name=queue_schema_name,
+                selected_model_ids=summary_model_ids,
+                queue_results=queue_results,
+            ),
             upsert_batch_execution_summary=upsert_batch_execution_summary,
         )
         kit.wait("Press any key to return to tests manager...")

@@ -50,6 +50,7 @@ _MANIFEST_BASE_KEYS: set[str] = {
     "image_name",
     "status",
     "duration_seconds",
+    "include_reasoning",
     "error_type",
     "error_message",
     "payload",
@@ -66,6 +67,52 @@ class BatchInputItem:
 
     image_path: Path
     metadata: dict[str, Any] | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class _BatchInputRequest:
+    """Entrada normalizada para resolver origen de datos del batch."""
+
+    image_dir: str | Path | None
+    manifest: str | Path | None
+    pending_image_paths: list[str] | None
+    pending_entries: list[dict[str, Any]] | None
+
+
+@dataclasses.dataclass(frozen=True)
+class _BatchMetaRequest:
+    """Solicitud de actualización de cabecera __batch_meta__."""
+
+    output_path: Path
+    model_id: str
+    schema_name: str
+    input_source: str
+    manifest_path: Path | None
+    seed_model_ids: list[str] | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class _BatchSummaryContext:
+    """Contexto compacto para construir el resumen parcial/final del batch."""
+
+    model_id: str
+    schema_name: str
+    prompt: str
+    output_path: Path
+    processed: int
+    ok: int
+    invalid: int
+    fail: int
+    total_available: int
+    sample_size: int
+    ttft_total: float
+    ttft_count: int
+    tps_total: float
+    tps_count: int
+    total_duration_total: float
+    total_duration_count: int
+    input_source: str
+    discarded_manifest_rows: int = 0
 
 
 def _filter_items_by_pending_entries(
@@ -350,11 +397,17 @@ def _build_base_inference_kwargs(
     }
 
 
-def _build_base_record_kwargs(*, model_id: str, schema_name: str) -> dict[str, Any]:
+def _build_base_record_kwargs(
+    *,
+    model_id: str,
+    schema_name: str,
+    include_reasoning: bool,
+) -> dict[str, Any]:
     """Construye kwargs base de registro compartidos por todas las iteraciones."""
     return {
         "model_id": model_id,
         "schema_name": schema_name,
+        "include_reasoning": include_reasoning,
     }
 
 
@@ -614,16 +667,14 @@ def _write_jsonl_lines(path: Path, lines: list[str]) -> None:
             handle.write("\n".join(lines) + "\n")
         _sync_file(handle)
 
-def _ensure_batch_meta_header(
-    *,
-    output_path: Path,
-    model_id: str,
-    schema_name: str,
-    input_source: str,
-    manifest_path: Path | None,
-    seed_model_ids: list[str] | None = None,
-) -> None:
+def _ensure_batch_meta_header(*, request: _BatchMetaRequest) -> None:
     """Upsert de metadatos globales para JSONL compartido entre modelos."""
+    output_path = request.output_path
+    model_id = request.model_id
+    schema_name = request.schema_name
+    input_source = request.input_source
+    manifest_path = request.manifest_path
+    seed_model_ids = request.seed_model_ids
     lines = _read_jsonl_lines(output_path)
     meta_index: int | None = None
     existing_meta: dict[str, Any] = {}
@@ -714,12 +765,14 @@ def seed_batch_meta_header(
 
     manifest_path_obj = Path(manifest_path) if manifest_path is not None else None
     _ensure_batch_meta_header(
-        output_path=resolved_output_path,
-        model_id="",
-        seed_model_ids=model_ids,
-        schema_name=schema_name,
-        input_source=input_source,
-        manifest_path=manifest_path_obj,
+        request=_BatchMetaRequest(
+            output_path=resolved_output_path,
+            model_id="",
+            seed_model_ids=model_ids,
+            schema_name=schema_name,
+            input_source=input_source,
+            manifest_path=manifest_path_obj,
+        )
     )
     return resolved_output_path
 
@@ -731,19 +784,86 @@ def _normalize_label_for_accuracy(value: Any) -> str:
     return str(value).strip().lower()
 
 
+def _base_schema_name(schema_name: str) -> str:
+    """Devuelve el nombre base de schema removiendo sufijo WithReasoning."""
+    value = str(schema_name or "").strip()
+    suffix = "WithReasoning"
+    if value.endswith(suffix):
+        return value[: -len(suffix)]
+    return value
+
+
+def _is_reasoning_schema(schema_name: str) -> bool:
+    """Indica si el schema efectivo representa una variante con razonamiento."""
+    return str(schema_name or "").strip().endswith("WithReasoning")
+
+
+def _variant_label(model_id: str, include_reasoning: bool) -> str:
+    """Etiqueta estable de variante para reportes agregados."""
+    mode = "con razonamiento" if include_reasoning else "sin razonamiento"
+    return f"{model_id} [{mode}]"
+
+
+def _matches_schema_family(*, schema_filter: str, schema_value: str) -> bool:
+    """Comprueba si un schema efectivo pertenece a la familia del schema base."""
+    filter_value = str(schema_filter or "").strip()
+    row_schema = str(schema_value or "").strip()
+    if not filter_value:
+        return True
+    if not row_schema:
+        return True
+    base_name = _base_schema_name(filter_value)
+    return row_schema == base_name or row_schema == f"{base_name}WithReasoning"
+
+
+def _resolve_summary_schema_name(*, requested_schema_name: str, lines: list[str]) -> str:
+    """Resuelve schema base para summary usando request explícito o metadatos."""
+    requested = str(requested_schema_name or "").strip()
+    if requested:
+        return _base_schema_name(requested)
+
+    base_names: set[str] = set()
+    for raw_line in lines:
+        payload = _parse_jsonl_dict(raw_line.strip())
+        if payload is None:
+            continue
+        meta = payload.get(_BATCH_META_KEY)
+        if not isinstance(meta, dict):
+            continue
+        raw_schema_names = meta.get("schema_names")
+        if isinstance(raw_schema_names, list):
+            for item in raw_schema_names:
+                schema_value = str(item or "").strip()
+                if not schema_value:
+                    continue
+                base_names.add(_base_schema_name(schema_value))
+        break
+
+    if len(base_names) == 1:
+        return next(iter(base_names))
+    return _base_schema_name(requested)
+
+
 def _aggregate_models_from_jsonl_lines(
     *,
     lines: list[str],
     selected_models: set[str],
     schema_name: str,
     metric_keys: list[str],
-) -> tuple[list[str], dict[str, dict[str, Any]], dict[str, dict[str, float | int | None]]]:
+) -> tuple[
+    list[str],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, float | int | None]],
+]:
     """Agrega métricas y exactitud por modelo desde líneas JSONL."""
     kept_lines: list[str] = []
     model_acc: dict[str, dict[str, Any]] = {}
+    schema_filter = str(schema_name or "").strip()
     global_metric_acc: dict[str, dict[str, float | int | None]] = {
         key: _empty_metric_agg() for key in metric_keys
     }
+    variant_acc: dict[str, dict[str, Any]] = {}
 
     for raw_line in lines:
         line = raw_line.strip()
@@ -768,7 +888,7 @@ def _aggregate_models_from_jsonl_lines(
         if selected_models and model_id_value not in selected_models:
             continue
         schema_value = str(payload.get("schema_name") or "").strip()
-        if schema_name and schema_value and schema_value != schema_name:
+        if not _matches_schema_family(schema_filter=schema_filter, schema_value=schema_value):
             continue
 
         status_value = str(payload.get("status") or "").strip().lower()
@@ -784,18 +904,44 @@ def _aggregate_models_from_jsonl_lines(
                 "metrics": {key: _empty_metric_agg() for key in metric_keys},
             },
         )
+
+        include_reasoning = bool(payload.get("include_reasoning"))
+        if "include_reasoning" not in payload:
+            include_reasoning = _is_reasoning_schema(schema_value)
+        variant_key = f"{model_id_value}|{'r' if include_reasoning else 'n'}"
+        variant_entry = variant_acc.setdefault(
+            variant_key,
+            {
+                "model_id": model_id_value,
+                "include_reasoning": include_reasoning,
+                "schema_name": schema_value,
+                "processed": 0,
+                "ok": 0,
+                "invalid": 0,
+                "error": 0,
+                "eval_total": 0,
+                "eval_correct": 0,
+                "metrics": {key: _empty_metric_agg() for key in metric_keys},
+            },
+        )
         model_entry["processed"] = int(model_entry["processed"]) + 1
+        variant_entry["processed"] = int(variant_entry["processed"]) + 1
         if status_value == "ok":
             model_entry["ok"] = int(model_entry["ok"]) + 1
+            variant_entry["ok"] = int(variant_entry["ok"]) + 1
         elif status_value == "invalid":
             model_entry["invalid"] = int(model_entry["invalid"]) + 1
+            variant_entry["invalid"] = int(variant_entry["invalid"]) + 1
         else:
             model_entry["error"] = int(model_entry["error"]) + 1
+            variant_entry["error"] = int(variant_entry["error"]) + 1
 
         metric_bucket = model_entry["metrics"]
+        variant_metric_bucket = variant_entry["metrics"]
         for metric_key in metric_keys:
             value = _as_float(payload.get(metric_key))
             _update_metric_agg(metric_bucket[metric_key], value)
+            _update_metric_agg(variant_metric_bucket[metric_key], value)
             _update_metric_agg(global_metric_acc[metric_key], value)
 
         payload_obj = payload.get("payload")
@@ -805,10 +951,12 @@ def _aggregate_models_from_jsonl_lines(
         ground_truth_label = _normalize_label_for_accuracy(payload.get("ground_truth_cls"))
         if predicted_label and ground_truth_label:
             model_entry["eval_total"] = int(model_entry["eval_total"]) + 1
+            variant_entry["eval_total"] = int(variant_entry["eval_total"]) + 1
             if predicted_label == ground_truth_label:
                 model_entry["eval_correct"] = int(model_entry["eval_correct"]) + 1
+                variant_entry["eval_correct"] = int(variant_entry["eval_correct"]) + 1
 
-    return kept_lines, model_acc, global_metric_acc
+    return kept_lines, model_acc, variant_acc, global_metric_acc
 
 
 def _repair_summary_meta_line(
@@ -835,9 +983,13 @@ def _repair_summary_meta_line(
         schema_names: set[str] = set()
         raw_schema_names = meta.get("schema_names")
         if isinstance(raw_schema_names, list):
-            schema_names.update(str(item).strip() for item in raw_schema_names if str(item).strip())
+            for item in raw_schema_names:
+                schema_value = str(item).strip()
+                if not schema_value:
+                    continue
+                schema_names.add(_base_schema_name(schema_value))
         if schema_name:
-            schema_names.add(schema_name)
+            schema_names.add(_base_schema_name(schema_name))
 
         input_sources: set[str] = set()
         raw_input_sources = meta.get("input_sources")
@@ -873,6 +1025,7 @@ def _repair_summary_meta_line(
 def _materialize_summary_payload(
     *,
     model_acc: dict[str, dict[str, Any]],
+    variant_acc: dict[str, dict[str, Any]],
     global_metric_acc: dict[str, dict[str, float | int | None]],
     metric_keys: list[str],
     schema_name: str,
@@ -898,21 +1051,36 @@ def _materialize_summary_payload(
         accuracy_value: float | None = None
         if eval_total > 0:
             accuracy_value = eval_correct / eval_total
-        models_summary[model_name] = {
-            "processed": int(item["processed"]),
-            "ok": int(item["ok"]),
-            "invalid": int(item["invalid"]),
-            "error": int(item["error"]),
+    for variant_key in sorted(variant_acc.keys()):
+        variant_item = variant_acc[variant_key]
+        variant_model_id = str(variant_item.get("model_id") or "").strip()
+        include_reasoning = bool(variant_item.get("include_reasoning"))
+        variant_label = _variant_label(variant_model_id, include_reasoning)
+        variant_eval_total = int(variant_item.get("eval_total", 0) or 0)
+        variant_eval_correct = int(variant_item.get("eval_correct", 0) or 0)
+        variant_accuracy_value: float | None = None
+        if variant_eval_total > 0:
+            variant_accuracy_value = variant_eval_correct / variant_eval_total
+
+        variant_payload = {
+            "model_id": variant_model_id,
+            "include_reasoning": include_reasoning,
+            "schema_name": str(variant_item.get("schema_name") or "").strip(),
+            "processed": int(variant_item.get("processed", 0) or 0),
+            "ok": int(variant_item.get("ok", 0) or 0),
+            "invalid": int(variant_item.get("invalid", 0) or 0),
+            "error": int(variant_item.get("error", 0) or 0),
             "accuracy": {
-                "evaluated": eval_total,
-                "correct": eval_correct,
-                "value": accuracy_value,
+                "evaluated": variant_eval_total,
+                "correct": variant_eval_correct,
+                "value": variant_accuracy_value,
             },
             "metrics": {
-                metric_key: _metric_agg_summary(item["metrics"][metric_key])
+                metric_key: _metric_agg_summary(variant_item["metrics"][metric_key])
                 for metric_key in metric_keys
             },
         }
+        models_summary[variant_label] = variant_payload
 
     global_accuracy: float | None = None
     if total_eval > 0:
@@ -960,10 +1128,14 @@ def upsert_batch_execution_summary(
     metric_keys = ["duration_seconds", "ttft_seconds", "tokens_per_second", "total_duration_seconds"]
 
     lines = _read_jsonl_lines(out_path)
-    kept_lines, model_acc, global_metric_acc = _aggregate_models_from_jsonl_lines(
+    summary_schema_name = _resolve_summary_schema_name(
+        requested_schema_name=schema_name,
+        lines=lines,
+    )
+    kept_lines, model_acc, variant_acc, global_metric_acc = _aggregate_models_from_jsonl_lines(
         lines=lines,
         selected_models=selected_models,
-        schema_name=schema_name,
+        schema_name=summary_schema_name,
         metric_keys=metric_keys,
     )
 
@@ -973,13 +1145,14 @@ def upsert_batch_execution_summary(
     _repair_summary_meta_line(
         kept_lines=kept_lines,
         model_acc=model_acc,
-        schema_name=schema_name,
+        schema_name=summary_schema_name,
     )
     summary_payload = _materialize_summary_payload(
         model_acc=model_acc,
+        variant_acc=variant_acc,
         global_metric_acc=global_metric_acc,
         metric_keys=metric_keys,
-        schema_name=schema_name,
+        schema_name=summary_schema_name,
     )
 
     kept_lines.append(json.dumps({_BATCH_SUMMARY_KEY: summary_payload}, ensure_ascii=False))
@@ -1019,6 +1192,7 @@ def build_record(
     *,
     model_id: str,
     schema_name: str,
+    include_reasoning: bool = False,
     image_path: Path,
     duration_seconds: float,
     status: str,
@@ -1032,6 +1206,7 @@ def build_record(
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "model_id": model_id,
         "schema_name": schema_name,
+        "include_reasoning": include_reasoning,
         "image_path": str(image_path),
         "image_name": image_path.name,
         "status": status,
@@ -1070,79 +1245,59 @@ def _compute_metric_summary(total: float, count: int) -> dict[str, float | None]
     return {"avg": total / count}
 
 
-def _build_batch_summary(
-    *,
-    model_id: str,
-    schema_name: str,
-    prompt: str,
-    output_path: Path,
-    processed: int,
-    ok: int,
-    invalid: int,
-    fail: int,
-    total_available: int,
-    sample_size: int,
-    ttft_total: float,
-    ttft_count: int,
-    tps_total: float,
-    tps_count: int,
-    total_duration_total: float,
-    total_duration_count: int,
-    input_source: str,
-    discarded_manifest_rows: int = 0,
-) -> dict[str, Any]:
+def _build_batch_summary(*, context: _BatchSummaryContext) -> dict[str, Any]:
     """Construye el resumen parcial o final del batch runner."""
     return {
-        "model_id": model_id,
-        "schema_name": schema_name,
-        "prompt": prompt,
-        "output_path": str(output_path),
-        "processed": processed,
-        "ok": ok,
-        "invalid": invalid,
-        "fail": fail,
-        "total_available": total_available,
-        "sample_size": sample_size,
-        "input_source": input_source,
-        "discarded_manifest_rows": discarded_manifest_rows,
-        "ttft": _compute_metric_summary(ttft_total, ttft_count),
-        "tps": _compute_metric_summary(tps_total, tps_count),
-        "total_duration": _compute_metric_summary(total_duration_total, total_duration_count),
+        "model_id": context.model_id,
+        "schema_name": context.schema_name,
+        "prompt": context.prompt,
+        "output_path": str(context.output_path),
+        "processed": context.processed,
+        "ok": context.ok,
+        "invalid": context.invalid,
+        "fail": context.fail,
+        "total_available": context.total_available,
+        "sample_size": context.sample_size,
+        "input_source": context.input_source,
+        "discarded_manifest_rows": context.discarded_manifest_rows,
+        "ttft": _compute_metric_summary(context.ttft_total, context.ttft_count),
+        "tps": _compute_metric_summary(context.tps_total, context.tps_count),
+        "total_duration": _compute_metric_summary(
+            context.total_duration_total,
+            context.total_duration_count,
+        ),
     }
 
 
 def _resolve_batch_input_items(
     *,
-    image_dir: str | Path | None,
-    manifest: str | Path | None,
-    pending_image_paths: list[str] | None,
-    pending_entries: list[dict[str, Any]] | None,
+    request: _BatchInputRequest,
 ) -> tuple[str, list[BatchInputItem], int, Path | None]:
     """Resuelve origen de entrada y aplica filtros de pendientes cuando corresponde."""
     discarded_manifest_rows = 0
     manifest_path_obj: Path | None = None
 
-    if manifest is not None:
+    if request.manifest is not None:
         input_source = "manifest"
-        manifest_path_obj = Path(manifest)
+        manifest_path_obj = Path(request.manifest)
         discovered_items, discarded_manifest_rows = iter_manifest_items(manifest_path_obj)
-        if pending_entries:
+        if request.pending_entries:
             discovered_items = _filter_items_by_pending_entries(
                 discovered_items=discovered_items,
-                pending_entries=pending_entries,
+                pending_entries=request.pending_entries,
                 manifest_path=manifest_path_obj,
             )
-        elif pending_image_paths:
+        elif request.pending_image_paths:
             discovered_items = _filter_items_by_pending_image_paths(
                 discovered_items=discovered_items,
-                pending_image_paths=pending_image_paths,
+                pending_image_paths=request.pending_image_paths,
             )
         return input_source, discovered_items, discarded_manifest_rows, manifest_path_obj
 
-    if image_dir is None:
+    if request.image_dir is None:
         raise ValueError("image_dir no puede ser None cuando no se usa manifest")
     input_source = "image_dir"
-    discovered_items = [BatchInputItem(image_path=path) for path in iter_image_paths(Path(image_dir))]
+    discovered_items = [BatchInputItem(image_path=path) for path in iter_image_paths(Path(request.image_dir))]
     return input_source, discovered_items, discarded_manifest_rows, manifest_path_obj
 
 
@@ -1170,29 +1325,38 @@ def run_batch_job(
     if (image_dir is None) == (manifest is None):
         raise ValueError("Debes indicar exactamente uno de estos argumentos: image_dir o manifest")
 
-    public_schema_name, schema_cls = resolve_schema(schema_name, include_reasoning)
-    selected_prompt = prompt.strip() if prompt and prompt.strip() else build_prompt_for_schema(public_schema_name, schema_cls)
+    resolved_schema_name, schema_cls = resolve_schema(schema_name, include_reasoning)
+    base_schema_name = _base_schema_name(resolved_schema_name)
+    selected_prompt = (
+        prompt.strip()
+        if prompt and prompt.strip()
+        else build_prompt_for_schema(resolved_schema_name, schema_cls)
+    )
     input_source, discovered_items, discarded_manifest_rows, manifest_path_obj = _resolve_batch_input_items(
-        image_dir=image_dir,
-        manifest=manifest,
-        pending_image_paths=pending_image_paths,
-        pending_entries=pending_entries,
+        request=_BatchInputRequest(
+            image_dir=image_dir,
+            manifest=manifest,
+            pending_image_paths=pending_image_paths,
+            pending_entries=pending_entries,
+        )
     )
 
     images = select_images(discovered_items, max_images=max_images, shuffle=shuffle, seed=seed)
     total_images = len(images)
     total_available = len(discovered_items)
 
-    resolved_output_path = Path(output_path) if output_path is not None else build_default_output_path(public_schema_name)
+    resolved_output_path = Path(output_path) if output_path is not None else build_default_output_path(base_schema_name)
     if resolved_output_path.suffix.lower() != ".jsonl":
         resolved_output_path = resolved_output_path.with_suffix(".jsonl")
 
     _ensure_batch_meta_header(
-        output_path=resolved_output_path,
-        model_id=model_id,
-        schema_name=public_schema_name,
-        input_source=input_source,
-        manifest_path=manifest_path_obj,
+        request=_BatchMetaRequest(
+            output_path=resolved_output_path,
+            model_id=model_id,
+            schema_name=base_schema_name,
+            input_source=input_source,
+            manifest_path=manifest_path_obj,
+        )
     )
 
     loader = VLMLoader(
@@ -1219,24 +1383,26 @@ def run_batch_job(
 
     def build_summary() -> dict[str, Any]:
         return _build_batch_summary(
-            model_id=model_id,
-            schema_name=public_schema_name,
-            prompt=selected_prompt,
-            output_path=resolved_output_path,
-            processed=processed,
-            ok=ok,
-            invalid=invalid,
-            fail=fail,
-            total_available=total_available,
-            sample_size=total_images,
-            ttft_total=metric_totals["ttft_total"],
-            ttft_count=metric_counts["ttft_count"],
-            tps_total=metric_totals["tps_total"],
-            tps_count=metric_counts["tps_count"],
-            total_duration_total=metric_totals["total_duration_total"],
-            total_duration_count=metric_counts["total_duration_count"],
-            input_source=input_source,
-            discarded_manifest_rows=discarded_manifest_rows,
+            context=_BatchSummaryContext(
+                model_id=model_id,
+                schema_name=base_schema_name,
+                prompt=selected_prompt,
+                output_path=resolved_output_path,
+                processed=processed,
+                ok=ok,
+                invalid=invalid,
+                fail=fail,
+                total_available=total_available,
+                sample_size=total_images,
+                ttft_total=metric_totals["ttft_total"],
+                ttft_count=metric_counts["ttft_count"],
+                tps_total=metric_totals["tps_total"],
+                tps_count=metric_counts["tps_count"],
+                total_duration_total=metric_totals["total_duration_total"],
+                total_duration_count=metric_counts["total_duration_count"],
+                input_source=input_source,
+                discarded_manifest_rows=discarded_manifest_rows,
+            ),
         )
 
     def emit_progress(
@@ -1276,7 +1442,8 @@ def run_batch_job(
         )
         base_record_kwargs = _build_base_record_kwargs(
             model_id=model_id,
-            schema_name=public_schema_name,
+            schema_name=base_schema_name,
+            include_reasoning=include_reasoning,
         )
         progress_iter = tqdm(images, desc="Procesando imágenes", unit="img") if on_progress is None else images
         for index, item in enumerate(progress_iter, start=1):

@@ -22,6 +22,19 @@ def _format_metric_value(value: object, *, suffix: str = "") -> str:
     return f"{value}{suffix}"
 
 
+def _build_partial_metrics_line(summary: dict[str, object]) -> str:
+    """Construye línea estándar de promedios parciales TTFT/TPS/latencia."""
+    ttft = cast(dict[str, object], summary.get("ttft") or {})
+    tps = cast(dict[str, object], summary.get("tps") or {})
+    duration = cast(dict[str, object], summary.get("total_duration") or {})
+    return (
+        "Promedios parciales: "
+        f"TTFT={_format_metric_value(ttft.get('avg'), suffix=' s')} | "
+        f"TPS={_format_metric_value(tps.get('avg'))} | "
+        f"latencia={_format_metric_value(duration.get('avg'), suffix=' s')}"
+    )
+
+
 def _style_token(kit: "UIKit", name: str) -> str:
     """Devuelve un token ANSI si existe en el estilo actual."""
     return str(getattr(kit.style, name, ""))
@@ -188,6 +201,11 @@ def _build_progress_bar(kit: "UIKit", current: int, total: int) -> str:
         f"{pct_color}{_style_token(kit, 'BOLD')}{pct:>3}%{_style_token(kit, 'ENDC')}"
         f"  {_style_token(kit, 'DIM')}({current} / {total}){_style_token(kit, 'ENDC')}"
     )
+
+
+def _should_show_progress_bar(total: int) -> bool:
+    """Regla global: ocultar barras triviales (0/0 o 1/1)."""
+    return total > 1
 
 
 def _status_icon(status: str) -> str:
@@ -372,10 +390,11 @@ def _render_live_dashboard(
     dynamic_lines: list[str] =[
         "",
         _section_header(kit, "Progreso"),
-        f"  {_build_progress_bar(kit, current, total)}",
         f"  {stats_line}",
         f"  {dim}{status_line}{endc}",
     ]
+    if _should_show_progress_bar(total):
+        dynamic_lines.insert(2, f"  {_build_progress_bar(kit, current, total)}")
     
     if metrics_line:
         dynamic_lines.append(f"  {metrics_line}")

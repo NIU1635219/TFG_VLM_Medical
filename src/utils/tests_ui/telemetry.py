@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Callable, cast
 
 from .test_dashboards_ui import (
     _append_recent_record,
+    _build_partial_metrics_line,
     _build_recent_record_lines,
     _build_summary_lines,
     _coverage_fragments,
@@ -17,6 +18,7 @@ from .test_dashboards_ui import (
     _standard_final_intro,
     _telemetry_available,
 )
+from .shared import build_live_status_line
 
 if TYPE_CHECKING:
     from ..menu_kit import AppContext, UIKit
@@ -93,16 +95,19 @@ def run_telemetry_probe_wrapper(
                 availability = cast(dict[str, object], summary.get("telemetry_availability") or {})
                 coverage_line = " · ".join(_coverage_fragments(availability))
 
-                if event == "image_start":
-                    status_line = f"Estado: procesando {current_index}/{total} · {image_path}"
-                elif event == "image_done" and status == "ok":
-                    status_line = f"Estado: completada {current_index}/{total} · {image_path}"
-                elif event == "image_done":
-                    status_line = f"Estado: error {current_index}/{total} · {image_path}"
-                elif event == "complete":
-                    status_line = f"Estado: finalizado · {completed}/{total} imágenes procesadas"
-                else:
-                    status_line = f"Estado: preparando ejecución · muestra {total}"
+                status_line = build_live_status_line(
+                    event=event,
+                    current_index=current_index,
+                    total=total,
+                    item_label=image_path,
+                    status=status,
+                    completed=completed,
+                    on_start="Estado: procesando {current_index}/{total} · {item}",
+                    on_done_ok="Estado: completada {current_index}/{total} · {item}",
+                    on_done_default="Estado: error {current_index}/{total} · {item}",
+                    on_complete="Estado: finalizado · {completed}/{total} imágenes procesadas",
+                    on_prepare="Estado: preparando ejecución · muestra {total}",
+                )
 
                 if event == "image_done" and last_record is not None:
                     _append_recent_record(recent_records, last_record)
@@ -114,12 +119,7 @@ def run_telemetry_probe_wrapper(
                     total=total,
                     stats_line=f"Estadísticas: OK={summary.get('ok', 0)} | Errores={summary.get('fail', 0)}",
                     status_line=status_line,
-                    metrics_line=(
-                        "Promedios parciales: "
-                        f"TTFT={_format_metric_value(cast(dict[str, object], summary.get('ttft') or {}).get('avg'), suffix=' s')} | "
-                        f"TPS={_format_metric_value(cast(dict[str, object], summary.get('tps') or {}).get('avg'))} | "
-                        f"latencia={_format_metric_value(cast(dict[str, object], summary.get('total_duration') or {}).get('avg'), suffix=' s')}"
-                    ),
+                    metrics_line=_build_partial_metrics_line(summary),
                     coverage_line=f"Cobertura parcial: {coverage_line}" if coverage_line else None,
                     recent_title="Últimas inferencias:",
                     recent_records=list(recent_records),

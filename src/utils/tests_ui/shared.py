@@ -22,6 +22,115 @@ def as_yes(value: object) -> bool:
     return text in {"y", "yes", "s", "si", "true", "1"}
 
 
+def normalize_model_variants(raw_variants: Any) -> list[dict[str, Any]]:
+    """Normaliza y deduplica variantes `(model_id, include_reasoning)`.
+
+    Args:
+        raw_variants: Lista cruda de variantes proveniente de UI o manifiesto.
+
+    Returns:
+        Lista estable de variantes válidas.
+    """
+    if not isinstance(raw_variants, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    seen: set[tuple[str, bool]] = set()
+    for raw_variant in raw_variants:
+        if not isinstance(raw_variant, dict):
+            continue
+        model_id = str(raw_variant.get("model_id") or "").strip()
+        if not model_id:
+            continue
+        include_reasoning = bool(raw_variant.get("include_reasoning"))
+        key = (model_id, include_reasoning)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            {
+                "model_id": model_id,
+                "include_reasoning": include_reasoning,
+            }
+        )
+    return normalized
+
+
+def variant_label(model_id: str, include_reasoning: bool) -> str:
+    """Etiqueta de variante con modo de razonamiento."""
+    mode = "con razonamiento" if include_reasoning else "sin razonamiento"
+    return f"{model_id} [{mode}]"
+
+
+def safe_positive_int(value: Any, default: int = 1) -> int:
+    """Parsea enteros positivos con fallback seguro."""
+    try:
+        return max(1, int(value or default))
+    except (TypeError, ValueError):
+        return default
+
+
+def parse_required_positive_int(value: Any) -> int | None:
+    """Parsea entero positivo obligatorio; devuelve None si falta o es inválido."""
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def build_live_status_line(
+    *,
+    event: str,
+    current_index: int,
+    total: int,
+    item_label: str,
+    status: str,
+    completed: int,
+    on_start: str,
+    on_done_ok: str | None = None,
+    on_done_invalid: str | None = None,
+    on_done_default: str | None = None,
+    on_complete: str,
+    on_prepare: str,
+    start_event: str = "image_start",
+    done_event: str = "image_done",
+    complete_event: str = "complete",
+) -> str:
+    """Construye mensajes de estado en vivo para paneles de progreso.
+
+    Las plantillas aceptan placeholders: {current_index}, {total}, {item}, {status}, {completed}.
+    """
+    context = {
+        "current_index": current_index,
+        "total": total,
+        "item": item_label,
+        "status": str(status or ""),
+        "completed": completed,
+    }
+
+    if event == start_event:
+        return on_start.format(**context)
+
+    if event == done_event:
+        status_value = str(status or "").lower()
+        if status_value == "ok" and on_done_ok:
+            return on_done_ok.format(**context)
+        if status_value == "invalid" and on_done_invalid:
+            return on_done_invalid.format(**context)
+        if on_done_default:
+            return on_done_default.format(**context)
+
+    if event == complete_event:
+        return on_complete.format(**context)
+
+    return on_prepare.format(**context)
+
+
 def compact_model_label(model_tag: str, *, ui_width: int) -> str:
     """Compacta el model tag para pantallas estrechas preservando inicio/fin."""
     text = str(model_tag or "").strip()
@@ -173,6 +282,64 @@ def select_schema_reasoning_mode(
     return "Con razonamiento" in sel.label
 
 
+def select_schema_base(
+    kit: "UIKit",
+    *,
+    menu_prefix: str,
+    subtitle_prefix: str,
+    make_header_fn: Callable[[str], Callable[[], None]],
+    initial_schema_name: str | None = None,
+) -> str | None:
+    """Resolve only the base schema without asking reasoning mode.
+
+    Args:
+        kit: Terminal UI toolkit.
+        menu_prefix: Prefix used to build deterministic menu ids.
+        subtitle_prefix: Prefix shown in menu subtitle.
+        make_header_fn: Header factory callable.
+
+    Returns:
+        Selected base schema name, or `None` if cancelled.
+    """
+    from src.inference.schemas import SCHEMA_REGISTRY
+    from src.scripts.test_schema import format_schema_menu_description
+
+    schema_items = [
+        kit.MenuItem(name, description=format_schema_menu_description(name, cls))
+        for name, cls in SCHEMA_REGISTRY.items()
+    ]
+    schema_items.append(
+        kit.MenuItem(
+            "Volver al selector de modelos",
+            lambda: None,
+            description="Vuelve a la selección de modelo.",
+        )
+    )
+
+    selector_menu_id = f"{menu_prefix}_schema_selector"
+    if initial_schema_name:
+        try:
+            initial_index = next(
+                idx
+                for idx, item in enumerate(schema_items)
+                if str(getattr(item, "label", "")).strip() == str(initial_schema_name).strip()
+            )
+            kit.cursor_memory[selector_menu_id] = initial_index
+        except StopIteration:
+            pass
+
+    schema_sel = kit.menu(
+        schema_items,
+        header_func=make_header_fn(f"{subtitle_prefix} · SELECT SCHEMA"),
+        menu_id=selector_menu_id,
+        nav_hint_text="↑/↓ elegir esquema · ENTER confirmar · ESC volver",
+        description_slot_rows=15,
+    )
+    if not schema_sel or schema_sel.label.strip() == "Volver al selector de modelos":
+        return None
+    return str(schema_sel.label).strip() or None
+
+
 def select_schema_variant(
     kit: "UIKit",
     *,
@@ -318,3 +485,131 @@ def select_model(
         kit.wait("Press any key to return to tests menu...")
         return None
     return tag
+
+
+def select_model_variants(
+    kit: "UIKit",
+    app: "AppContext",
+    *,
+    menu_id: str,
+    subtitle: str,
+    make_header_fn: Callable[[str], Callable[[], None]],
+    initial_model_variants: list[dict[str, Any]] | None = None,
+) -> tuple[list[str], list[dict[str, Any]]] | None:
+    """Selecciona variantes por modelo (sin/con razonamiento).
+
+    Returns:
+        Tupla `(models, model_variants)` o None si se cancela.
+    """
+    installed = app.get_installed_lms_models()
+    if not installed:
+        kit.log(
+            "No hay modelos disponibles en LM Studio. Carga uno desde 'Manage/Pull LM Studio Models...'.",
+            "warning",
+        )
+        return None
+
+    model_items = []
+    for tag in installed:
+        child_without = kit.MenuItem(
+            "Sin razonamiento",
+            description="Ejecuta el schema base para este modelo.",
+        )
+        setattr(child_without, "_is_reasoning_variant", True)
+        setattr(child_without, "_model_id", tag)
+        setattr(child_without, "_include_reasoning", False)
+
+        child_with = kit.MenuItem(
+            "Con razonamiento",
+            description="Ejecuta la variante WithReasoning para este modelo.",
+        )
+        setattr(child_with, "_is_reasoning_variant", True)
+        setattr(child_with, "_model_id", tag)
+        setattr(child_with, "_include_reasoning", True)
+
+        parent = kit.MenuItem(
+            tag,
+            description="Selecciona uno o ambos modos de razonamiento para este modelo.",
+            children=[child_without, child_with],
+        )
+        setattr(parent, "_model_parent", tag)
+        model_items.append(parent)
+
+    initial_keys: set[tuple[str, bool]] = set()
+    for variant in normalize_model_variants(initial_model_variants or []):
+        model_id = str(variant.get("model_id") or "").strip()
+        if not model_id:
+            continue
+        initial_keys.add((model_id, bool(variant.get("include_reasoning"))))
+
+    if initial_keys:
+        for parent in model_items:
+            for child in getattr(parent, "children", []) or []:
+                model_id = str(getattr(child, "_model_id", "") or "").strip()
+                include_reasoning = bool(getattr(child, "_include_reasoning", False))
+                child.is_selected = (model_id, include_reasoning) in initial_keys
+
+    selected = kit.menu(
+        model_items,
+        header_func=make_header_fn(subtitle),
+        menu_id=menu_id,
+        multi_select=True,
+        nav_hint_text="↑/↓ navegar · SPACE marcar · ENTER confirmar · ESC cancelar",
+    )
+    if not selected:
+        return None
+    if not isinstance(selected, list):
+        selected = [selected]
+
+    model_variants: list[dict[str, Any]] = []
+    selected_parent_models: set[str] = set()
+    seen_keys: set[tuple[str, bool]] = set()
+    for item in selected:
+        is_variant = bool(getattr(item, "_is_reasoning_variant", False))
+        if is_variant:
+            model_id = str(getattr(item, "_model_id", "") or "").strip()
+            include_reasoning = bool(getattr(item, "_include_reasoning", False))
+            if not model_id:
+                continue
+            variant_key = (model_id, include_reasoning)
+            if variant_key in seen_keys:
+                continue
+            seen_keys.add(variant_key)
+            model_variants.append(
+                {
+                    "model_id": model_id,
+                    "include_reasoning": include_reasoning,
+                }
+            )
+            continue
+
+        parent_model = str(getattr(item, "_model_parent", "") or "").strip()
+        if parent_model:
+            selected_parent_models.add(parent_model)
+
+    for parent_model in selected_parent_models:
+        for include_reasoning in (False, True):
+            variant_key = (parent_model, include_reasoning)
+            if variant_key in seen_keys:
+                continue
+            seen_keys.add(variant_key)
+            model_variants.append(
+                {
+                    "model_id": parent_model,
+                    "include_reasoning": include_reasoning,
+                }
+            )
+
+    if not model_variants:
+        return None
+
+    ordered_models: list[str] = []
+    seen_models: set[str] = set()
+    for variant in model_variants:
+        model_id = str(variant.get("model_id") or "").strip()
+        if not model_id or model_id in seen_models:
+            continue
+        seen_models.add(model_id)
+        ordered_models.append(model_id)
+
+    return ordered_models, model_variants

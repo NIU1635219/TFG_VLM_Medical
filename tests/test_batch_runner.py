@@ -81,11 +81,12 @@ def test_build_base_inference_kwargs_is_stable_payload():
 
 
 def test_build_base_record_kwargs_contains_public_fields():
-    kwargs = _build_base_record_kwargs(model_id="m1", schema_name="S1")
+    kwargs = _build_base_record_kwargs(model_id="m1", schema_name="S1", include_reasoning=False)
 
     assert kwargs == {
         "model_id": "m1",
         "schema_name": "S1",
+        "include_reasoning": False,
     }
 
 
@@ -105,7 +106,11 @@ def test_build_ok_record_returns_record_and_telemetry(tmp_path):
 
     image_path = tmp_path / "img.png"
     image_path.write_bytes(b"img")
-    base_record_kwargs = _build_base_record_kwargs(model_id="m1", schema_name="PolypClassification")
+    base_record_kwargs = _build_base_record_kwargs(
+        model_id="m1",
+        schema_name="PolypClassification",
+        include_reasoning=False,
+    )
 
     record, telemetry = _build_ok_record(
         base_record_kwargs=base_record_kwargs,
@@ -124,7 +129,11 @@ def test_build_ok_record_returns_record_and_telemetry(tmp_path):
 def test_build_error_record_returns_classified_status_and_record(tmp_path):
     image_path = tmp_path / "img.png"
     image_path.write_bytes(b"img")
-    base_record_kwargs = _build_base_record_kwargs(model_id="m1", schema_name="PolypClassification")
+    base_record_kwargs = _build_base_record_kwargs(
+        model_id="m1",
+        schema_name="PolypClassification",
+        include_reasoning=False,
+    )
 
     error = RuntimeError("La salida no cumple el esquema")
     record, status = _build_error_record(
@@ -747,8 +756,8 @@ def test_batch_meta_header_tracks_multiple_models_and_summary_line(tmp_path):
 
     assert summary is not None
     assert summary["model_count"] == 2
-    assert summary["models"]["model-a"]["metrics"]["ttft_seconds"]["avg"] == pytest.approx(0.2)
-    assert summary["models"]["model-b"]["metrics"]["ttft_seconds"]["avg"] == pytest.approx(0.4)
+    assert summary["models"]["model-a [sin razonamiento]"]["metrics"]["ttft_seconds"]["avg"] == pytest.approx(0.2)
+    assert summary["models"]["model-b [sin razonamiento]"]["metrics"]["ttft_seconds"]["avg"] == pytest.approx(0.4)
     assert summary["global"]["metrics"]["ttft_seconds"]["min"] == pytest.approx(0.2)
     assert summary["global"]["metrics"]["ttft_seconds"]["max"] == pytest.approx(0.4)
     assert summary["global"]["metrics"]["ttft_seconds"]["avg"] == pytest.approx(0.3)
@@ -878,13 +887,81 @@ def test_upsert_batch_execution_summary_includes_accuracy(tmp_path):
     )
 
     assert summary is not None
-    assert summary["models"]["model-a"]["accuracy"]["evaluated"] == 2
-    assert summary["models"]["model-a"]["accuracy"]["correct"] == 1
-    assert summary["models"]["model-a"]["accuracy"]["value"] == pytest.approx(0.5)
-    assert summary["models"]["model-b"]["accuracy"]["value"] == pytest.approx(1.0)
+    assert summary["models"]["model-a [sin razonamiento]"]["accuracy"]["evaluated"] == 2
+    assert summary["models"]["model-a [sin razonamiento]"]["accuracy"]["correct"] == 1
+    assert summary["models"]["model-a [sin razonamiento]"]["accuracy"]["value"] == pytest.approx(0.5)
+    assert summary["models"]["model-b [sin razonamiento]"]["accuracy"]["value"] == pytest.approx(1.0)
     assert summary["global"]["accuracy"]["evaluated"] == 3
     assert summary["global"]["accuracy"]["correct"] == 2
     assert summary["global"]["accuracy"]["value"] == pytest.approx(2.0 / 3.0)
+
+
+def test_upsert_batch_execution_summary_accepts_base_schema_filter(tmp_path):
+    output_path = tmp_path / "multi_schema_results.jsonl"
+    rows = [
+        {
+            "__batch_meta__": {
+                "version": 2,
+                "created_at_utc": "2026-03-16T12:00:00+00:00",
+                "updated_at_utc": "2026-03-16T12:00:00+00:00",
+                "output_mode": "shared_jsonl",
+                "model_ids": ["model-a"],
+                "schema_names": ["PolypClassification", "PolypClassificationWithReasoning"],
+                "input_sources": ["manifest"],
+            }
+        },
+        {
+            "model_id": "model-a",
+            "schema_name": "PolypClassification",
+            "status": "ok",
+            "ground_truth_cls": "AD",
+            "payload": {"predicted_class": "AD"},
+            "duration_seconds": 1.0,
+            "ttft_seconds": 0.2,
+            "tokens_per_second": 20.0,
+            "total_duration_seconds": 0.8,
+        },
+        {
+            "model_id": "model-a",
+            "schema_name": "PolypClassification",
+            "include_reasoning": True,
+            "status": "ok",
+            "ground_truth_cls": "HP",
+            "payload": {"predicted_class": "HP"},
+            "duration_seconds": 2.0,
+            "ttft_seconds": 0.4,
+            "tokens_per_second": 40.0,
+            "total_duration_seconds": 1.6,
+        },
+    ]
+    output_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    summary = upsert_batch_execution_summary(
+        output_path=output_path,
+        schema_name="PolypClassification",
+        model_ids=["model-a"],
+    )
+
+    assert summary is not None
+    assert summary["schema_name"] == "PolypClassification"
+    assert summary["global"]["processed"] == 2
+    assert summary["global"]["accuracy"]["evaluated"] == 2
+    assert summary["global"]["accuracy"]["correct"] == 2
+    assert summary["model_count"] == 2
+    assert "model-a [sin razonamiento]" in summary["models"]
+    assert "model-a [con razonamiento]" in summary["models"]
+    assert summary["models"]["model-a [sin razonamiento]"]["include_reasoning"] is False
+    assert summary["models"]["model-a [con razonamiento]"]["include_reasoning"] is True
+    assert summary["models"]["model-a [sin razonamiento]"]["processed"] == 1
+    assert summary["models"]["model-a [con razonamiento]"]["processed"] == 1
+
+    all_rows = [
+        json.loads(line)
+        for line in output_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    summary_rows = [row for row in all_rows if isinstance(row.get("__batch_summary__"), dict)]
+    assert len(summary_rows) == 1
 
 
 def test_run_batch_job_filters_pending_entries_by_iteration(monkeypatch, tmp_path):

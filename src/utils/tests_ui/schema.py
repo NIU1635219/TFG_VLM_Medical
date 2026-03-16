@@ -16,6 +16,7 @@ from .test_dashboards_ui import (
     _render_live_dashboard,
     _standard_final_intro,
 )
+from .shared import build_live_status_line
 
 if TYPE_CHECKING:
     from ..menu_kit import AppContext, UIKit
@@ -97,16 +98,19 @@ def run_schema_tester_wrapper(
                     + _coerce_int(summary.get("fail"))
                 )
 
-                if event == "image_start":
-                    status_line = f"Estado: procesando {current_index}/{total} · {image_path}"
-                elif event == "image_done" and str(payload.get("status") or "") == "ok":
-                    status_line = f"Estado: validada {current_index}/{total} · {image_path}"
-                elif event == "image_done" and str(payload.get("status") or "") == "invalid":
-                    status_line = f"Estado: JSON inválido {current_index}/{total} · {image_path}"
-                elif event == "complete":
-                    status_line = f"Estado: finalizado · {completed}/{total} imágenes revisadas"
-                else:
-                    status_line = f"Estado: preparando ejecución · muestra {total}"
+                status_line = build_live_status_line(
+                    event=event,
+                    current_index=current_index,
+                    total=total,
+                    item_label=image_path,
+                    status=str(payload.get("status") or ""),
+                    completed=completed,
+                    on_start="Estado: procesando {current_index}/{total} · {item}",
+                    on_done_ok="Estado: validada {current_index}/{total} · {item}",
+                    on_done_invalid="Estado: JSON inválido {current_index}/{total} · {item}",
+                    on_complete="Estado: finalizado · {completed}/{total} imágenes revisadas",
+                    on_prepare="Estado: preparando ejecución · muestra {total}",
+                )
 
                 if event == "image_done" and last_record is not None:
                     _append_recent_record(recent_records, last_record)

@@ -14,6 +14,7 @@ from .test_dashboards_ui import (
     _render_live_dashboard,
     _standard_final_intro,
 )
+from .shared import build_live_status_line
 
 if TYPE_CHECKING:
     from ..menu_kit import AppContext, UIKit
@@ -86,14 +87,21 @@ def run_smoke_test_wrapper(
                     "Estado: modelo precargado en "
                     f"{_format_metric_value(summary.get('preload_seconds'), suffix=' s')}"
                 )
-            elif event == "case_start":
-                status_line = f"Estado: procesando {current_index}/{total} · {case.get('id', 'caso')}"
-            elif event == "case_done":
-                status_line = f"Estado: completado {current_index}/{total} · {case.get('id', 'caso')}"
-            elif event == "complete":
-                status_line = f"Estado: finalizado · {processed}/{total} casos revisados"
             else:
-                status_line = f"Estado: preparando ejecución · muestra {total}"
+                status_line = build_live_status_line(
+                    event=event,
+                    current_index=current_index,
+                    total=total,
+                    item_label=str(case.get("id", "caso")),
+                    status=str(payload.get("status") or ""),
+                    completed=processed,
+                    on_start="Estado: procesando {current_index}/{total} · {item}",
+                    on_done_default="Estado: completado {current_index}/{total} · {item}",
+                    on_complete="Estado: finalizado · {completed}/{total} casos revisados",
+                    on_prepare="Estado: preparando ejecución · muestra {total}",
+                    start_event="case_start",
+                    done_event="case_done",
+                )
 
             if event == "case_done" and record is not None:
                 record_dict = cast(dict[str, object], record)

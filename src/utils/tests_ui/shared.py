@@ -1,12 +1,81 @@
 from __future__ import annotations
 
 import os
+import threading
 from typing import TYPE_CHECKING, Any, Callable
 
 from ..setup_ui_io import ask_text
 
 if TYPE_CHECKING:
     from ..menu_kit import AppContext, UIKit
+
+
+class ReactiveTerminalRenderer:
+    """Coordina repintado seguro y watcher de resize para paneles en vivo.
+
+    Permite que una pantalla de ejecución larga re-renderice de forma continua
+    cuando el ancho del terminal cambia, incluso si no llegan nuevos eventos
+    de progreso.
+    """
+
+    def __init__(
+        self,
+        *,
+        kit: "UIKit",
+        render_fn: Callable[..., None],
+        poll_interval_seconds: float = 0.08,
+    ) -> None:
+        """Inicializa el controlador reactivo para una pantalla en vivo.
+
+        Args:
+            kit: Toolkit de terminal.
+            render_fn: Callback de render principal. Debe aceptar opcionalmente
+                `force_full` para forzar repaint completo.
+            poll_interval_seconds: Intervalo de sondeo del watcher de ancho.
+        """
+        self._kit = kit
+        self._render_fn = render_fn
+        self._poll_interval_seconds = max(0.02, float(poll_interval_seconds))
+        self._lock = threading.Lock()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _safe_render(self, *, force_full: bool | None = None) -> None:
+        """Renderiza de forma sincronizada para evitar colisiones de salida."""
+        with self._lock:
+            if force_full is None:
+                self._render_fn()
+            else:
+                self._render_fn(force_full=force_full)
+
+    def _watch_resize(self) -> None:
+        """Sondea ancho de terminal y fuerza repaint cuando cambia."""
+        previous_width = self._kit.width()
+        while not self._stop_event.is_set():
+            current_width = self._kit.width()
+            if current_width != previous_width:
+                previous_width = current_width
+                self._safe_render(force_full=True)
+            self._stop_event.wait(self._poll_interval_seconds)
+
+    def start(self) -> None:
+        """Inicia el watcher de resize si todavía no está activo."""
+        if self._thread is not None:
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._watch_resize, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Detiene el watcher y sincroniza el cierre del hilo."""
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=0.25)
+            self._thread = None
+
+    def render(self) -> None:
+        """Solicita render normal del frame actual."""
+        self._safe_render(force_full=None)
 
 
 def normalize_state_value(value: object) -> str:

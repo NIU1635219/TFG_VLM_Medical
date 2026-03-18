@@ -5,7 +5,7 @@ Cada clase define el contrato de respuesta JSON que el modelo ha de cumplir.
 Se inyectan dinámicamente en VLMLoader.inference() para forzar el response_format.
 """
 
-from typing import Any, Literal, cast
+from typing import Any, ClassVar, Literal, cast
 
 from pydantic import BaseModel, Field, create_model
 
@@ -15,6 +15,7 @@ def _create_reasoning_schema(
     *,
     reasoning_description: str,
     docstring: str,
+    insert_reasoning_before: str | None = None,
 ) -> type[BaseModel]:
     """
     Genera dinámicamente una variante del esquema con el campo ``reasoning``.
@@ -53,22 +54,41 @@ def _create_reasoning_schema(
         properties = schema.get("properties")
         if isinstance(properties, dict) and "reasoning" in properties:
             reasoning_property = properties["reasoning"]
-            remaining_properties = {
-                field_name: field_schema
-                for field_name, field_schema in properties.items()
-                if field_name != "reasoning"
-            }
-            schema["properties"] = {
-                "reasoning": reasoning_property,
-                **remaining_properties,
-            }
+            ordered_properties: dict[str, Any] = {}
+            inserted = False
+            for field_name, field_schema in properties.items():
+                if field_name == "reasoning":
+                    continue
+                if (
+                    not inserted
+                    and insert_reasoning_before
+                    and field_name == insert_reasoning_before
+                ):
+                    ordered_properties["reasoning"] = reasoning_property
+                    inserted = True
+                ordered_properties[field_name] = field_schema
+            if not inserted:
+                ordered_properties = {"reasoning": reasoning_property, **ordered_properties}
+            schema["properties"] = ordered_properties
 
         required = schema.get("required")
         if isinstance(required, list) and "reasoning" in required:
-            schema["required"] = [
-                "reasoning",
-                *[field_name for field_name in required if field_name != "reasoning"],
-            ]
+            ordered_required: list[str] = []
+            inserted_required = False
+            for field_name in required:
+                if field_name == "reasoning":
+                    continue
+                if (
+                    not inserted_required
+                    and insert_reasoning_before
+                    and field_name == insert_reasoning_before
+                ):
+                    ordered_required.append("reasoning")
+                    inserted_required = True
+                ordered_required.append(field_name)
+            if not inserted_required:
+                ordered_required.insert(0, "reasoning")
+            schema["required"] = ordered_required
         return schema
 
     reasoning_base = cast(
@@ -83,14 +103,29 @@ def _create_reasoning_schema(
         ),
     )
 
-    field_definitions: dict[str, Any] = {
-        "reasoning": (
-            str,
-            Field(..., description=reasoning_description),
-        )
-    }
+    field_definitions: dict[str, Any] = {}
+    inserted_field = False
     for field_name, field_info in base_cls.model_fields.items():
+        if (
+            not inserted_field
+            and insert_reasoning_before
+            and field_name == insert_reasoning_before
+        ):
+            field_definitions["reasoning"] = (
+                str,
+                Field(..., description=reasoning_description),
+            )
+            inserted_field = True
         field_definitions[field_name] = (field_info.annotation, field_info)
+
+    if not inserted_field:
+        field_definitions = {
+            "reasoning": (
+                str,
+                Field(..., description=reasoning_description),
+            ),
+            **field_definitions,
+        }
 
     reasoning_cls = cast(
         type[BaseModel],
@@ -203,6 +238,72 @@ class PolypClassification(BaseModel):
     )
 
 
+class ClassEvidence(BaseModel):
+    """
+    Evidencia clínica detallada para una clase diagnóstica concreta.
+
+    Estructura argumentos visuales y clínicos a favor y en contra para forzar
+    razonamiento explícito antes de la decisión final.
+    """
+
+    evidence_for: str = Field(
+        ...,
+        description=(
+            "Argumentos visuales y clínicos detallados que apoyan fuertemente "
+            "que la lesión pertenece a esta clase específica."
+        ),
+    )
+    evidence_against: str = Field(
+        ...,
+        description=(
+            "Argumentos visuales y clínicos que descartan o reducen drásticamente "
+            "la probabilidad de que la lesión pertenezca a esta clase."
+        ),
+    )
+
+
+class AdvancedPolypClassification(BaseModel):
+    """
+    Esquema de CoT estructurado para clasificación diagnóstica de pólipos.
+
+    Obliga al modelo a revisar evidencia para cada clase (AD, HP, ASS), emitir
+    consenso clínico y cerrar con un diagnóstico final estricto.
+    """
+
+    DEFAULT_SYSTEM_PROMPT: ClassVar[str] = (
+        "Eres un comité médico experto en gastroenterología. Tu tarea es analizar "
+        "esta lesión endoscópica paso a paso. Primero, busca activamente evidencias "
+        "a favor y en contra de que sea un Adenoma (AD), un Pólipo Hiperplásico "
+        "(HP) o un Adenoma Serrado Sésil (ASS). Luego, elabora un consenso clínico "
+        "basado ÚNICAMENTE en tus hallazgos previos. Finalmente, emite el "
+        "diagnóstico final estricto ('AD', 'HP' o 'ASS')."
+    )
+
+    analysis_ad: ClassEvidence = Field(
+        ...,
+        description="Análisis exhaustivo a favor y en contra de que la lesión sea un Adenoma (AD).",
+    )
+    analysis_hp: ClassEvidence = Field(
+        ...,
+        description="Análisis exhaustivo a favor y en contra de que la lesión sea un Pólipo Hiperplásico (HP).",
+    )
+    analysis_ass: ClassEvidence = Field(
+        ...,
+        description="Análisis exhaustivo a favor y en contra de que la lesión sea un Adenoma Serrado Sésil (ASS).",
+    )
+    clinical_consensus: str = Field(
+        ...,
+        description=(
+            "Debate interno final y razonado basado en las evidencias recopiladas "
+            "anteriormente para llegar a una conclusión diagnóstica definitiva."
+        ),
+    )
+    final_diagnosis: Literal["AD", "HP", "ASS"] = Field(
+        ...,
+        description="Diagnóstico final y definitivo. Solo puede ser estrictamente 'AD', 'HP' o 'ASS'.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Esquema 2 – Test de complacencia (sycophancy test)
 # ---------------------------------------------------------------------------
@@ -280,6 +381,7 @@ SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "GenericObjectDetection": GenericObjectDetection,
     "PolypDetection": PolypDetection,
     "PolypClassification": PolypClassification,
+    "AdvancedPolypClassification": AdvancedPolypClassification,
     "SycophancyTest": SycophancyTest,
     "ImageQualityAssessment": ImageQualityAssessment,
 }
@@ -323,6 +425,21 @@ PolypClassificationWithReasoning = _create_reasoning_schema(
     ),
 )
 
+AdvancedPolypClassificationWithReasoning = _create_reasoning_schema(
+    AdvancedPolypClassification,
+    reasoning_description=(
+        "Proceso lógico paso a paso previo al diagnóstico final: revisión de evidencias "
+        "a favor y en contra de AD, HP y ASS, seguido de consenso clínico."
+    ),
+    docstring=(
+        "Variante con razonamiento explícito adicional para clasificación avanzada.\n\n"
+        "El campo ``reasoning`` aparece justo antes de ``clinical_consensus`` y complementa "
+        "el análisis estructurado "
+        "por clase antes del diagnóstico final."
+    ),
+    insert_reasoning_before="clinical_consensus",
+)
+
 SycophancyTestWithReasoning = _create_reasoning_schema(
     SycophancyTest,
     reasoning_description=(
@@ -353,6 +470,7 @@ REASONING_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "GenericObjectDetection": GenericObjectDetectionWithReasoning,
     "PolypDetection": PolypDetectionWithReasoning,
     "PolypClassification": PolypClassificationWithReasoning,
+    "AdvancedPolypClassification": AdvancedPolypClassificationWithReasoning,
     "SycophancyTest": SycophancyTestWithReasoning,
     "ImageQualityAssessment": ImageQualityAssessmentWithReasoning,
 }

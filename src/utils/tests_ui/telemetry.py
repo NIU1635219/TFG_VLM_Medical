@@ -18,7 +18,7 @@ from .test_dashboards_ui import (
     _standard_final_intro,
     _telemetry_available,
 )
-from .shared import build_live_status_line
+from .shared import ReactiveTerminalRenderer, build_live_status_line
 
 if TYPE_CHECKING:
     from ..menu_kit import AppContext, UIKit
@@ -44,6 +44,7 @@ def run_telemetry_probe_wrapper(
     from src.scripts.test_telemetry import run_telemetry_batch
 
     while True:
+        final_screen_renderer: Callable[[int], None] | None = None
         model_tag = select_model(
             "telemetry_probe_model_selector",
             "TELEMETRY PROBE · SELECT MODEL",
@@ -77,6 +78,40 @@ def run_telemetry_probe_wrapper(
                 subtitle=f"TELEMETRY PROBE · {schema_name}",
                 intro=f"Midiendo telemetría sobre hasta 5 imágenes con el modelo {model_tag}...",
             )
+            live_summary: dict[str, object] = {
+                "ok": 0,
+                "fail": 0,
+                "telemetry_availability": {},
+            }
+            live_total = min(5, len(images))
+            live_status_line = f"Estado: preparando ejecución · muestra {live_total}"
+
+            def _render_live_telemetry_dashboard(*, force_full: bool | None = None) -> None:
+                """Renderiza el dashboard de telemetría con estado incremental."""
+                completed_live = _coerce_int(live_summary.get("ok")) + _coerce_int(live_summary.get("fail"))
+                availability_live = cast(dict[str, object], live_summary.get("telemetry_availability") or {})
+                coverage_live = " · ".join(_coverage_fragments(availability_live))
+                _render_live_dashboard(
+                    kit,
+                    panel,
+                    current=completed_live,
+                    total=live_total,
+                    stats_line=(
+                        f"Estadísticas: OK={live_summary.get('ok', 0)} | "
+                        f"Errores={live_summary.get('fail', 0)}"
+                    ),
+                    status_line=live_status_line,
+                    metrics_line=_build_partial_metrics_line(live_summary),
+                    coverage_line=f"Cobertura parcial: {coverage_live}" if coverage_live else None,
+                    recent_title="Últimas inferencias:",
+                    recent_records=list(recent_records),
+                    force_full=force_full,
+                )
+
+            live_renderer = ReactiveTerminalRenderer(
+                kit=kit,
+                render_fn=_render_live_telemetry_dashboard,
+            )
 
             def on_probe_progress(payload: dict[str, object]) -> None:
                 """
@@ -85,19 +120,21 @@ def run_telemetry_probe_wrapper(
                 Args:
                     payload: Evento de progreso emitido por el probe de telemetría.
                 """
+                nonlocal live_total, live_status_line
                 summary = cast(dict[str, object], payload.get("summary") or {})
+                live_summary.clear()
+                live_summary.update(summary)
                 completed = _coerce_int(summary.get("ok")) + _coerce_int(summary.get("fail"))
                 total = _coerce_int(payload.get("total"))
+                live_total = total
                 event = str(payload.get("event") or "")
                 image_path = _rel_probe_path(cast(str | None, payload.get("image_path")))
                 status = str(payload.get("status") or "")
                 current_index = _coerce_int(payload.get("index"))
                 record_payload = payload.get("record")
                 last_record = record_payload if isinstance(record_payload, dict) else None
-                availability = cast(dict[str, object], summary.get("telemetry_availability") or {})
-                coverage_line = " · ".join(_coverage_fragments(availability))
 
-                status_line = build_live_status_line(
+                live_status_line = build_live_status_line(
                     event=event,
                     current_index=current_index,
                     total=total,
@@ -114,27 +151,20 @@ def run_telemetry_probe_wrapper(
                 if event == "image_done" and last_record is not None:
                     _append_recent_record(recent_records, last_record)
 
-                _render_live_dashboard(
-                    kit,
-                    panel,
-                    current=completed,
-                    total=total,
-                    stats_line=f"Estadísticas: OK={summary.get('ok', 0)} | Errores={summary.get('fail', 0)}",
-                    status_line=status_line,
-                    metrics_line=_build_partial_metrics_line(summary),
-                    coverage_line=f"Cobertura parcial: {coverage_line}" if coverage_line else None,
-                    recent_title="Últimas inferencias:",
-                    recent_records=list(recent_records),
-                )
+                live_renderer.render()
 
-            summary = run_telemetry_batch(
-                model_id=model_tag,
-                schema_name=schema_name,
-                schema_cls=schema_cls,
-                images=images,
-                max_images=5,
-                on_progress=on_probe_progress,
-            )
+            live_renderer.start()
+            try:
+                summary = run_telemetry_batch(
+                    model_id=model_tag,
+                    schema_name=schema_name,
+                    schema_cls=schema_cls,
+                    images=images,
+                    max_images=5,
+                    on_progress=on_probe_progress,
+                )
+            finally:
+                live_renderer.stop()
             availability = cast(dict[str, object], summary.get("telemetry_availability") or {})
             rows = [
                 ("Modelo", summary["model_id"], "OK"),
@@ -217,6 +247,7 @@ def run_telemetry_probe_wrapper(
                 kit,
                 cast(list[dict[str, object]], summary["records"]),
                 truncate=False,
+                ui_width=kit.width(),
             )
 
             note_lines = []
@@ -229,17 +260,31 @@ def run_telemetry_probe_wrapper(
             if coverage_fragments:
                 kit.log(f"Cobertura: {' · '.join(coverage_fragments)}", "step")
                 note_lines.append(f"  Cobertura: {' · '.join(coverage_fragments)}")
-            _render_final_sections_screen(
-                kit,
-                app,
-                subtitle=f"TELEMETRY PROBE · {schema_name}",
-                intro=_standard_final_intro(),
-                sections=[
-                    ("Resumen", _build_summary_lines(kit, [(str(a), str(b), str(c)) for a, b, c in rows])),
+            def _redraw_final_telemetry_screen(_ui_width: int) -> None:
+                """Re-renderiza la pantalla final de telemetría tras cambio de ancho."""
+                sections = [
+                    (
+                        "Resumen",
+                        _build_summary_lines(
+                            kit,
+                            [(str(a), str(b), str(c)) for a, b, c in rows],
+                            ui_width=_ui_width,
+                        ),
+                    ),
                     ("Observaciones", note_lines or ["  Sin observaciones adicionales."]),
-                    ("Actividad reciente", detail_lines),
-                ],
-            )
+                    ("Actividad reciente", _build_recent_record_lines(kit, cast(list[dict[str, object]], summary["records"]), truncate=False, ui_width=_ui_width)),
+                ]
+                _render_final_sections_screen(
+                    kit,
+                    app,
+                    subtitle=f"TELEMETRY PROBE · {schema_name}",
+                    intro=_standard_final_intro(),
+                    ui_width=_ui_width,
+                    sections=sections,
+                )
+
+            _redraw_final_telemetry_screen(kit.width())
+            final_screen_renderer = _redraw_final_telemetry_screen
             if summary["fail"] == 0:
                 kit.log(
                     f"Telemetry Probe completado: {summary['ok']} inferencias OK.",
@@ -252,4 +297,11 @@ def run_telemetry_probe_wrapper(
                 )
         except Exception as error:
             kit.log(f"Telemetry Probe terminó con error: {error}", "error")
-        kit.wait("Press any key to return to model selector...")
+        if final_screen_renderer is None:
+            kit.wait("Press any key to return to model selector...")
+        else:
+            kit.render_and_wait_responsive(
+                render_fn=final_screen_renderer,
+                message="Press any key to return to model selector...",
+                initial_render=False,
+            )

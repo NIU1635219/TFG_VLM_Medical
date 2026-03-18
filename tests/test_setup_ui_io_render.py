@@ -1,5 +1,9 @@
 """Tests para helpers de render compartido en setup_ui_io."""
 
+from types import SimpleNamespace
+
+import src.utils.setup_ui_io as setup_ui_io
+from src.utils.tests_ui.test_dashboards_ui import _build_recent_record_lines
 from src.utils.setup_ui_io import (
     compute_render_decision,
     paint_dynamic_lines,
@@ -130,3 +134,70 @@ def test_paint_dynamic_lines_incremental_with_cleanup(capsys):
     assert "\033[3F" in out
     assert out.count("\033[2K") >= 3
     assert result_rows == 1
+
+
+def test_wait_for_any_key_discards_residual_enter_before_return(monkeypatch, capsys):
+    fake_clock = {"value": 0.0}
+    sleep_calls: list[float] = []
+
+    class FakeMsvcrt:
+        def __init__(self) -> None:
+            self._pending_residual = True
+            self._actual_key_ready = False
+            self.getch_calls = 0
+
+        def kbhit(self) -> bool:
+            if self._pending_residual:
+                return True
+            if not self._actual_key_ready and fake_clock["value"] >= 0.16:
+                self._actual_key_ready = True
+            return self._actual_key_ready
+
+        def getch(self) -> bytes:
+            self.getch_calls += 1
+            if self._pending_residual:
+                self._pending_residual = False
+                return b"\r"
+            return b"x"
+
+    fake_msvcrt = FakeMsvcrt()
+
+    monkeypatch.setattr(setup_ui_io.time, "monotonic", lambda: fake_clock["value"])
+    monkeypatch.setattr(
+        setup_ui_io.time,
+        "sleep",
+        lambda seconds: sleep_calls.append(seconds) or fake_clock.__setitem__("value", fake_clock["value"] + seconds),
+    )
+
+    setup_ui_io.wait_for_any_key(
+        message="Press any key to return...",
+        style=SimpleNamespace(DIM="", ENDC=""),
+        os_module=SimpleNamespace(name="nt"),
+        msvcrt_module=fake_msvcrt,
+        poll_interval_seconds=0.05,
+    )
+
+    out = capsys.readouterr().out
+    assert "Press any key to return..." in out
+    assert fake_msvcrt.getch_calls == 2
+    assert sleep_calls
+    assert fake_clock["value"] >= 0.16
+
+
+def test_recent_record_separator_uses_frame_width():
+    class _Kit:
+        class style:
+            DIM = ""
+            ENDC = ""
+
+        def width(self) -> int:
+            return 120
+
+    lines = _build_recent_record_lines(
+        _Kit(),
+        [{"image_name": "a.tif", "status": "ok", "payload": None}],
+        truncate=False,
+        ui_width=40,
+    )
+
+    assert any(line == "  " + "─" * 36 for line in lines)

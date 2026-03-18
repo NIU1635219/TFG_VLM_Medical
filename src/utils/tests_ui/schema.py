@@ -16,7 +16,7 @@ from .test_dashboards_ui import (
     _render_live_dashboard,
     _standard_final_intro,
 )
-from .shared import build_live_status_line
+from .shared import ReactiveTerminalRenderer, build_live_status_line
 
 if TYPE_CHECKING:
     from ..menu_kit import AppContext, UIKit
@@ -41,6 +41,7 @@ def run_schema_tester_wrapper(
     from src.scripts.test_schema import find_images, format_schema_info, run_batch
 
     while True:
+        final_screen_renderer: Callable[[int], None] | None = None
         model_tag = select_model(
             "schema_tester_model_selector",
             "SCHEMA TESTER · SELECT MODEL",
@@ -79,6 +80,41 @@ def run_schema_tester_wrapper(
                 intro=f"Modelo: {model_tag} · validando hasta 5 imágenes de {len(images)} disponibles...",
                 static_lines=[f"  {line}" for line in schema_info_lines],
             )
+            live_summary: dict[str, object] = {
+                "ok": 0,
+                "invalid": 0,
+                "fail": 0,
+            }
+            live_total = min(5, len(images))
+            live_status_line = f"Estado: preparando ejecución · muestra {live_total}"
+
+            def _render_live_schema_dashboard(*, force_full: bool | None = None) -> None:
+                """Renderiza el dashboard de schema con el estado actual."""
+                completed_live = (
+                    _coerce_int(live_summary.get("ok"))
+                    + _coerce_int(live_summary.get("invalid"))
+                    + _coerce_int(live_summary.get("fail"))
+                )
+                _render_live_dashboard(
+                    kit,
+                    panel,
+                    current=completed_live,
+                    total=live_total,
+                    stats_line=(
+                        f"Estadísticas: OK={live_summary.get('ok', 0)} | "
+                        f"Inválidas={live_summary.get('invalid', 0)} | Errores={live_summary.get('fail', 0)}"
+                    ),
+                    status_line=live_status_line,
+                    metrics_line=None,
+                    recent_title="Últimas validaciones:",
+                    recent_records=list(recent_records),
+                    force_full=force_full,
+                )
+
+            live_renderer = ReactiveTerminalRenderer(
+                kit=kit,
+                render_fn=_render_live_schema_dashboard,
+            )
 
             def on_schema_progress(payload: dict[str, object]) -> None:
                 """
@@ -87,8 +123,12 @@ def run_schema_tester_wrapper(
                 Args:
                     payload: Evento de progreso emitido por el runner de schema.
                 """
+                nonlocal live_total, live_status_line
                 summary = cast(dict[str, object], payload.get("summary") or {})
+                live_summary.clear()
+                live_summary.update(summary)
                 total = _coerce_int(payload.get("total"))
+                live_total = total
                 event = str(payload.get("event") or "")
                 current_index = _coerce_int(payload.get("index"))
                 image_path = _rel_probe_path(cast(str | None, payload.get("image_path")))
@@ -100,7 +140,7 @@ def run_schema_tester_wrapper(
                     + _coerce_int(summary.get("fail"))
                 )
 
-                status_line = build_live_status_line(
+                live_status_line = build_live_status_line(
                     event=event,
                     current_index=current_index,
                     total=total,
@@ -118,22 +158,10 @@ def run_schema_tester_wrapper(
                     _append_recent_record(recent_records, last_record)
                     all_records.append(dict(last_record))
 
-                _render_live_dashboard(
-                    kit,
-                    panel,
-                    current=completed,
-                    total=total,
-                    stats_line=(
-                        f"Estadísticas: OK={summary.get('ok', 0)} | "
-                        f"Inválidas={summary.get('invalid', 0)} | Errores={summary.get('fail', 0)}"
-                    ),
-                    status_line=status_line,
-                    metrics_line=None,
-                    recent_title="Últimas validaciones:",
-                    recent_records=list(recent_records),
-                )
+                live_renderer.render()
 
             try:
+                live_renderer.start()
                 ok, fail, invalid = run_batch(
                     model_tag,
                     schema_name,
@@ -145,6 +173,8 @@ def run_schema_tester_wrapper(
                 if "on_progress" not in str(error):
                     raise
                 ok, fail, invalid = run_batch(model_tag, schema_name, schema_cls, images)
+            finally:
+                live_renderer.stop()
 
             summary_rows = _format_schema_summary_rows(
                 {
@@ -157,25 +187,32 @@ def run_schema_tester_wrapper(
                     "fail": fail,
                 }
             )
-            _render_final_sections_screen(
-                kit,
-                app,
-                subtitle=f"SCHEMA TESTER · {schema_name}",
-                intro=_standard_final_intro(),
-                sections=[
-                    ("Schema utilizado", [f"  {line}" for line in schema_info_lines]),
-                    ("Resumen", _build_summary_lines(kit, summary_rows)),
-                    (
-                        "Actividad reciente",
-                        _build_recent_record_lines(
-                            kit,
-                            all_records,
-                            empty_message="  Sin validaciones recientes.",
-                            truncate=False,
+            def _redraw_final_schema_screen(_ui_width: int) -> None:
+                """Re-renderiza la pantalla final del schema tester tras cambio de ancho."""
+                _render_final_sections_screen(
+                    kit,
+                    app,
+                    subtitle=f"SCHEMA TESTER · {schema_name}",
+                    intro=_standard_final_intro(),
+                    ui_width=_ui_width,
+                    sections=[
+                        ("Schema utilizado", [f"  {line}" for line in schema_info_lines]),
+                        ("Resumen", _build_summary_lines(kit, summary_rows, ui_width=_ui_width)),
+                        (
+                            "Actividad reciente",
+                            _build_recent_record_lines(
+                                kit,
+                                all_records,
+                                empty_message="  Sin validaciones recientes.",
+                                truncate=False,
+                                ui_width=_ui_width,
+                            ),
                         ),
-                    ),
-                ],
-            )
+                    ],
+                )
+
+            _redraw_final_schema_screen(kit.width())
+            final_screen_renderer = _redraw_final_schema_screen
             if fail > 0 or invalid > 0:
                 kit.log(
                     f"Schema Tester completado: {ok} válidas, {invalid} inválidas, {fail} errores.",
@@ -185,4 +222,11 @@ def run_schema_tester_wrapper(
                 kit.log(f"Schema Tester completado: {ok}/{ok} inferencias válidas.", "success")
         except Exception as error:
             kit.log(f"Schema Tester terminó con error: {error}", "error")
-        kit.wait("Press any key to return to model selector...")
+        if final_screen_renderer is None:
+            kit.wait("Press any key to return to model selector...")
+        else:
+            kit.render_and_wait_responsive(
+                render_fn=final_screen_renderer,
+                message="Press any key to return to model selector...",
+                initial_render=False,
+            )

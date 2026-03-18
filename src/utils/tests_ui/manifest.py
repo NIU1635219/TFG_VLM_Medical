@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterator, cast
 
-from ..setup_ui_io import ask_text
+from ..setup_ui_io import ask_choice, ask_text
 from .shared import (
     normalize_model_variants,
     parse_required_positive_int,
@@ -141,170 +141,6 @@ def _load_manifest_class_counts(csv_path: Path) -> dict[str, int]:
     for key, value in counts.items():
         normalized[str(key)] = int(value)
     return normalized
-
-
-def _select_manifest_sample_size(kit: "UIKit") -> int | str:
-    """
-    Solicita tamaño de muestra con previsualización por subgrupos.
-
-    Args:
-        kit: Toolkit de interfaz de usuario de terminal.
-
-    Returns:
-        Tamaño de muestra (entero positivo) o `"BACK"` si se cancela.
-    """
-    class_counts = _load_manifest_class_counts(Path("data/raw/m_train/train.csv"))
-    total_available = sum(class_counts.values())
-
-    from .manifest_generation import _compute_target_counts
-    total_distribution = " | ".join(
-        f"{cls_name}={class_counts[cls_name]}" for cls_name in sorted(class_counts.keys())
-    )
-
-    def _validate_sample_size(raw_value: str) -> str | None:
-        """
-        Valida tamaño de muestra escrito por el usuario.
-
-        Args:
-            raw_value: Texto confirmado en el campo de entrada.
-
-        Returns:
-            Mensaje de error si no es válido; `None` si es correcto.
-        """
-        if not raw_value:
-            return "Debes indicar un número entero positivo."
-        if not raw_value.isdigit():
-            return "Entrada inválida. Usa solo dígitos."
-        if int(raw_value) <= 0:
-            return "El tamaño debe ser mayor que cero."
-        return None
-
-    def _render_preview_lines(current_value: str, _ui_width: int) -> list[str]:
-        """
-        Construye líneas dinámicas del preview estratificado.
-
-        Args:
-            current_value: Valor actual del input.
-            _ui_width: Ancho actual de terminal (no requerido en este layout).
-
-        Returns:
-            Líneas para render dinámico bajo el campo de entrada.
-        """
-        style = kit.style
-        sample_size = int(current_value) if current_value.isdigit() else 0
-        preview_counts: dict[str, int] = {}
-        if sample_size > 0 and class_counts:
-            preview_counts = _compute_target_counts(class_counts, sample_size)
-
-        lines: list[str] = []
-        if class_counts:
-            lines.append(
-                f" {style.DIM}Dataset base: {total_available} imágenes · {len(class_counts)} clases{style.ENDC}"
-            )
-            if total_distribution:
-                lines.append(f" {style.DIM}Distribución total: {total_distribution}{style.ENDC}")
-            lines.append(" " + kit.divider(_ui_width))
-
-            if sample_size > 0:
-                if sample_size > total_available > 0:
-                    lines.append(
-                        f" {style.WARNING}Solicitud {sample_size}: se usará el máximo disponible ({total_available}).{style.ENDC}"
-                    )
-                lines.append(f" {style.BOLD}{style.OKCYAN}Distribución estimada del subgrupo:{style.ENDC}")
-                for cls_name in sorted(preview_counts.keys()):
-                    estimated = int(preview_counts[cls_name])
-                    pct = (estimated / sample_size * 100.0) if sample_size > 0 else 0.0
-                    lines.append(f"   {style.DIM}•{style.ENDC} {cls_name:<8} {estimated:>4} ({pct:>5.1f}%)")
-                lines.append(" " + kit.divider(_ui_width))
-                lines.append(
-                    f" {style.DIM}Total estimado: {sum(preview_counts.values())} / solicitado: {sample_size}{style.ENDC}"
-                )
-            else:
-                lines.append(
-                    f" {style.DIM}Empieza a escribir un número para ver el reparto estimado.{style.ENDC}"
-                )
-        else:
-            lines.append(
-                f" {style.WARNING}No se pudo leer data/raw/m_train/train.csv para previsualizar subgrupos.{style.ENDC}"
-            )
-        return lines
-
-    value = ask_text(
-        kit=kit,
-        title="BATCH RUNNER · MANIFEST SAMPLE SIZE",
-        intro_lines=[
-            f"{kit.style.DIM}Define el tamaño del subgrupo y valida en vivo el reparto estratificado por clase (cls).{kit.style.ENDC}",
-        ],
-        prompt_label="Entrada:",
-        help_line="[ENTER] confirmar · [Backspace] borrar · [ESC] cancelar",
-        allow_char_fn=lambda ch: ch.isdigit(),
-        normalize_on_submit_fn=lambda text: text.strip(),
-        validate_on_submit_fn=_validate_sample_size,
-        render_extra_lines_fn=_render_preview_lines,
-        force_full_on_update=True,
-    )
-    if value is None:
-        return "BACK"
-    return int(value)
-
-
-def _select_manifest_iterations_per_image(kit: "UIKit") -> int | str:
-    """
-    Solicita cuántas iteraciones ejecutar por imagen/modelo.
-
-    Args:
-        kit: Terminal UI toolkit.
-
-    Returns:
-        Entero positivo o "BACK" si se cancela.
-    """
-
-    def _validate_iterations(raw_value: str) -> str | None:
-        if not raw_value:
-            return "Debes indicar un número entero positivo."
-        if not raw_value.isdigit():
-            return "Entrada inválida. Usa solo dígitos."
-        if int(raw_value) <= 0:
-            return "El número de iteraciones debe ser mayor que cero."
-        if int(raw_value) > 100:
-            return "Por seguridad, el máximo permitido es 100 iteraciones por imagen."
-        return None
-
-    def _render_iterations_preview(current_value: str, _ui_width: int) -> list[str]:
-        style = kit.style
-        value = int(current_value) if current_value.isdigit() else 0
-        lines: list[str] = [
-            (
-                f" {style.DIM}Este valor multiplica el número de filas del manifiesto por imagen."
-                f"{style.ENDC}"
-            )
-        ]
-        if value > 0:
-            lines.append(f" {style.OKCYAN}Iteraciones por imagen: {value}x{style.ENDC}")
-        else:
-            lines.append(f" {style.DIM}Introduce un entero para continuar.{style.ENDC}")
-        return lines
-
-    value = ask_text(
-        kit=kit,
-        title="BATCH RUNNER · MANIFEST ITERATIONS",
-        intro_lines=[
-            (
-                f"{kit.style.DIM}Define cuántas veces se ejecutará cada imagen por modelo"
-                f" para estudiar variabilidad de respuestas.{kit.style.ENDC}"
-            ),
-        ],
-        prompt_label="Entrada:",
-        help_line="[ENTER] confirmar · [Backspace] borrar · [ESC] cancelar",
-        allow_char_fn=lambda ch: ch.isdigit(),
-        normalize_on_submit_fn=lambda text: text.strip(),
-        validate_on_submit_fn=_validate_iterations,
-        render_extra_lines_fn=_render_iterations_preview,
-        force_full_on_update=True,
-    )
-    if value is None:
-        return "BACK"
-    return int(value)
 
 
 def discover_experiment_manifests() -> list[str]:
@@ -634,6 +470,151 @@ def status_label(kit: "UIKit", snapshot: dict[str, Any]) -> str:
     return f"{color}● {visible}{endc}" if color else f"● {visible}"
 
 
+def _manifest_dashboard_metrics(overview: dict[str, Any]) -> dict[str, int | float]:
+    """
+    Calcula métricas agregadas para pintar badges de dashboard por manifiesto.
+
+    Args:
+        overview: Resumen devuelto por ``manifest_overview``.
+
+    Returns:
+        Diccionario con ``ok``, ``total``, ``pending`` y ``completion_pct``.
+    """
+    runs = cast(list[dict[str, Any]], overview.get("runs") or [])
+    total_ok = 0
+    total_total = 0
+    total_pending = 0
+    for run in runs:
+        snapshot = cast(dict[str, Any], run.get("snapshot") or {})
+        total_ok += int(snapshot.get("ok", 0))
+        total_total += int(snapshot.get("total", 0))
+        total_pending += int(snapshot.get("pending", 0))
+
+    completion_pct = 0.0
+    if total_total > 0:
+        completion_pct = max(0.0, min(100.0, (float(total_ok) / float(total_total)) * 100.0))
+
+    return {
+        "ok": total_ok,
+        "total": total_total,
+        "pending": total_pending,
+        "completion_pct": completion_pct,
+    }
+
+
+def _manifest_dashboard_badges(kit: "UIKit", overview: dict[str, Any]) -> str:
+    """
+    Construye badges compactos de progreso para mostrar junto a cada manifiesto.
+
+    Args:
+        kit: Toolkit de UI para estilos ANSI.
+        overview: Resumen del manifiesto.
+
+    Returns:
+        Cadena con badges de ``ok``, ``pending`` y ``% completado``.
+    """
+    style = kit.style
+    metrics = _manifest_dashboard_metrics(overview)
+    ok_value = int(metrics["ok"])
+    pending_value = int(metrics["pending"])
+    total_value = int(metrics["total"])
+    pct_value = float(metrics["completion_pct"])
+
+    ok_color = str(getattr(style, "OKGREEN", ""))
+    pending_color = str(getattr(style, "WARNING", "")) if pending_value > 0 else str(getattr(style, "DIM", ""))
+    if pct_value >= 100.0 and total_value > 0:
+        pct_color = str(getattr(style, "OKGREEN", ""))
+    elif pct_value <= 0.0:
+        pct_color = str(getattr(style, "FAIL", ""))
+    else:
+        pct_color = str(getattr(style, "OKCYAN", ""))
+    endc = str(getattr(style, "ENDC", ""))
+
+    return (
+        f"{ok_color}[ok {ok_value}/{total_value}]{endc} "
+        f"{pending_color}[pending {pending_value}]{endc} "
+        f"{pct_color}[{pct_value:>5.1f}%]{endc}"
+    )
+
+
+def _truncate_plain_text(text: str, max_len: int) -> str:
+    """
+    Recorta texto plano (sin ANSI) para adaptar labels a anchos reducidos.
+
+    Args:
+        text: Texto original.
+        max_len: Longitud máxima visible.
+
+    Returns:
+        Texto recortado con elipsis cuando sea necesario.
+    """
+    value = str(text or "")
+    if max_len <= 0:
+        return ""
+    if len(value) <= max_len:
+        return value
+    if max_len <= 1:
+        return value[:max_len]
+    return value[: max_len - 1] + "…"
+
+
+def _build_manifest_row_label(
+    *,
+    kit: "UIKit",
+    manifest_path: str,
+    overview: dict[str, Any],
+) -> str:
+    """
+    Construye un label de fila dinámico y compacto según el ancho de terminal.
+
+    Args:
+        kit: Toolkit de interfaz con acceso a ancho actual.
+        manifest_path: Ruta del manifiesto.
+        overview: Resumen del manifiesto.
+
+    Returns:
+        Label una-línea ajustado al ancho disponible.
+    """
+    metrics = _manifest_dashboard_metrics(overview)
+    status = snapshot_status_text(overview)
+
+    manifest_name = os.path.basename(manifest_path)
+    # Reserva para indicadores compactos de dashboard al final de la fila.
+    right_plain = (
+        f"OK {int(metrics['ok'])}/{int(metrics['total'])} · "
+        f"P {int(metrics['pending'])} · "
+        f"{float(metrics['completion_pct']):.1f}%"
+    )
+
+    # Ajuste dinámico: margen para prefijos del engine (> , indent, etc.).
+    content_budget = max(36, int(kit.width()) - 14)
+    left_budget = max(14, content_budget - len(right_plain) - 3)
+    left_plain = _truncate_plain_text(f"{manifest_name} · {status}", left_budget)
+
+    style = kit.style
+    ok_color = str(getattr(style, "OKGREEN", ""))
+    pending_color = (
+        str(getattr(style, "WARNING", ""))
+        if int(metrics["pending"]) > 0
+        else str(getattr(style, "DIM", ""))
+    )
+    pct_value = float(metrics["completion_pct"])
+    if pct_value >= 100.0 and int(metrics["total"]) > 0:
+        pct_color = str(getattr(style, "OKGREEN", ""))
+    elif pct_value <= 0.0:
+        pct_color = str(getattr(style, "FAIL", ""))
+    else:
+        pct_color = str(getattr(style, "OKCYAN", ""))
+    endc = str(getattr(style, "ENDC", ""))
+
+    right_colored = (
+        f"{ok_color}OK {int(metrics['ok'])}/{int(metrics['total'])}{endc} · "
+        f"{pending_color}P {int(metrics['pending'])}{endc} · "
+        f"{pct_color}{float(metrics['completion_pct']):.1f}%{endc}"
+    )
+    return f"{left_plain} · {right_colored}"
+
+
 def create_pending_manifest(*, pending_entries: list[dict[str, Any]], source_manifest_path: str) -> str | None:
     """
     Escribe un manifiesto temporal solo con las entradas pendientes para una reejecución.
@@ -939,90 +920,278 @@ def execution_schema_name(schema_name: str, include_reasoning: bool) -> str:
     return schema_name
 
 
-def _select_source_manifest_to_modify(
-    kit: "UIKit",
-    *,
-    manifests: list[str],
-    overviews: dict[str, dict[str, Any]],
-    make_header: Callable[[str], Callable[[], None]],
-) -> str | None:
+def _find_manifest_by_selected_label(*, manifests: list[str], selected_label: str) -> str | None:
     """
-    Solicita la selección del manifiesto de origen para el flujo de derivación.
-    
+    Resuelve la ruta de manifiesto a partir de la etiqueta visible en el menú.
+
     Args:
-        kit: Toolkit de interfaz de usuario de terminal.
-        manifests: Lista de rutas de manifiestos disponibles.
-        overviews: Diccionario de resúmenes de manifiestos.
-        make_header: Función para crear el encabezado del menú.
-        
+        manifests: Lista de rutas candidatas.
+        selected_label: Etiqueta seleccionada en UI.
+
     Returns:
-        Ruta del manifiesto seleccionado o None si se cancela.
+        Ruta completa del manifiesto o ``None`` si no coincide.
     """
-    options = [
-        kit.MenuItem(
-            f"{os.path.basename(path)} · {status_label(kit, overviews[path])}",
-            description=f"{path} · {overviews[path].get('description', '-')}",
-        )
-        for path in manifests
-    ]
-    options.append(kit.MenuItem("Cancel", lambda: None, description="Vuelve al menú anterior."))
-    selected = kit.menu(
-        options,
-        header_func=make_header("BATCH RUNNER · SELECT SOURCE MANIFEST"),
-        menu_id="batch_runner_manifest_modify_selector",
-        nav_hint_text="↑/↓ elegir manifiesto origen · ENTER confirmar · ESC volver",
-        description_slot_rows=10,
-    )
-    if not selected or selected.label.strip() == "Cancel":
-        return None
-    selected_label = selected.label.split(" · ", 1)[0].strip()
+    base_label = selected_label.replace("Usar ", "", 1).split(" · ", 1)[0].strip()
     for manifest_path in manifests:
-        if os.path.basename(manifest_path) == selected_label:
+        if os.path.basename(manifest_path) == base_label:
             return manifest_path
     return None
 
 
-def _select_source_manifest_to_delete(
+def _show_manifest_overview_screen(
+    kit: "UIKit",
+    app: "AppContext",
+    *,
+    manifest_path: str,
+    overview: dict[str, Any],
+    make_header: Callable[[str], Callable[[], None]],
+) -> None:
+    """
+    Muestra una vista resumida del manifiesto seleccionado y su estado por variante.
+
+    Args:
+        kit: Toolkit de interfaz de usuario.
+        app: Contexto de aplicación para banner.
+        manifest_path: Ruta del manifiesto seleccionado.
+        overview: Resumen calculado por ``manifest_overview``.
+        make_header: Factoría de cabecera visual.
+    """
+    style = kit.style
+
+    def _truncate(text: str, width: int) -> str:
+        """
+        Recorta texto a un ancho máximo preservando legibilidad visual.
+
+        Args:
+            text: Texto a renderizar.
+            width: Ancho máximo permitido.
+
+        Returns:
+            Texto recortado con elipsis cuando excede el ancho.
+        """
+        if width <= 0:
+            return ""
+        if len(text) <= width:
+            return text
+        if width <= 1:
+            return text[:width]
+        return text[: width - 1] + "…"
+
+    def _status_badge(snapshot: dict[str, Any]) -> str:
+        """
+        Devuelve una etiqueta de estado coloreada para resumen y variantes.
+
+        Args:
+            snapshot: Diccionario con estado de ejecución.
+
+        Returns:
+            Texto coloreado con ANSI.
+        """
+        plain = snapshot_status_text(snapshot)
+        color_by_status = {
+            "COMPLETO": str(getattr(style, "OKGREEN", "")),
+            "PARCIAL": str(getattr(style, "WARNING", "")),
+            "ERROR": str(getattr(style, "FAIL", "")),
+        }
+        color = color_by_status.get(plain, "")
+        endc = str(getattr(style, "ENDC", "")) if color else ""
+        return f"{color}{plain}{endc}" if color else plain
+
+    def _render_overview_panel(ui_width: int) -> None:
+        """
+        Renderiza el contenido completo del overview con el ancho indicado.
+
+        Args:
+            ui_width: Ancho actual de la terminal.
+        """
+        divider = " " + kit.divider(ui_width)
+
+        print(divider)
+        print(
+            f" {style.BOLD}Manifest:{style.ENDC} "
+            f"{os.path.basename(manifest_path)}"
+            f"  {style.DIM}|{style.ENDC}  "
+            f"{style.BOLD}Estado:{style.ENDC} {_status_badge(overview)}"
+        )
+
+        # La ruta puede ser larga en Windows; se envuelve para evitar líneas cortadas.
+        path_prefix = f" {style.BOLD}Ruta:{style.ENDC} "
+        wrapped_path = kit.wrap(str(manifest_path), max(24, ui_width - 8))
+        if wrapped_path:
+            print(path_prefix + wrapped_path[0])
+            for extra_line in wrapped_path[1:]:
+                print(" " * len(path_prefix) + extra_line)
+        else:
+            print(path_prefix + "-")
+
+        summary_text = str(overview.get("description", "-"))
+        wrapped_summary = kit.wrap(summary_text, max(24, ui_width - 12))
+        if wrapped_summary:
+            print(f" {style.BOLD}Resumen:{style.ENDC} {wrapped_summary[0]}")
+            for extra_line in wrapped_summary[1:]:
+                print(" " * 10 + extra_line)
+        else:
+            print(f" {style.BOLD}Resumen:{style.ENDC} -")
+        print(divider)
+
+        config = cast(dict[str, Any] | None, overview.get("config"))
+        if config:
+            schema_name = str(config.get("schema_name") or "-")
+            iterations_value = safe_positive_int(config.get("iterations_per_image"), default=1)
+            seed_value = safe_positive_int(config.get("seed"), default=42)
+            print(
+                f" {style.BOLD}Config:{style.ENDC} "
+                f"schema={schema_name}  {style.DIM}|{style.ENDC}  "
+                f"iteraciones={iterations_value}x  {style.DIM}|{style.ENDC}  seed={seed_value}"
+            )
+            print(divider)
+
+        runs = cast(list[dict[str, Any]], overview.get("runs") or [])
+        if runs:
+            print(f" {style.BOLD}{style.OKCYAN}Estado por variante{style.ENDC}")
+
+            # En terminales estrechas cambia a layout en dos líneas para no truncar en exceso.
+            compact_mode = ui_width < 110
+            if not compact_mode:
+                variant_col = max(26, int(ui_width * 0.36))
+                schema_col = max(22, int(ui_width * 0.28))
+                status_col = 10
+                ok_col = 12
+                pending_col = 9
+
+                header_line = (
+                    f" {'VARIANTE':<{variant_col}} "
+                    f"{'SCHEMA':<{schema_col}} "
+                    f"{'STATUS':<{status_col}} "
+                    f"{'OK/TOTAL':>{ok_col}} "
+                    f"{'PEND':>{pending_col}}"
+                )
+                print(f" {style.DIM}{header_line}{style.ENDC}")
+                print(f" {style.DIM}{'-' * max(40, ui_width)}{style.ENDC}")
+
+                for run in runs:
+                    model = str(run.get("model") or "-")
+                    schema_exec = str(run.get("schema_exec_name") or "-")
+                    snapshot = cast(dict[str, Any], run.get("snapshot") or {})
+                    variant_text = _truncate(
+                        variant_label(model, bool(run.get("include_reasoning"))),
+                        variant_col,
+                    )
+                    schema_text = _truncate(schema_exec, schema_col)
+                    status_text = _status_badge(snapshot)
+                    ok_text = f"{int(snapshot.get('ok', 0))}/{int(snapshot.get('total', 0))}"
+                    pending_text = str(int(snapshot.get("pending", 0)))
+
+                    print(
+                        f" {variant_text:<{variant_col}} "
+                        f"{schema_text:<{schema_col}} "
+                        f"{status_text:<{status_col}} "
+                        f"{ok_text:>{ok_col}} "
+                        f"{pending_text:>{pending_col}}"
+                    )
+            else:
+                print(f" {style.DIM}(modo compacto por ancho de terminal){style.ENDC}")
+                print(f" {style.DIM}{'-' * max(40, ui_width)}{style.ENDC}")
+                for run in runs:
+                    model = str(run.get("model") or "-")
+                    schema_exec = str(run.get("schema_exec_name") or "-")
+                    snapshot = cast(dict[str, Any], run.get("snapshot") or {})
+
+                    variant_text = _truncate(
+                        variant_label(model, bool(run.get("include_reasoning"))),
+                        max(24, ui_width - 4),
+                    )
+                    schema_text = _truncate(schema_exec, max(24, ui_width - 4))
+                    ok_text = f"{int(snapshot.get('ok', 0))}/{int(snapshot.get('total', 0))}"
+                    pending_text = str(int(snapshot.get("pending", 0)))
+
+                    print(f" {style.BOLD}• {variant_text}{style.ENDC}")
+                    print(
+                        f"   schema={schema_text} | status={_status_badge(snapshot)} | "
+                        f"ok={ok_text} | pending={pending_text}"
+                    )
+                    print(f" {style.DIM}{'-' * max(24, ui_width - 2)}{style.ENDC}")
+
+            print(divider)
+        else:
+            print(f" {style.WARNING}No hay variantes configuradas para este manifiesto.{style.ENDC}")
+            print(divider)
+
+        print(
+            f" {style.DIM}Press any key para volver. Ajusta el ancho de la terminal "
+            f"para reflow automático.{style.ENDC}"
+        )
+
+    def _redraw_for_width(current_width: int) -> None:
+        """
+        Redibuja cabecera y panel completo para el ancho actual.
+
+        Args:
+            current_width: Ancho actual de terminal.
+        """
+        try:
+            header_fn = make_header("BATCH RUNNER · MANIFEST OVERVIEW")
+            kit.clear()
+            header_fn()
+        except Exception:
+            kit.clear()
+            app.print_banner()
+            kit.subtitle(" BATCH RUNNER · MANIFEST OVERVIEW")
+        _render_overview_panel(current_width)
+
+    _redraw_for_width(max(60, kit.width()))
+    kit.render_and_wait_responsive(
+        render_fn=_redraw_for_width,
+        message="Press any key para volver al selector de acciones...",
+        initial_render=False,
+    )
+
+
+def _select_manifest_action_horizontal(
     kit: "UIKit",
     *,
-    manifests: list[str],
-    overviews: dict[str, dict[str, Any]],
-    make_header: Callable[[str], Callable[[], None]],
+    manifest_path: str,
+    overview: dict[str, Any],
 ) -> str | None:
     """
-    Solicita la selección del manifiesto para el flujo de eliminación.
-    
+    Solicita la acción para un manifiesto usando selector horizontal.
+
     Args:
-        kit: Toolkit de interfaz de usuario de terminal.
-        manifests: Lista de rutas de manifiestos disponibles.
-        overviews: Diccionario de resúmenes de manifiestos.
-        make_header: Función para crear el encabezado del menú.
-        
+        kit: Toolkit de interfaz de usuario.
+        manifest_path: Ruta del manifiesto seleccionado.
+        overview: Resumen de estado del manifiesto.
+
     Returns:
-        Ruta del manifiesto seleccionado o None si se cancela.
+        Acción elegida (``execute``, ``view``, ``modify``, ``delete``, ``back``)
+        o ``None`` si se cancela.
     """
-    options = [
-        kit.MenuItem(
-            f"{os.path.basename(path)} · {status_label(kit, overviews[path])}",
-            description=f"{path} · {overviews[path].get('description', '-')}",
-        )
-        for path in manifests
-    ]
-    options.append(kit.MenuItem("Cancel", lambda: None, description="Vuelve al menú anterior."))
-    selected = kit.menu(
-        options,
-        header_func=make_header("BATCH RUNNER · DELETE MANIFEST"),
-        menu_id="batch_runner_manifest_delete_selector",
-        nav_hint_text="↑/↓ elegir manifiesto a eliminar · ENTER confirmar · ESC volver",
-        description_slot_rows=10,
+    actions = ["EJECUTAR", "VISUALIZAR", "MODIFICAR", "ELIMINAR", "VOLVER"]
+    metrics = _manifest_dashboard_metrics(overview)
+    selected_index = ask_choice(
+        question=f"Manifest seleccionado: {os.path.basename(manifest_path)}",
+        options=actions,
+        default_index=0,
+        style=kit.style,
+        read_key_fn=kit.read_key,
+        clear_screen_fn=kit.clear,
+        info_text=(
+            f"Estado: {snapshot_status_text(overview)}\n"
+            f"OK/TOTAL: {int(metrics['ok'])}/{int(metrics['total'])} · "
+            f"PENDING: {int(metrics['pending'])} · "
+            f"COMPLETADO: {float(metrics['completion_pct']):.1f}%\n"
+            f"{overview.get('description', '-')}\n"
+            "Acciones horizontales: ←/→ cambiar · ENTER confirmar · ESC cancelar"
+        ),
     )
-    if not selected or selected.label.strip() == "Cancel":
+    if selected_index is None:
         return None
-    selected_label = selected.label.split(" · ", 1)[0].strip()
-    for manifest_path in manifests:
-        if os.path.basename(manifest_path) == selected_label:
-            return manifest_path
-    return None
+    return {
+        0: "execute",
+        1: "view",
+        2: "modify",
+        3: "delete",
+        4: "back",
+    }.get(selected_index, "back")
 
 
 def _confirm_manifest_deletion(
@@ -1348,31 +1517,25 @@ def select_manifest_for_batch(
         overviews = {path: manifest_overview(path) for path in manifests}
         for path in manifests:
             overview = overviews[path]
-            options.append(
-                kit.MenuItem(
-                    f"Usar {os.path.basename(path)} · {status_label(kit, overview)}",
-                    description=f"{path} · {overview.get('description', '-')}",
-                )
+            dashboard_badges = _manifest_dashboard_badges(kit, overview)
+            item = kit.MenuItem(
+                "",
+                description=(
+                    f"{path}\n"
+                    f"{dashboard_badges}\n"
+                    f"{overview.get('description', '-')}"
+                ),
             )
+            setattr(item, "manifest_path", path)
+            item.dynamic_label = (
+                lambda _is_selected, _path=path, _overview=overview:
+                _build_manifest_row_label(kit=kit, manifest_path=_path, overview=_overview)
+            )
+            options.append(item)
         options.append(
             kit.MenuItem(
                 "Generar manifiesto nuevo",
                 description="Crea un nuevo manifiesto con subset, modelos y schema embebidos.",
-            )
-        )
-        options.append(
-            kit.MenuItem(
-                "Modificar manifiesto existente",
-                description=(
-                    "Regenera un manifiesto reutilizando la semilla del origen y permitiendo "
-                    "cambiar cantidad, iteraciones, modelo y variantes de razonamiento."
-                ),
-            )
-        )
-        options.append(
-            kit.MenuItem(
-                "Eliminar manifiesto",
-                description="Borra un manifiesto JSONL existente de data/experiments.",
             )
         )
         options.append(kit.MenuItem("Cancel", lambda: None, description="Vuelve al selector anterior."))
@@ -1381,7 +1544,9 @@ def select_manifest_for_batch(
             options,
             header_func=make_header("BATCH RUNNER · SELECT MANIFEST"),
             menu_id="batch_runner_manifest_selector",
-            nav_hint_text="↑/↓ elegir manifiesto · ENTER confirmar · ESC volver",
+            nav_hint_text=(
+                "↑/↓ elegir manifiesto · ENTER abrir acciones horizontales · ESC volver"
+            ),
             description_slot_rows=10,
         )
         if not selection or selection.label.strip() == "Cancel":
@@ -1406,16 +1571,43 @@ def select_manifest_for_batch(
                 "config": overview.get("config"),
             }
 
-        if selection.label.startswith("Modificar manifiesto existente"):
-            source_manifest = _select_source_manifest_to_modify(
-                kit,
+        selected_manifest = str(getattr(selection, "manifest_path", "") or "").strip()
+        if not selected_manifest:
+            selected_manifest = _find_manifest_by_selected_label(
                 manifests=manifests,
-                overviews=overviews,
+                selected_label=selection.label,
+            ) or ""
+        if not selected_manifest:
+            return None
+
+        selected_overview = overviews[selected_manifest]
+        selected_action = _select_manifest_action_horizontal(
+            kit,
+            manifest_path=selected_manifest,
+            overview=selected_overview,
+        )
+        if selected_action is None or selected_action == "back":
+            continue
+
+        if selected_action == "execute":
+            return {
+                "manifest_path": selected_manifest,
+                "overview": selected_overview,
+                "config": selected_overview.get("config"),
+            }
+
+        if selected_action == "view":
+            _show_manifest_overview_screen(
+                kit,
+                app,
+                manifest_path=selected_manifest,
+                overview=selected_overview,
                 make_header=make_header,
             )
-            if not source_manifest:
-                return None
-            source_config = extract_manifest_run_config(source_manifest)
+            continue
+
+        if selected_action == "modify":
+            source_config = extract_manifest_run_config(selected_manifest)
             if source_config is None:
                 kit.log("No se pudo extraer configuración del manifiesto origen.", "error")
                 kit.wait("Press any key to return to tests manager...")
@@ -1425,7 +1617,7 @@ def select_manifest_for_batch(
             source_model_variants = normalize_model_variants(source_config.get("model_variants"))
             source_schema_name = str(source_config.get("schema_name") or "").strip() or None
             source_sample_size = _estimate_manifest_sample_size(
-                manifest_path=source_manifest,
+                manifest_path=selected_manifest,
                 iterations_per_image=source_iterations,
             )
             generated_summary = _generate_manifest_with_prompt(
@@ -1434,7 +1626,7 @@ def select_manifest_for_batch(
                 subtitle="BATCH RUNNER · DERIVE MANIFEST",
                 make_header=make_header,
                 select_schema_base=select_schema_base,
-                source_manifest_path=source_manifest,
+                source_manifest_path=selected_manifest,
                 source_seed=source_seed,
                 initial_sample_size=source_sample_size,
                 initial_iterations_per_image=source_iterations,
@@ -1453,38 +1645,21 @@ def select_manifest_for_batch(
                 "config": overview.get("config"),
             }
 
-        if selection.label.startswith("Eliminar manifiesto"):
-            source_manifest = _select_source_manifest_to_delete(
-                kit,
-                manifests=manifests,
-                overviews=overviews,
-                make_header=make_header,
-            )
-            if not source_manifest:
-                continue
+        if selected_action == "delete":
             if not _confirm_manifest_deletion(
                 kit,
-                manifest_path=source_manifest,
+                manifest_path=selected_manifest,
                 make_header=make_header,
             ):
                 kit.log("Eliminación cancelada.", "info")
                 continue
-            deleted, error_message = _delete_manifest_file(source_manifest)
+            deleted, error_message = _delete_manifest_file(selected_manifest)
             if not deleted:
                 kit.log(f"No se pudo eliminar el manifiesto: {error_message or 'error desconocido'}", "error")
                 kit.wait("Press any key to continue...")
                 continue
-            kit.log(f"Manifiesto eliminado: {source_manifest}", "success")
+            kit.log(f"Manifiesto eliminado: {selected_manifest}", "success")
             kit.wait("Press any key to refresh manifest list...")
             continue
 
-        selected_label = selection.label.replace("Usar ", "", 1).split(" · ", 1)[0].strip()
-        for manifest_path in manifests:
-            if os.path.basename(manifest_path) == selected_label:
-                overview = overviews[manifest_path]
-                return {
-                    "manifest_path": manifest_path,
-                    "overview": overview,
-                    "config": overview.get("config"),
-                }
-        return None
+        continue

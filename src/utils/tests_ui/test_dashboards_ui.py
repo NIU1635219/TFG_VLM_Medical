@@ -142,19 +142,21 @@ def _format_payload_lines(kit: "UIKit", payload: object, width: int) -> list[str
     return _wrap_text(kit, _stringify_payload_value(payload), width)
 
 
-def _recent_record_separator(kit: "UIKit") -> str:
+def _recent_record_separator(kit: "UIKit", *, ui_width: int | None = None) -> str:
     """
     Crea una linea divisoria para separar registros recientes.
 
     Args:
         kit: Toolkit de interfaz de usuario de terminal.
+        ui_width: Ancho de terminal ya capturado para el frame actual.
 
     Returns:
         Línea divisoria. 
     """
     dim = _style_token(kit, "DIM")
     endc = _style_token(kit, "ENDC")
-    return f"  {dim}{'─' * max(2, kit.width() - 4)}{endc}"
+    width = kit.width() if ui_width is None else int(ui_width)
+    return f"  {dim}{'─' * max(2, width - 4)}{endc}"
 
 
 def _cap_detail_lines(lines: list[str], *, max_lines: int) -> list[str]:
@@ -510,6 +512,7 @@ def _build_recent_record_lines(
     *,
     empty_message: str = "  Sin registros.",
     truncate: bool = True,
+    ui_width: int | None = None,
 ) -> list[str]:
     """
     Convierte registros crudos en líneas de actividad formateándolos al momento.
@@ -519,6 +522,7 @@ def _build_recent_record_lines(
         records: Lista de registros de inferencia.
         empty_message: Mensaje a mostrar si no hay registros.
         truncate: Si es True, trunca las líneas largas.
+        ui_width: Ancho de terminal ya capturado para el frame actual.
 
     Returns:
         Lista de líneas de actividad formateadas.
@@ -529,7 +533,7 @@ def _build_recent_record_lines(
     for record in records:
         # Aquí se formatean usando el ancho exacto que tenga la terminal ahora mismo
         lines.extend(_format_recent_status_lines(kit, record, truncate=truncate))
-        lines.append(_recent_record_separator(kit))
+        lines.append(_recent_record_separator(kit, ui_width=ui_width))
     return lines
 
 
@@ -605,6 +609,7 @@ def _render_live_dashboard(
         extra_lines: Líneas adicionales.
         force_full: Si es True, fuerza el render completo.
     """
+    ui_width = kit.width()
     dim = _style_token(kit, "DIM")
     endc = _style_token(kit, "ENDC")
     section_title = recent_title.rstrip(":")
@@ -636,12 +641,12 @@ def _render_live_dashboard(
         else:
             display_records = recent_records
         # Se formatean AHORA, usando el kit.width() actual del terminal
-        dynamic_lines.extend(_build_recent_record_lines(kit, display_records))
+        dynamic_lines.extend(_build_recent_record_lines(kit, display_records, ui_width=ui_width))
     else:
         dynamic_lines.append(f"  {dim}Sin actividad todavía.{endc}")
         
     dynamic_lines.append("")
-    dynamic_lines.append(f"  {dim}{'─' * max(2, kit.width() - 4)}{endc}")
+    dynamic_lines.append(f"  {dim}{'─' * max(2, ui_width - 4)}{endc}")
     
     if force_full is None:
         force_full = getattr(kit, "os_module", None) is not None and kit.os_module.name == "nt"
@@ -649,13 +654,19 @@ def _render_live_dashboard(
     panel.render(dynamic_lines, force_full=bool(force_full))
 
 
-def _build_summary_lines(kit: "UIKit", rows: list[tuple[str, str, str]]) -> list[str]:
+def _build_summary_lines(
+    kit: "UIKit",
+    rows: list[tuple[str, str, str]],
+    *,
+    ui_width: int | None = None,
+) -> list[str]:
     """
     Convierte filas tipo tabla en lineas compactas para el panel final.
 
     Args:
         kit: Toolkit de interfaz de usuario de terminal.
         rows: Lista de filas tipo tabla.
+        ui_width: Ancho de terminal ya capturado para el frame actual.
 
     Returns:
         Lista de líneas compactas.
@@ -663,7 +674,8 @@ def _build_summary_lines(kit: "UIKit", rows: list[tuple[str, str, str]]) -> list
     if not rows:
         return ["  Sin datos."]
     label_width = min(28, max(len(str(name)) for name, _, _ in rows))
-    value_width = max(20, min(kit.width() - label_width - 16, 60))
+    width = kit.width() if ui_width is None else int(ui_width)
+    value_width = max(20, min(width - label_width - 16, 60))
     lines: list[str] =[]
     dim = _style_token(kit, "DIM")
     endc = _style_token(kit, "ENDC")
@@ -688,13 +700,19 @@ def _build_summary_lines(kit: "UIKit", rows: list[tuple[str, str, str]]) -> list
     return lines
 
 
-def _build_named_value_lines(kit: "UIKit", rows: list[tuple[str, object]]) -> list[str]:
+def _build_named_value_lines(
+    kit: "UIKit",
+    rows: list[tuple[str, object]],
+    *,
+    ui_width: int | None = None,
+) -> list[str]:
     """
     Convierte pares clave/valor en lineas compactas para paneles finales.
 
     Args:
         kit: Toolkit de interfaz de usuario de terminal.
         rows: Lista de pares clave/valor.
+        ui_width: Ancho de terminal ya capturado para el frame actual.
 
     Returns:
         Lista de líneas compactas.
@@ -703,7 +721,8 @@ def _build_named_value_lines(kit: "UIKit", rows: list[tuple[str, object]]) -> li
     if not visible_rows:
         return ["  Sin datos."]
     label_width = min(28, max(len(name) for name, _ in visible_rows))
-    value_width = max(20, min(kit.width() - label_width - 8, 70))
+    width = kit.width() if ui_width is None else int(ui_width)
+    value_width = max(20, min(width - label_width - 8, 70))
     lines: list[str] =[]
     dim = _style_token(kit, "DIM")
     endc = _style_token(kit, "ENDC")
@@ -762,6 +781,7 @@ def _render_final_sections_screen(
     subtitle: str,
     intro: str,
     sections: list[tuple[str, list[str]]],
+    ui_width: int | None = None,
 ) -> None:
     """
     Pinta una pantalla final compacta reutilizable sin salida cruda dispersa.
@@ -772,16 +792,18 @@ def _render_final_sections_screen(
         subtitle: Subtítulo del panel.
         intro: Introducción del panel.
         sections: Lista de secciones con título y líneas.
+        ui_width: Ancho de terminal ya capturado para el frame actual.
     """
     dim = _style_token(kit, "DIM")
     endc = _style_token(kit, "ENDC")
+    width = kit.width() if ui_width is None else int(ui_width)
     panel = _make_live_panel(kit, app, subtitle=subtitle, intro=intro)
     dynamic_lines: list[str] = [""]
     for title, lines in sections:
         dynamic_lines.append(_section_header(kit, _normalize_final_section_title(title)))
         dynamic_lines.extend(lines if lines else[f"  {dim}Sin datos.{endc}"])
         dynamic_lines.append("")
-    dynamic_lines.append(f"  {dim}{'─' * max(2, kit.width() - 4)}{endc}")
+    dynamic_lines.append(f"  {dim}{'─' * max(2, width - 4)}{endc}")
     panel.render(dynamic_lines, force_full=True)
 
 

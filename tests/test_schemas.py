@@ -4,6 +4,9 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from src.inference.schemas import (
+    AdvancedPolypClassification,
+    AdvancedPolypClassificationWithReasoning,
+    ClassEvidence,
     GenericObjectDetection,
     GenericObjectDetectionWithReasoning,
     PolypClassification,
@@ -115,12 +118,55 @@ class TestPolypClassification:
             )
 
 
+class TestAdvancedPolypClassification:
+    def test_class_evidence_requires_both_fields(self):
+        with pytest.raises(ValidationError):
+            ClassEvidence(evidence_for="Compatible con arquitectura serrada")
+
+    def test_valid_advanced_polyp_classification(self):
+        obj = AdvancedPolypClassification(
+            analysis_ad=ClassEvidence(
+                evidence_for="Patrón glandular compatible con adenoma.",
+                evidence_against="No se observan criterios fuertes de AD en toda la lesión.",
+            ),
+            analysis_hp=ClassEvidence(
+                evidence_for="Coloración homogénea sugerente de HP.",
+                evidence_against="La arquitectura superficial no encaja con HP clásico.",
+            ),
+            analysis_ass=ClassEvidence(
+                evidence_for="Bordes mal definidos y patrón serrado compatible con ASS.",
+                evidence_against="No hay moco evidente en toda la superficie.",
+            ),
+            clinical_consensus="Predomina evidencia morfológica de ASS sobre AD y HP.",
+            final_diagnosis="ASS",
+        )
+
+        assert obj.final_diagnosis == "ASS"
+        assert obj.analysis_ass.evidence_for
+
+    def test_rejects_invalid_final_diagnosis(self):
+        with pytest.raises(ValidationError):
+            AdvancedPolypClassification(
+                analysis_ad=ClassEvidence(evidence_for="a", evidence_against="b"),
+                analysis_hp=ClassEvidence(evidence_for="a", evidence_against="b"),
+                analysis_ass=ClassEvidence(evidence_for="a", evidence_against="b"),
+                clinical_consensus="c",
+                final_diagnosis="UNKNOWN",
+            )
+
+    def test_exposes_default_system_prompt(self):
+        prompt = AdvancedPolypClassification.DEFAULT_SYSTEM_PROMPT
+        assert isinstance(prompt, str)
+        assert "AD" in prompt and "HP" in prompt and "ASS" in prompt
+
+
 class TestReasoningSchemaVariants:
     def test_reasoning_registry_contains_all_base_schemas(self):
         expected = {
             "GenericObjectDetection",
             "PolypDetection",
             "PolypClassification",
+            "AdvancedPolypClassification",
             "SycophancyTest",
             "ImageQualityAssessment",
         }
@@ -147,6 +193,13 @@ class TestReasoningSchemaVariants:
         property_names = list(GenericObjectDetectionWithReasoning.model_json_schema()["properties"].keys())
         assert property_names[0] == "reasoning"
 
+    def test_advanced_reasoning_variant_places_reasoning_before_clinical_consensus(self):
+        property_names = list(
+            AdvancedPolypClassificationWithReasoning.model_json_schema()["properties"].keys()
+        )
+        assert property_names.index("analysis_ass") < property_names.index("reasoning")
+        assert property_names.index("reasoning") < property_names.index("clinical_consensus")
+
     def test_reasoning_variant_requires_reasoning(self):
         with pytest.raises(ValidationError):
             PolypDetectionWithReasoning(
@@ -160,6 +213,7 @@ class TestReasoningSchemaVariants:
             GenericObjectDetectionWithReasoning,
             PolypDetectionWithReasoning,
             PolypClassificationWithReasoning,
+            AdvancedPolypClassificationWithReasoning,
             SycophancyTestWithReasoning,
             ImageQualityAssessmentWithReasoning,
         ):
@@ -277,6 +331,7 @@ class TestSchemaRegistry:
             "GenericObjectDetection",
             "PolypDetection",
             "PolypClassification",
+            "AdvancedPolypClassification",
             "SycophancyTest",
             "ImageQualityAssessment",
         }
@@ -291,5 +346,6 @@ class TestSchemaRegistry:
         assert SCHEMA_REGISTRY["GenericObjectDetection"] is GenericObjectDetection
         assert SCHEMA_REGISTRY["PolypDetection"] is PolypDetection
         assert SCHEMA_REGISTRY["PolypClassification"] is PolypClassification
+        assert SCHEMA_REGISTRY["AdvancedPolypClassification"] is AdvancedPolypClassification
         assert SCHEMA_REGISTRY["SycophancyTest"] is SycophancyTest
         assert SCHEMA_REGISTRY["ImageQualityAssessment"] is ImageQualityAssessment

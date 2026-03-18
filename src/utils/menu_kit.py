@@ -576,17 +576,60 @@ class UIKit:
             msvcrt_module=self.msvcrt_module,
         )
 
-    def wait(self, message: str = "Press any key to return...") -> None:
+    def wait(
+        self,
+        message: str = "Press any key to return...",
+        *,
+        on_resize_fn: Callable[[int], None] | None = None,
+        poll_interval_seconds: float = 0.05,
+    ) -> None:
         """Pausa la ejecución hasta que el usuario pulse una tecla.
 
         Args:
             message (str): Texto a mostrar.
+            on_resize_fn (Callable[[int], None] | None): Callback opcional para
+                re-renderizar pantalla cuando cambia el ancho.
+            poll_interval_seconds (float): Intervalo de sondeo durante espera
+                no bloqueante.
         """
         _wait_for_any_key(
             message=message,
             style=self.style,
             os_module=self.os_module,
             msvcrt_module=self.msvcrt_module,
+            get_width_fn=self.width,
+            on_resize_fn=on_resize_fn,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+
+    def render_and_wait_responsive(
+        self,
+        *,
+        render_fn: Callable[[int], None],
+        message: str = "Press any key to return...",
+        poll_interval_seconds: float = 0.05,
+        initial_render: bool = True,
+    ) -> None:
+        """
+        Renderiza una pantalla estática y mantiene refresh automático por resize.
+
+        Útil para pantallas finales no interactivas con tablas/bloques de texto que
+        deben ajustarse cuando cambia el ancho del terminal.
+
+        Args:
+            render_fn (Callable[[int], None]): Callback que pinta toda la pantalla
+                para el ancho recibido.
+            message (str): Mensaje mostrado durante la espera de tecla.
+            poll_interval_seconds (float): Intervalo de sondeo no bloqueante.
+            initial_render (bool): Si es True, hace un primer render inmediato
+                antes de entrar al wait reactivo.
+        """
+        if initial_render:
+            render_fn(self.width())
+        self.wait(
+            message,
+            on_resize_fn=render_fn,
+            poll_interval_seconds=poll_interval_seconds,
         )
 
     def read_key(self) -> str | None:

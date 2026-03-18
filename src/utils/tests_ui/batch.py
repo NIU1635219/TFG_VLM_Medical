@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Callable, cast
 
 from ..setup_ui_io import ask_choice
 from .shared import (
+    ReactiveTerminalRenderer,
     as_yes,
     build_live_status_line,
     colorize_model,
@@ -660,15 +661,17 @@ def _render_batch_final_summary(
     app: "AppContext",
     context: _BatchFinalRenderContext,
     upsert_batch_execution_summary: Callable[..., dict[str, Any] | None],
-) -> None:
+) -> Callable[[int], None]:
     """
-    Construye y renderiza el dashboard final del batch runner.
+    Construye el renderer del dashboard final del batch runner y realiza un primer render.
     
     Args:
         kit ("UIKit"): Kit de UI.
         app ("AppContext"): Contexto de la aplicación.
         context (_BatchFinalRenderContext): Contexto de renderizado final.
         upsert_batch_execution_summary (Callable[..., dict[str, Any] | None]): Función para actualizar el resumen del batch.
+    Returns:
+        Callable[[int], None]: Callback de re-render para cambios de ancho.
     """
     def _format_metric_triplet(stats: dict[str, Any], *, suffix: str = "") -> str:
         """
@@ -754,75 +757,87 @@ def _render_batch_final_summary(
 
     execution_lines = [f"  {name:<18} : {value}" for name, value, _status in execution_rows]
 
-    ui_width = max(80, kit.width())
-    model_w = max(14, min(24, int(ui_width * 0.24)))
-    variant_w = 16
-    state_w = 10
-    progress_w = 8
-    acc_w = 15
-    pending_w = 6
-    table_padding = 28
-    jsonl_w = max(14, ui_width - (model_w + variant_w + state_w + progress_w + acc_w + pending_w + table_padding))
-
-    header = (
-        f"  {'Modelo':<{model_w}} │ "
-        f"{'Variante':<{variant_w}} │ "
-        f"{'Estado':<{state_w}} │ "
-        f"{'OK/TOT':>{progress_w}} │ "
-        f"{'ACC':>{acc_w}} │ "
-        f"{'Pend':>{pending_w}} │ "
-        f"{'JSONL':<{jsonl_w}}"
-    )
-    divider = (
-        f"  {'─' * model_w}─┼─"
-        f"{'─' * variant_w}─┼─"
-        f"{'─' * state_w}─┼─"
-        f"{'─' * progress_w}─┼─"
-        f"{'─' * acc_w}─┼─"
-        f"{'─' * pending_w}─┼─"
-        f"{'─' * jsonl_w}"
-    )
-
-    model_table_lines: list[str] = [header, divider]
     colored_state_lines: list[str] = []
-    for model_name, model_id, include_reasoning, final_snapshot, resolved_output in queue_rows:
+    for model_name, _model_id, _include_reasoning, final_snapshot, _resolved_output in queue_rows:
         status_plain = snapshot_status_text(final_snapshot)
-        ok_value = int(final_snapshot.get("ok", 0) or 0)
-        total_value = int(final_snapshot.get("total", 0) or 0)
-        pending_value = int(final_snapshot.get("pending", 0) or 0)
-        variant_name = variant_label(model_id, include_reasoning)
-        variant_mode = "con razonamiento" if include_reasoning else "sin razonamiento"
-        accuracy_text = aggregate_models_accuracy.get(variant_name, "N/D")
-        jsonl_text = rel_path(resolved_output)
         colored_model_name = colorize_model(kit.style, model_name, final_snapshot)
         colored_state_lines.append(f"  - {colored_model_name} · {status_plain}")
-        model_table_lines.append(
-            f"  {truncate_middle(model_id, model_w):<{model_w}} │ "
-            f"{truncate_middle(variant_mode, variant_w):<{variant_w}} │ "
-            f"{status_plain:<{state_w}} │ "
-            f"{f'{ok_value}/{total_value}':>{progress_w}} │ "
-            f"{truncate_middle(accuracy_text, acc_w):>{acc_w}} │ "
-            f"{str(pending_value):>{pending_w}} │ "
-            f"{truncate_middle(jsonl_text, jsonl_w):<{jsonl_w}}"
+
+    def _redraw_final_batch_screen(ui_width: int) -> None:
+        """Re-renderiza la pantalla final del batch runner para el ancho indicado."""
+        safe_width = max(80, int(ui_width))
+        model_w = max(14, min(24, int(safe_width * 0.24)))
+        variant_w = 16
+        state_w = 10
+        progress_w = 8
+        acc_w = 15
+        pending_w = 6
+        table_padding = 28
+        jsonl_w = max(
+            14,
+            safe_width - (model_w + variant_w + state_w + progress_w + acc_w + pending_w + table_padding),
         )
 
-    if len(unique_outputs) > 1:
-        model_table_lines.append("")
-        model_table_lines.append("  Rutas de salida detectadas:")
-        for path_item in unique_outputs:
-            model_table_lines.append(f"  - {rel_path(path_item)}")
+        header = (
+            f"  {'Modelo':<{model_w}} │ "
+            f"{'Variante':<{variant_w}} │ "
+            f"{'Estado':<{state_w}} │ "
+            f"{'OK/TOT':>{progress_w}} │ "
+            f"{'ACC':>{acc_w}} │ "
+            f"{'Pend':>{pending_w}} │ "
+            f"{'JSONL':<{jsonl_w}}"
+        )
+        divider = (
+            f"  {'─' * model_w}─┼─"
+            f"{'─' * variant_w}─┼─"
+            f"{'─' * state_w}─┼─"
+            f"{'─' * progress_w}─┼─"
+            f"{'─' * acc_w}─┼─"
+            f"{'─' * pending_w}─┼─"
+            f"{'─' * jsonl_w}"
+        )
 
-    _render_final_sections_screen(
-        kit,
-        app,
-        subtitle=f"BATCH RUNNER · {schema_exec_name}",
-        intro=_standard_final_intro(),
-        sections=[
-            ("Resumen de ejecución", execution_lines),
-            ("Estado por modelo (colores)", colored_state_lines),
-            ("Resultados por modelo", model_table_lines),
-        ],
-    )
+        model_table_lines: list[str] = [header, divider]
+        for model_name, model_id, include_reasoning, final_snapshot, resolved_output in queue_rows:
+            status_plain = snapshot_status_text(final_snapshot)
+            ok_value = int(final_snapshot.get("ok", 0) or 0)
+            total_value = int(final_snapshot.get("total", 0) or 0)
+            pending_value = int(final_snapshot.get("pending", 0) or 0)
+            variant_name = variant_label(model_id, include_reasoning)
+            variant_mode = "con razonamiento" if include_reasoning else "sin razonamiento"
+            accuracy_text = aggregate_models_accuracy.get(variant_name, "N/D")
+            jsonl_text = rel_path(resolved_output)
+            model_table_lines.append(
+                f"  {truncate_middle(model_id, model_w):<{model_w}} │ "
+                f"{truncate_middle(variant_mode, variant_w):<{variant_w}} │ "
+                f"{status_plain:<{state_w}} │ "
+                f"{f'{ok_value}/{total_value}':>{progress_w}} │ "
+                f"{truncate_middle(accuracy_text, acc_w):>{acc_w}} │ "
+                f"{str(pending_value):>{pending_w}} │ "
+                f"{truncate_middle(jsonl_text, jsonl_w):<{jsonl_w}}"
+            )
+
+        if len(unique_outputs) > 1:
+            model_table_lines.append("")
+            model_table_lines.append("  Rutas de salida detectadas:")
+            for path_item in unique_outputs:
+                model_table_lines.append(f"  - {rel_path(path_item)}")
+
+        _render_final_sections_screen(
+            kit,
+            app,
+            subtitle=f"BATCH RUNNER · {schema_exec_name}",
+            intro=_standard_final_intro(),
+            ui_width=kit.width(),
+            sections=[
+                ("Resumen de ejecución", execution_lines),
+                ("Estado por modelo (colores)", colored_state_lines),
+                ("Resultados por modelo", model_table_lines),
+            ],
+        )
+
+    _redraw_final_batch_screen(kit.width())
+    return _redraw_final_batch_screen
 
 
 def _execute_model_with_retries(
@@ -878,6 +893,68 @@ def _execute_model_with_retries(
             subtitle=f"BATCH RUNNER · {execution.schema_exec_name} · {model_label}",
             intro=f"Exportando resultados incrementales en JSONL desde manifiesto: {execution.selected_manifest}",
         )
+        global_target_default = (
+            execution.total_global_target
+            if execution.total_global_target > 0
+            else execution.current_model_target
+        )
+        live_progress_summary: dict[str, object] = {
+            "ok": 0,
+            "invalid": 0,
+            "fail": 0,
+            "processed": 0,
+        }
+        live_state: dict[str, int | str] = {
+            "global_target": global_target_default,
+            "global_completed": min(
+                global_target_default,
+                execution.completed_global_images_before_model + execution.baseline_completed_for_model,
+            ),
+            "model_queue_current": execution.models_done_before,
+            "model_completed_total": execution.baseline_completed_for_model,
+            "iteration_progress": 1,
+            "iterations_value": max(1, execution.iterations_per_image),
+            "total_current": execution.current_model_target,
+            "status_line": f"Estado actual: preparando ejecución · muestra {execution.current_model_target}",
+        }
+
+        def _render_live_batch_dashboard(*, force_full: bool | None = None) -> None:
+            """Renderiza el dashboard de batch con el último estado incremental."""
+            invalid_count_live = _coerce_int(live_progress_summary.get("invalid"))
+            fail_count_live = _coerce_int(live_progress_summary.get("fail"))
+            _render_live_dashboard(
+                kit,
+                panel,
+                current=_coerce_int(live_state.get("global_completed")),
+                total=_coerce_int(live_state.get("global_target")),
+                stats_line=(
+                    f"Resumen del modelo actual: OK={live_progress_summary.get('ok', 0)} | "
+                    f"Inválidas={invalid_count_live} | Errores={fail_count_live}"
+                ),
+                status_line=str(live_state.get("status_line") or ""),
+                metrics_line=_build_partial_metrics_line(live_progress_summary),
+                extra_lines=_build_extra_progress_lines(
+                    kit=kit,
+                    context=_BatchProgressBarsContext(
+                        show_model_queue_bar=show_model_queue_bar,
+                        model_queue_current=_coerce_int(live_state.get("model_queue_current")),
+                        models_target=execution.models_target,
+                        compact_model=compact_model,
+                        model_completed_total=_coerce_int(live_state.get("model_completed_total")),
+                        current_model_target=execution.current_model_target,
+                        iteration_progress=_coerce_int(live_state.get("iteration_progress")),
+                        iterations_value=max(1, _coerce_int(live_state.get("iterations_value"))),
+                    ),
+                ),
+                recent_title="Últimos registros exportados:",
+                recent_records=list(recent_records),
+                force_full=force_full,
+            )
+
+        live_renderer = ReactiveTerminalRenderer(
+            kit=kit,
+            render_fn=_render_live_batch_dashboard,
+        )
         base_batch_kwargs: dict[str, Any] = {
             "model_id": execution.model_id,
             "manifest": execution.selected_manifest,
@@ -897,6 +974,8 @@ def _execute_model_with_retries(
                 payload (dict[str, object]): Payload con el progreso del batch.
             """
             summary_progress = cast(dict[str, object], payload.get("summary") or {})
+            live_progress_summary.clear()
+            live_progress_summary.update(summary_progress)
             total = _coerce_int(payload.get("total"))
             event = str(payload.get("event") or "")
             current_index = _coerce_int(payload.get("index"))
@@ -905,8 +984,6 @@ def _execute_model_with_retries(
             record_payload = payload.get("record")
             last_record = record_payload if isinstance(record_payload, dict) else None
             completed = _coerce_int(summary_progress.get("processed"))
-            invalid_count = _coerce_int(summary_progress.get("invalid"))
-            fail_count = _coerce_int(summary_progress.get("fail"))
             global_target = (
                 execution.total_global_target
                 if execution.total_global_target > 0
@@ -952,33 +1029,20 @@ def _execute_model_with_retries(
             if event == "image_done" and last_record is not None:
                 _append_recent_record(recent_records, last_record)
 
-            _render_live_dashboard(
-                kit,
-                panel,
-                current=global_completed,
-                total=global_target,
-                stats_line=(
-                    f"Resumen del modelo actual: OK={summary_progress.get('ok', 0)} | "
-                    f"Inválidas={invalid_count} | Errores={fail_count}"
-                ),
-                status_line=status_line,
-                metrics_line=_build_partial_metrics_line(summary_progress),
-                extra_lines=_build_extra_progress_lines(
-                    kit=kit,
-                    context=_BatchProgressBarsContext(
-                        show_model_queue_bar=show_model_queue_bar,
-                        model_queue_current=model_queue_current,
-                        models_target=execution.models_target,
-                        compact_model=compact_model,
-                        model_completed_total=model_completed_total,
-                        current_model_target=execution.current_model_target,
-                        iteration_progress=iteration_progress,
-                        iterations_value=iterations_value,
-                    ),
-                ),
-                recent_title="Últimos registros exportados:",
-                recent_records=list(recent_records),
+            live_state.update(
+                {
+                    "global_target": global_target,
+                    "global_completed": global_completed,
+                    "model_queue_current": model_queue_current,
+                    "model_completed_total": model_completed_total,
+                    "iteration_progress": iteration_progress,
+                    "iterations_value": iterations_value,
+                    "total_current": total,
+                    "status_line": status_line,
+                }
             )
+
+            live_renderer.render()
 
         def execute_batch_once(
             *,
@@ -996,6 +1060,7 @@ def _execute_model_with_retries(
                 dict[str, Any]: Resumen del batch.
             """
             try:
+                live_renderer.start()
                 return run_batch_job(
                     **base_batch_kwargs,
                     pending_image_paths=pending_image_paths,
@@ -1010,6 +1075,8 @@ def _execute_model_with_retries(
                     pending_image_paths=pending_image_paths,
                     pending_entries=pending_entries,
                 )
+            finally:
+                live_renderer.stop()
 
         pending_image_paths: list[str] | None = None
         pending_entries: list[dict[str, Any]] | None = None
@@ -1354,7 +1421,7 @@ def run_batch_runner_wrapper(
 
         summary_model_ids = sorted({model_id_by_execution[item] for item in queued_models})
 
-        _render_batch_final_summary(
+        final_batch_renderer = _render_batch_final_summary(
             kit=kit,
             app=app,
             context=_BatchFinalRenderContext(
@@ -1366,5 +1433,9 @@ def run_batch_runner_wrapper(
             ),
             upsert_batch_execution_summary=upsert_batch_execution_summary,
         )
-        kit.wait("Press any key to return to tests manager...")
+        kit.render_and_wait_responsive(
+            render_fn=final_batch_renderer,
+            message="Press any key to return to tests manager...",
+            initial_render=False,
+        )
         return

@@ -32,6 +32,7 @@ def run_response_inspector_wrapper(
     from src.scripts.test_response import build_summary_sections, run_inspection, save_inspection_payload
 
     while True:
+        final_screen_renderer: Callable[[int], None] | None = None
         model_tag = select_model(
             "response_inspector_model_selector",
             "RESPONSE INSPECTOR · SELECT MODEL",
@@ -68,18 +69,31 @@ def run_response_inspector_wrapper(
                 )
             )
             output_path = save_inspection_payload(payload)
-            sections = []
-            for title, rows in build_summary_sections(payload):
-                sections.append((title, _build_named_value_lines(kit, rows)))
-            sections.append(("Salida", [f"  Archivo guardado en: {output_path}"]))
-            _render_final_sections_screen(
-                kit,
-                app,
-                subtitle="RESPONSE INSPECTOR",
-                intro=_standard_final_intro(),
-                sections=sections,
-            )
+            def _redraw_final_response_screen(_ui_width: int) -> None:
+                """Re-renderiza la pantalla final del response inspector tras resize."""
+                sections = []
+                for title, rows in build_summary_sections(payload):
+                    sections.append((title, _build_named_value_lines(kit, rows, ui_width=_ui_width)))
+                sections.append(("Salida", [f"  Archivo guardado en: {output_path}"]))
+                _render_final_sections_screen(
+                    kit,
+                    app,
+                    subtitle="RESPONSE INSPECTOR",
+                    intro=_standard_final_intro(),
+                    ui_width=_ui_width,
+                    sections=sections,
+                )
+
+            _redraw_final_response_screen(kit.width())
+            final_screen_renderer = _redraw_final_response_screen
             kit.log(f"Response Inspector completado. Salida: {output_path}", "success")
         except Exception as error:
             kit.log(f"Response Inspector terminó con error: {error}", "error")
-        kit.wait("Press any key to return to model selector...")
+        if final_screen_renderer is None:
+            kit.wait("Press any key to return to model selector...")
+        else:
+            kit.render_and_wait_responsive(
+                render_fn=final_screen_renderer,
+                message="Press any key to return to model selector...",
+                initial_render=False,
+            )

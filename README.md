@@ -18,6 +18,7 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Smoke test con 5 casos (`sample_01`...`sample_05`) y descarga automática de imágenes si faltan.
 - Manager TUI modularizado y con tests de regresión.
 - `UIKit` incluye API de tablas interactivas (`TableColumn`, `TableRow`, `build_table_items`, `table_menu`) con anchos de columna adaptativos al terminal.
+- `UIKit` añade `render_and_wait_responsive(...)` como helper común de espera reactiva, con repintado automático al redimensionar el terminal.
 - Schema Tester integrado en el manager: selección interactiva de modelo + esquema + inferencia por lotes.
 - Batch Runner CLI con exportado incremental en JSONL compartido por manifiesto+schema.
 - Telemetry Probe integrado en el manager con progreso en vivo, cobertura de métricas y resumen final legible.
@@ -74,6 +75,7 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Manifests: metadata compacta con `run_model_variants` y `run_seed`, y soporte de derivación (`run_derived_from`).
 - Batch Runner: registros por imagen incluyen `include_reasoning` y agregación de summary por variante.
 - Batch Runner: borrado de manifiesto desde TUI con limpieza de outputs JSONL vinculados.
+- Convención UI: pantallas finales estructuradas migradas al helper común `render_and_wait_responsive(...)` para espera reactiva con repintado por redimensionado (manifest/schema/smoke/telemetry/response inspector/batch summary).
 
 ## Stack técnico
 
@@ -122,7 +124,7 @@ Dependencias declaradas en `pyproject.toml`.
 │   │   └── test_telemetry.py           # Medición CLI de TTFT/TPS y resumen de latencias.
 │   └── utils/
 │       ├── app_config.py               # Configuración estática, librerías requeridas y registro de modelos.
-│       ├── menu_kit.py                 # UIKit + AppContext: abstracción de tablas, menús y render.
+│       ├── menu_kit.py                 # UIKit + AppContext: abstracción de tablas, menús, render y helper común de espera reactiva.
 │       ├── setup_diagnostics.py        # Diagnóstico del entorno, dependencias y smart-fix.
 │       ├── setup_install_flow.py       # Flujo principal de instalación y navegación del manager.
 │       ├── setup_menu_engine.py        # Motor de menús interactivos y estado del cursor.
@@ -139,6 +141,7 @@ Dependencias declaradas en `pyproject.toml`.
 │       │   └── lms_models.py           # Wrappers de LM Studio para listar, descargar y resolver opciones.
 │       └── tests_ui/                   # Pantallas y helpers extraídos de Setup Tests UI.
 │           ├── batch.py                # Flujo UI del Batch Runner y selección de parámetros de ejecución.
+│           ├── cli_reporters.py        # Reportes CLI y helpers de render para dashboards y tests
 │           ├── manifest.py             # Gestión completa de manifests (crear/derivar/usar/eliminar) y limpieza de outputs.
 │           ├── manifest_generation.py  # Generación estratificada de manifests para muestreo reproducible.
 │           ├── response_inspector.py   # Pantalla UI para inspección de respuestas reales del SDK.
@@ -283,6 +286,8 @@ kit.build_table_items(
 ```
 
 O como menú completo con `kit.table_menu(columns, rows)` que devuelve el `TableRow` seleccionado.
+
+Convención UI: las pantallas finales estructuradas usan `kit.render_and_wait_responsive(...)` para mantener la espera reactiva con repintado automático al redimensionar el terminal.
 
 Controles de teclado:
 

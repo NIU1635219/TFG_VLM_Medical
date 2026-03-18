@@ -120,6 +120,9 @@ class _LMSChatHandle(Protocol):
     def add_user_message(self, content: Any, *, images: Any = (), _files: Any = ()) -> Any:
         ...
 
+    def add_system_message(self, content: Any) -> Any:
+        ...
+
 
 class VLMLoader:
     """
@@ -743,7 +746,12 @@ class VLMLoader:
         except Exception:
             return image_path
 
-    def _build_multimodal_history(self, structured_text: str, image_path: str) -> Any:
+    def _build_multimodal_history(
+        self,
+        structured_text: str,
+        image_path: str,
+        system_prompt: str | None = None,
+    ) -> Any:
         """
         Construye el historial de chat multimodal compatible con el SDK de LM Studio.
         
@@ -753,6 +761,8 @@ class VLMLoader:
         Args:
             structured_text (str): El texto del prompt estructurado.
             image_path (str): Ruta a la imagen a analizar.
+            system_prompt (str | None): Instrucción de sistema opcional para
+                guiar el comportamiento del modelo.
             
         Returns:
             Any: Un objeto Chat de LM Studio o un diccionario de historial de mensajes.
@@ -776,22 +786,36 @@ class VLMLoader:
         chat_cls = getattr(lms, "Chat", None) if lms is not None else None
         if callable(chat_cls):
             chat = cast(_LMSChatHandle, chat_cls())
+            if system_prompt:
+                add_system_message_fn = getattr(chat, "add_system_message", None)
+                if callable(add_system_message_fn):
+                    add_system_message_fn(system_prompt)
+                else:
+                    structured_text = f"{system_prompt}\n\n{structured_text}"
             try:
                 chat.add_user_message(structured_text, images=[image_payload])
                 return chat
             except Exception:
                 chat = cast(_LMSChatHandle, chat_cls())
+                if system_prompt:
+                    add_system_message_fn = getattr(chat, "add_system_message", None)
+                    if callable(add_system_message_fn):
+                        add_system_message_fn(system_prompt)
+                    else:
+                        structured_text = f"{system_prompt}\n\n{structured_text}"
                 chat.add_user_message([structured_text, image_payload])
                 return chat
 
-        return {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [structured_text, image_payload],
-                }
-            ]
-        }
+        messages: list[dict[str, Any]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append(
+            {
+                "role": "user",
+                "content": [structured_text, image_payload],
+            }
+        )
+        return {"messages": messages}
 
     def _respond_with_config_compat(
         self,
@@ -843,6 +867,7 @@ class VLMLoader:
         kwargs: dict[str, Any] = {
             "response_format": target_schema,
             "config": base_config,
+            "max_tokens": 8192,
         }
 
         attempts = 0
@@ -866,6 +891,10 @@ class VLMLoader:
 
                 if "temperature" in kwargs and unsupported_kwarg(error, "temperature"):
                     kwargs.pop("temperature", None)
+                    removed = True
+
+                if "max_tokens" in kwargs and unsupported_kwarg(error, "max_tokens"):
+                    kwargs.pop("max_tokens", None)
                     removed = True
 
                 if not removed:
@@ -1038,6 +1067,7 @@ class VLMLoader:
         schema: Type[T] = GenericObjectDetection,
         temperature: float = 0.7,
         seed: int | None = None,
+        system_prompt: str | None = None,
         *,
         include_telemetry: Literal[False] = False,
     ) -> T:
@@ -1065,6 +1095,7 @@ class VLMLoader:
         schema: Type[T] = GenericObjectDetection,
         temperature: float = 0.7,
         seed: int | None = None,
+        system_prompt: str | None = None,
         *,
         include_telemetry: Literal[True],
     ) -> InferenceResult[T]:
@@ -1091,6 +1122,7 @@ class VLMLoader:
         schema: Type[T] = GenericObjectDetection,  # type: ignore[assignment]
         temperature: float = 0.7,
         seed: int | None = None,
+        system_prompt: str | None = None,
         *,
         include_telemetry: bool = False,
     ) -> T | InferenceResult[T]:
@@ -1114,6 +1146,9 @@ class VLMLoader:
             schema (Type[T]): Clase Pydantic que define el contrato de respuesta JSON.
                 Por defecto usa ``GenericObjectDetection`` para compatibilidad hacia atrás.
             temperature (float, optional): Creatividad de la respuesta (0.0 a 2.0). Default 0.7.
+            system_prompt (str | None, optional): Instrucción de sistema opcional.
+                Si es ``None``, se usa el prompt por defecto del esquema (si existe)
+                y en último caso un fallback genérico.
             include_telemetry (bool, optional): Si es True, devuelve además métricas
                 de rendimiento y uso del SDK junto al resultado parseado.
 
@@ -1154,7 +1189,32 @@ class VLMLoader:
         # Genera el prompt con instrucciones de salida JSON basadas en el esquema
         structured_text = self._build_structured_instruction(prompt, schema=schema)
 
-        multimodal_input = self._build_multimodal_history(structured_text, image_path_str)
+        # Resuelve prioridad de prompt de sistema: manual > esquema > fallback
+        if isinstance(system_prompt, str) and system_prompt.strip():
+            resolved_system_prompt = system_prompt.strip()
+        else:
+            schema_default_prompt = getattr(schema, "DEFAULT_SYSTEM_PROMPT", None)
+            if isinstance(schema_default_prompt, str) and schema_default_prompt.strip():
+                resolved_system_prompt = schema_default_prompt.strip()
+            else:
+                resolved_system_prompt = "Eres un asistente médico experto."
+
+        try:
+            multimodal_input = self._build_multimodal_history(
+                structured_text,
+                image_path_str,
+                system_prompt=resolved_system_prompt,
+            )
+        except TypeError as error:
+            error_text = str(error)
+            if "unexpected keyword argument" in error_text and "system_prompt" in error_text:
+                structured_text_with_system = f"{resolved_system_prompt}\n\n{structured_text}"
+                multimodal_input = self._build_multimodal_history(
+                    structured_text_with_system,
+                    image_path_str,
+                )
+            else:
+                raise
 
         model_handle = self._loaded_model
         assert model_handle is not None

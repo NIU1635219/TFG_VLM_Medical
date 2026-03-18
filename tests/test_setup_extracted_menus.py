@@ -28,6 +28,12 @@ def _make_kit_app(ctx):
     kit.log = ctx.get("log", MagicMock())
     kit.clear = ctx.get("clear_screen_ansi", MagicMock())
     kit.wait = ctx.get("wait_for_any_key", MagicMock())
+    if "render_and_wait_responsive" in ctx:
+        kit.render_and_wait_responsive = ctx["render_and_wait_responsive"]
+    else:
+        kit.render_and_wait_responsive = lambda **kwargs: kit.wait(
+            kwargs.get("message", "Press any key to return...")
+        )
     kit.ask = ctx.get("ask_user", MagicMock())
     kit.input = ctx.get("input_with_esc", MagicMock())
     kit.run_cmd = ctx.get("run_cmd", MagicMock(return_value=True))

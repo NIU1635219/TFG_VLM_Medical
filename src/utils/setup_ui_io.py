@@ -890,7 +890,16 @@ def input_with_esc(*, prompt: str, os_module: Any, msvcrt_module: Any) -> str | 
     return value
 
 
-def wait_for_any_key(*, message: str, style: Any, os_module: Any, msvcrt_module: Any) -> None:
+def wait_for_any_key(
+    *,
+    message: str,
+    style: Any,
+    os_module: Any,
+    msvcrt_module: Any,
+    get_width_fn: Callable[[], int] | None = None,
+    on_resize_fn: Callable[[int], None] | None = None,
+    poll_interval_seconds: float = 0.05,
+) -> None:
     """
     Pausa la ejecución hasta que el usuario presione cualquier tecla.
     
@@ -899,12 +908,60 @@ def wait_for_any_key(*, message: str, style: Any, os_module: Any, msvcrt_module:
         style (Any): Clase con definiciones de estilos ANSI.
         os_module (Any): Módulo `os` inyectado.
         msvcrt_module (Any): Módulo `msvcrt` inyectado (para Windows).
+        get_width_fn (Callable[[], int] | None): Callback para obtener el ancho
+            actual de terminal. Si se omite, no se monitoriza resize.
+        on_resize_fn (Callable[[int], None] | None): Callback opcional que se
+            ejecuta al detectar un cambio de ancho.
+        poll_interval_seconds (float): Intervalo de sondeo no bloqueante.
     """
-    print(f"\n{style.DIM}{message}{style.ENDC}", end="", flush=True)
+    def _print_wait_message() -> None:
+        """Imprime el mensaje de espera en la línea actual."""
+        print(f"\n{style.DIM}{message}{style.ENDC}", end="", flush=True)
+
+    def _drain_pending_keys() -> bool:
+        """Descarta teclas pendientes del buffer y devuelve si había contenido."""
+        drained = False
+        if not (os_module.name == "nt" and msvcrt_module):
+            return drained
+        if not (hasattr(msvcrt_module, "kbhit") and callable(msvcrt_module.kbhit)):
+            return drained
+        while msvcrt_module.kbhit():
+            _ = msvcrt_module.getch()
+            drained = True
+        return drained
+
+    _print_wait_message()
+
     if os_module.name == "nt" and msvcrt_module:
-        _ = msvcrt_module.getch()
-        print()
-        return
+        had_pending_keys = _drain_pending_keys()
+        debounce_until = time.monotonic() + 0.14 if had_pending_keys else 0.0
+        previous_width = get_width_fn() if callable(get_width_fn) else None
+        while True:
+            if callable(get_width_fn):
+                current_width = get_width_fn()
+                if previous_width is None:
+                    previous_width = current_width
+                elif current_width != previous_width:
+                    previous_width = current_width
+                    if callable(on_resize_fn):
+                        on_resize_fn(current_width)
+                    _print_wait_message()
+
+            if hasattr(msvcrt_module, "kbhit") and callable(msvcrt_module.kbhit):
+                if msvcrt_module.kbhit():
+                    if debounce_until and time.monotonic() < debounce_until:
+                        _ = msvcrt_module.getch()
+                        continue
+                    _ = msvcrt_module.getch()
+                    print()
+                    return
+                time.sleep(max(0.01, float(poll_interval_seconds)))
+                continue
+
+            _ = msvcrt_module.getch()
+            print()
+            return
+
     input()
 
 

@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, mock_open, patch
 from src.inference.vlm_runner import VLMLoader, GenericObjectDetection
+from src.inference.schemas import AdvancedPolypClassification
 
 try:
     from PIL import Image as PILImage
@@ -143,7 +144,72 @@ def test_inference_uses_chat_history_with_images(loader, mock_lms_sdk):
     assert add_args.args[0]
     assert add_args.kwargs.get("images")
     assert first_call_kwargs.get("config") == {"temperature": 0.5}
+    assert first_call_kwargs.get("max_tokens") == 8192
     assert first_call_kwargs.get("response_format") is GenericObjectDetection
+
+
+def test_inference_uses_manual_system_prompt_over_schema_default(loader, mock_lms_sdk):
+    """El prompt manual debe tener prioridad sobre DEFAULT_SYSTEM_PROMPT del esquema."""
+    mock_lms, mock_model = mock_lms_sdk
+    mock_response = MagicMock()
+    mock_response.parsed = {
+        "analysis_ad": {"evidence_for": "a", "evidence_against": "b"},
+        "analysis_hp": {"evidence_for": "a", "evidence_against": "b"},
+        "analysis_ass": {"evidence_for": "a", "evidence_against": "b"},
+        "clinical_consensus": "c",
+        "final_diagnosis": "AD",
+    }
+    mock_model.respond.return_value = mock_response
+
+    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
+        loader.inference(
+            FAKE_IMAGE_PATH,
+            "Prompt de prueba",
+            schema=AdvancedPolypClassification,
+            system_prompt="PROMPT MANUAL",
+        )
+
+    mock_lms.Chat.return_value.add_system_message.assert_called_once_with("PROMPT MANUAL")
+
+
+def test_inference_uses_schema_default_system_prompt_when_manual_not_provided(loader, mock_lms_sdk):
+    """Si no hay prompt manual, debe usarse DEFAULT_SYSTEM_PROMPT del esquema."""
+    mock_lms, mock_model = mock_lms_sdk
+    mock_response = MagicMock()
+    mock_response.parsed = {
+        "analysis_ad": {"evidence_for": "a", "evidence_against": "b"},
+        "analysis_hp": {"evidence_for": "a", "evidence_against": "b"},
+        "analysis_ass": {"evidence_for": "a", "evidence_against": "b"},
+        "clinical_consensus": "c",
+        "final_diagnosis": "HP",
+    }
+    mock_model.respond.return_value = mock_response
+
+    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
+        loader.inference(
+            FAKE_IMAGE_PATH,
+            "Prompt de prueba",
+            schema=AdvancedPolypClassification,
+        )
+
+    mock_lms.Chat.return_value.add_system_message.assert_called_once_with(
+        AdvancedPolypClassification.DEFAULT_SYSTEM_PROMPT
+    )
+
+
+def test_inference_uses_fallback_system_prompt_when_schema_has_no_default(loader, mock_lms_sdk):
+    """Si no hay prompt manual ni prompt por esquema, debe usarse el fallback genérico."""
+    mock_lms, mock_model = mock_lms_sdk
+    mock_model.respond.return_value = (
+        '{"object_detected": "cat", "confidence_score": 75, "justification": "Se ve un gato."}'
+    )
+
+    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
+        loader.inference(FAKE_IMAGE_PATH, "Prompt de prueba", schema=GenericObjectDetection)
+
+    mock_lms.Chat.return_value.add_system_message.assert_called_once_with(
+        "Eres un asistente médico experto."
+    )
 
 
 def test_inference_retries_with_temperature_when_config_not_supported(loader, mock_lms_sdk):

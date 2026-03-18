@@ -867,7 +867,7 @@ class VLMLoader:
         kwargs: dict[str, Any] = {
             "response_format": target_schema,
             "config": base_config,
-            "max_tokens": 8192,
+            "max_tokens": 1000,
         }
 
         attempts = 0

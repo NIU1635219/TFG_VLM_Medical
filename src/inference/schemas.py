@@ -15,6 +15,7 @@ def _create_reasoning_schema(
     *,
     reasoning_description: str,
     docstring: str,
+    reasoning_annotation: Any = str,
     insert_reasoning_before: str | None = None,
 ) -> type[BaseModel]:
     """
@@ -29,11 +30,45 @@ def _create_reasoning_schema(
         reasoning_description (str): Descripción del campo ``reasoning`` que se
             inyectará en la variante dinámica.
         docstring (str): Docstring final que se asignará a la clase generada.
+        reasoning_annotation (Any): Tipo del campo ``reasoning`` para la
+            variante generada. Por defecto ``str``.
 
     Returns:
         type[BaseModel]: Nueva clase Pydantic derivada de ``base_cls`` con el
         campo ``reasoning`` añadido al contrato.
     """
+
+    def _order_reasoning_in_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
+        """
+        Reordena un diccionario para colocar ``reasoning`` en la posición deseada.
+
+        Args:
+            mapping (dict[str, Any]): Mapeo serializado del modelo.
+
+        Returns:
+            dict[str, Any]: Mapeo con ``reasoning`` antes de
+            ``insert_reasoning_before`` cuando aplique.
+        """
+        if "reasoning" not in mapping:
+            return mapping
+
+        reasoning_value = mapping["reasoning"]
+        ordered_mapping: dict[str, Any] = {}
+        inserted = False
+        for field_name, field_value in mapping.items():
+            if field_name == "reasoning":
+                continue
+            if (
+                not inserted
+                and insert_reasoning_before
+                and field_name == insert_reasoning_before
+            ):
+                ordered_mapping["reasoning"] = reasoning_value
+                inserted = True
+            ordered_mapping[field_name] = field_value
+        if not inserted:
+            ordered_mapping = {"reasoning": reasoning_value, **ordered_mapping}
+        return ordered_mapping
 
     def _model_json_schema(cls: type[BaseModel], *args: Any, **kwargs: Any) -> dict[str, Any]:
         """
@@ -53,23 +88,7 @@ def _create_reasoning_schema(
         schema = BaseModel.model_json_schema.__func__(cls, *args, **kwargs)
         properties = schema.get("properties")
         if isinstance(properties, dict) and "reasoning" in properties:
-            reasoning_property = properties["reasoning"]
-            ordered_properties: dict[str, Any] = {}
-            inserted = False
-            for field_name, field_schema in properties.items():
-                if field_name == "reasoning":
-                    continue
-                if (
-                    not inserted
-                    and insert_reasoning_before
-                    and field_name == insert_reasoning_before
-                ):
-                    ordered_properties["reasoning"] = reasoning_property
-                    inserted = True
-                ordered_properties[field_name] = field_schema
-            if not inserted:
-                ordered_properties = {"reasoning": reasoning_property, **ordered_properties}
-            schema["properties"] = ordered_properties
+            schema["properties"] = _order_reasoning_in_mapping(properties)
 
         required = schema.get("required")
         if isinstance(required, list) and "reasoning" in required:
@@ -91,6 +110,22 @@ def _create_reasoning_schema(
             schema["required"] = ordered_required
         return schema
 
+    def _model_dump(self: BaseModel, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """
+        Serializa el modelo y fuerza el orden canónico de ``reasoning``.
+
+        Args:
+            *args: Argumentos posicionales de ``BaseModel.model_dump``.
+            **kwargs: Argumentos con nombre de ``BaseModel.model_dump``.
+
+        Returns:
+            dict[str, Any]: Payload serializado con ``reasoning`` ordenado.
+        """
+        dumped = BaseModel.model_dump(self, *args, **kwargs)
+        if isinstance(dumped, dict):
+            return _order_reasoning_in_mapping(dumped)
+        return dumped
+
     reasoning_base = cast(
         type[BaseModel],
         type(
@@ -99,6 +134,7 @@ def _create_reasoning_schema(
             {
                 "__module__": __name__,
                 "model_json_schema": classmethod(_model_json_schema),
+                "model_dump": _model_dump,
             },
         ),
     )
@@ -112,7 +148,7 @@ def _create_reasoning_schema(
             and field_name == insert_reasoning_before
         ):
             field_definitions["reasoning"] = (
-                str,
+                reasoning_annotation,
                 Field(..., description=reasoning_description),
             )
             inserted_field = True
@@ -121,7 +157,7 @@ def _create_reasoning_schema(
     if not inserted_field:
         field_definitions = {
             "reasoning": (
-                str,
+                reasoning_annotation,
                 Field(..., description=reasoning_description),
             ),
             **field_definitions,
@@ -271,12 +307,15 @@ class AdvancedPolypClassification(BaseModel):
     """
 
     DEFAULT_SYSTEM_PROMPT: ClassVar[str] = (
-        "Eres un comité médico experto en gastroenterología. Tu tarea es analizar "
-        "esta lesión endoscópica paso a paso. Primero, busca activamente evidencias "
-        "a favor y en contra de que sea un Adenoma (AD), un Pólipo Hiperplásico "
-        "(HP) o un Adenoma Serrado Sésil (ASS). Luego, elabora un consenso clínico "
-        "basado ÚNICAMENTE en tus hallazgos previos. Finalmente, emite el "
-        "diagnóstico final estricto ('AD', 'HP' o 'ASS')."
+        "Eres un sistema avanzado de triaje endoscopico analizando imagenes de COLONOSCOPIAS. "
+        "PREMISA ESTRICTA: Se ha confirmado medicamente que en la imagen proporcionada EXISTE "
+        "una lesion o polipo, aunque pueda ser muy sutil, plano o del mismo color que la mucosa "
+        "circundante. Tu unica tarea es clasificar esta lesion existente en una de estas tres "
+        "categorias histologicas: 1. Adenoma (AD) 2. Polipo Hiperplasico (HP) 3. Adenoma Serrado "
+        "Sesil (ASS). Bajo ninguna circunstancia puedes afirmar que el tejido esta sano o sugerir "
+        "diagnosticos fuera de estas tres opciones. Analiza minuciosamente el patron vascular, "
+        "el color y la morfologia superficial (crestas, depresiones, patron de criptas) para "
+        "forzar una decision entre AD, HP o ASS."
     )
 
     analysis_ad: ClassEvidence = Field(
@@ -300,7 +339,9 @@ class AdvancedPolypClassification(BaseModel):
     )
     final_diagnosis: Literal["AD", "HP", "ASS"] = Field(
         ...,
-        description="Diagnóstico final y definitivo. Solo puede ser estrictamente 'AD', 'HP' o 'ASS'.",
+        description=(
+            "Diagnostico final y definitivo. Solo puede ser estrictamente 'AD', 'HP' o 'ASS'."
+        ),
     )
 
 
@@ -428,14 +469,14 @@ PolypClassificationWithReasoning = _create_reasoning_schema(
 AdvancedPolypClassificationWithReasoning = _create_reasoning_schema(
     AdvancedPolypClassification,
     reasoning_description=(
-        "Proceso lógico paso a paso previo al diagnóstico final: revisión de evidencias "
-        "a favor y en contra de AD, HP y ASS, seguido de consenso clínico."
+        "Razonamiento clinico general previo al consenso final: sintetiza hallazgos "
+        "visuales clave, hipotesis diferencial AD/HP/ASS y justificacion de la clase "
+        "mas probable."
     ),
     docstring=(
         "Variante con razonamiento explícito adicional para clasificación avanzada.\n\n"
-        "El campo ``reasoning`` aparece justo antes de ``clinical_consensus`` y complementa "
-        "el análisis estructurado "
-        "por clase antes del diagnóstico final."
+        "El campo ``reasoning`` aparece justo antes de ``clinical_consensus`` para "
+        "forzar la ejecucion de un razonamiento general previo al consenso final."
     ),
     insert_reasoning_before="clinical_consensus",
 )

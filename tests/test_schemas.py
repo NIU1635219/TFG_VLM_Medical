@@ -154,10 +154,22 @@ class TestAdvancedPolypClassification:
                 final_diagnosis="UNKNOWN",
             )
 
+    def test_rejects_indeterminado_final_diagnosis(self):
+        with pytest.raises(ValidationError):
+            AdvancedPolypClassification(
+                analysis_ad=ClassEvidence(evidence_for="a", evidence_against="b"),
+                analysis_hp=ClassEvidence(evidence_for="a", evidence_against="b"),
+                analysis_ass=ClassEvidence(evidence_for="a", evidence_against="b"),
+                clinical_consensus="Imagen atipica sin confianza suficiente para clase cerrada.",
+                final_diagnosis="INDETERMINADO",
+            )
+
     def test_exposes_default_system_prompt(self):
         prompt = AdvancedPolypClassification.DEFAULT_SYSTEM_PROMPT
         assert isinstance(prompt, str)
         assert "AD" in prompt and "HP" in prompt and "ASS" in prompt
+        assert "COLONOSCOPIAS" in prompt
+        assert "EXISTE una lesion" in prompt
 
 
 class TestReasoningSchemaVariants:
@@ -199,6 +211,32 @@ class TestReasoningSchemaVariants:
         )
         assert property_names.index("analysis_ass") < property_names.index("reasoning")
         assert property_names.index("reasoning") < property_names.index("clinical_consensus")
+
+    def test_advanced_reasoning_variant_accepts_general_reasoning_text(self):
+        obj = AdvancedPolypClassificationWithReasoning(
+            analysis_ad=ClassEvidence(evidence_for="a", evidence_against="b"),
+            analysis_hp=ClassEvidence(evidence_for="a", evidence_against="b"),
+            analysis_ass=ClassEvidence(evidence_for="a", evidence_against="b"),
+            reasoning="Lesion sutil con evidencia mixta; tras comparar AD/HP/ASS, predomina ASS.",
+            clinical_consensus="La evidencia global favorece ASS frente a AD y HP.",
+            final_diagnosis="ASS",
+        )
+
+        assert isinstance(obj.reasoning, str)
+        assert obj.reasoning
+
+    def test_advanced_reasoning_dump_orders_reasoning_before_consensus(self):
+        obj = AdvancedPolypClassificationWithReasoning(
+            analysis_ad=ClassEvidence(evidence_for="a", evidence_against="b"),
+            analysis_hp=ClassEvidence(evidence_for="a", evidence_against="b"),
+            analysis_ass=ClassEvidence(evidence_for="a", evidence_against="b"),
+            reasoning="observaciones y comparacion general de clases",
+            clinical_consensus="consensus",
+            final_diagnosis="ASS",
+        )
+
+        keys = list(obj.model_dump().keys())
+        assert keys.index("reasoning") < keys.index("clinical_consensus")
 
     def test_reasoning_variant_requires_reasoning(self):
         with pytest.raises(ValidationError):

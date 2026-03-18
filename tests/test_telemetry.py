@@ -5,12 +5,16 @@ import pytest
 from src.inference.schemas import GenericObjectDetection, get_schema_variant
 from src.inference.vlm_runner import InferenceResult, VLMLoader
 from src.scripts.test_telemetry import (
-    build_cli_progress_callback,
     first_available_value,
-    format_metric,
-    render_telemetry_report,
     run_telemetry_batch,
     summarize_numeric,
+)
+from src.utils.tests_ui.cli_reporters import (
+    _format_metric_window,
+    _status_tag,
+    format_metric,
+    print_telemetry_progress,
+    print_telemetry_report,
 )
 from src.scripts.test_schema import run_batch as run_schema_batch
 
@@ -338,7 +342,7 @@ def test_run_telemetry_batch_reports_notes_when_stats_and_rest_are_missing(monke
     assert "TPS" in summary["notes"]["tps"]
 
 
-def test_render_telemetry_report_prints_structured_sections(capsys):
+def test_print_telemetry_report_prints_structured_sections(capsys):
     summary = {
         "model_id": "fake-model",
         "schema_name": "GenericObjectDetection",
@@ -386,7 +390,7 @@ def test_render_telemetry_report_prints_structured_sections(capsys):
         "prompt": "Describe la imagen.",
     }
 
-    render_telemetry_report(summary)
+    print_telemetry_report(summary)
     output = capsys.readouterr().out
 
     assert "TELEMETRY PROBE" in output
@@ -400,8 +404,8 @@ def test_render_telemetry_report_prints_structured_sections(capsys):
     assert "/v1/models" not in output
 
 
-def test_build_cli_progress_callback_reports_completion_without_rest_warning(capsys):
-    callback = build_cli_progress_callback()
+def test_print_telemetry_progress_reports_completion_without_rest_warning(capsys):
+    callback = print_telemetry_progress
 
     callback({"event": "start", "total": 2})
     callback({"event": "image_start", "index": 1, "total": 2, "image_path": "a.jpg"})

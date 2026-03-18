@@ -30,7 +30,18 @@ def _normalize_manifest_run_config(
     seed: int,
     model_variants: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    """Build a canonical run config payload used by the batch wrapper."""
+    """
+    Construye un payload de configuración de ejecución canónico utilizado por el wrapper de lotes.
+    
+    Args:
+        schema_name: Nombre del esquema.
+        iterations_per_image: Número de iteraciones por imagen.
+        seed: Semilla aleatoria.
+        model_variants: Variantes del modelo.
+        
+    Returns:
+        Diccionario con la configuración normalizada o `None` si falta información crítica.
+    """
     if not schema_name:
         return None
 
@@ -47,7 +58,15 @@ def _normalize_manifest_run_config(
 
 
 def _read_manifest_meta(manifest_path: str) -> dict[str, Any] | None:
-    """Read global manifest metadata if present in the first JSONL lines."""
+    """
+    Lee los metadatos globales del manifiesto si están presentes en las primeras líneas del JSONL.
+
+    Args:
+        manifest_path: Ruta al archivo JSONL del manifiesto.
+
+    Returns:
+        Diccionario de metadatos o `None` si no se encuentran.
+    """
     path = Path(manifest_path)
     if not path.exists() or not path.is_file():
         return None
@@ -62,7 +81,8 @@ def _read_manifest_meta(manifest_path: str) -> dict[str, Any] | None:
 
 
 def _iter_jsonl_lines_with_payload(path: Path) -> Iterator[tuple[str, dict[str, Any] | None]]:
-    """Itera líneas JSONL devolviendo cada línea y su payload dict parseado.
+    """
+    Itera líneas JSONL devolviendo cada línea y su payload dict parseado.
 
     Args:
         path: Ruta al archivo JSONL.
@@ -92,7 +112,8 @@ def _iter_jsonl_lines_with_payload(path: Path) -> Iterator[tuple[str, dict[str, 
 
 
 def _load_manifest_class_counts(csv_path: Path) -> dict[str, int]:
-    """Carga conteos por clase para estimar el reparto estratificado.
+    """
+    Carga conteos por clase para estimar el reparto estratificado.
 
     Args:
         csv_path: Ruta al CSV base de entrenamiento.
@@ -123,13 +144,14 @@ def _load_manifest_class_counts(csv_path: Path) -> dict[str, int]:
 
 
 def _select_manifest_sample_size(kit: "UIKit") -> int | str:
-    """Solicita tamaño de muestra con previsualización por subgrupos.
+    """
+    Solicita tamaño de muestra con previsualización por subgrupos.
 
     Args:
-        kit: Terminal UI toolkit.
+        kit: Toolkit de interfaz de usuario de terminal.
 
     Returns:
-        Positive integer sample size, or `"BACK"` if cancelled.
+        Tamaño de muestra (entero positivo) o `"BACK"` si se cancela.
     """
     class_counts = _load_manifest_class_counts(Path("data/raw/m_train/train.csv"))
     total_available = sum(class_counts.values())
@@ -140,7 +162,8 @@ def _select_manifest_sample_size(kit: "UIKit") -> int | str:
     )
 
     def _validate_sample_size(raw_value: str) -> str | None:
-        """Valida tamaño de muestra escrito por el usuario.
+        """
+        Valida tamaño de muestra escrito por el usuario.
 
         Args:
             raw_value: Texto confirmado en el campo de entrada.
@@ -157,7 +180,8 @@ def _select_manifest_sample_size(kit: "UIKit") -> int | str:
         return None
 
     def _render_preview_lines(current_value: str, _ui_width: int) -> list[str]:
-        """Construye líneas dinámicas del preview estratificado.
+        """
+        Construye líneas dinámicas del preview estratificado.
 
         Args:
             current_value: Valor actual del input.
@@ -225,7 +249,8 @@ def _select_manifest_sample_size(kit: "UIKit") -> int | str:
 
 
 def _select_manifest_iterations_per_image(kit: "UIKit") -> int | str:
-    """Solicita cuántas iteraciones ejecutar por imagen/modelo.
+    """
+    Solicita cuántas iteraciones ejecutar por imagen/modelo.
 
     Args:
         kit: Terminal UI toolkit.
@@ -283,10 +308,11 @@ def _select_manifest_iterations_per_image(kit: "UIKit") -> int | str:
 
 
 def discover_experiment_manifests() -> list[str]:
-    """Discover available experiment manifests under data/experiments.
+    """
+    Descubre los manifiestos de experimentos disponibles en data/experiments.
 
     Returns:
-        Absolute paths to manifest JSONL files ordered by most recent first.
+        Rutas absolutas a los archivos JSONL de los manifiestos, ordenadas por los más recientes.
     """
     experiments_dir = Path("data/experiments")
     if not experiments_dir.exists() or not experiments_dir.is_dir():
@@ -305,13 +331,14 @@ def discover_experiment_manifests() -> list[str]:
 
 
 def _sanitize_name(name: str) -> str:
-    """Normalize strings so they are safe for filenames.
+    """
+    Normaliza cadenas para que sean seguras para nombres de archivo.
 
     Args:
-        name: Raw token to normalize.
+        name: Token en crudo a normalizar.
 
     Returns:
-        Filename-safe token.
+        Token seguro para nombres de archivo.
     """
     allowed = []
     for char in name:
@@ -323,7 +350,15 @@ def _sanitize_name(name: str) -> str:
 
 
 def _output_schema_name(schema_name: str) -> str:
-    """Normaliza schema para nombre de archivo de salida compartido."""
+    """
+    Normaliza schema para nombre de archivo de salida compartido.
+
+    Args:
+        schema_name: Nombre del esquema a normalizar.
+
+    Returns:
+        Nombre del esquema normalizado.
+    """
     value = str(schema_name or "").strip()
     suffix = "WithReasoning"
     if value.endswith(suffix) and len(value) > len(suffix):
@@ -332,14 +367,15 @@ def _output_schema_name(schema_name: str) -> str:
 
 
 def linked_batch_output_path(*, manifest_path: str, schema_name: str) -> Path:
-    """Build stable output JSONL path bound to manifest+schema.
+    """
+    Construye una ruta JSONL de salida estable vinculada al manifiesto y al esquema.
 
     Args:
-        manifest_path: Manifest JSONL path.
-        schema_name: Effective execution schema name.
+        manifest_path: Ruta al JSONL del manifiesto.
+        schema_name: Nombre del esquema de ejecución efectivo.
 
     Returns:
-        Absolute output path for batch JSONL results.
+        Ruta absoluta de salida para los resultados JSONL por lotes.
     """
     manifest_stem = _sanitize_name(Path(manifest_path).stem)
     schema_token = _sanitize_name(_output_schema_name(schema_name))
@@ -349,13 +385,14 @@ def linked_batch_output_path(*, manifest_path: str, schema_name: str) -> Path:
 
 
 def load_manifest_entries(manifest_path: str) -> list[dict[str, Any]]:
-    """Load valid rows from a manifest JSONL file.
+    """
+    Carga filas válidas de un archivo JSONL de manifiesto.
 
     Args:
-        manifest_path: Path to JSONL manifest.
+        manifest_path: Ruta al JSONL del manifiesto.
 
     Returns:
-        Parsed valid row dictionaries containing at least `image_path`.
+        Lista de diccionarios de filas válidas parseadas que contienen al menos `image_path`.
     """
     entries: list[dict[str, Any]] = []
     for _line, payload in _iter_jsonl_lines_with_payload(Path(manifest_path)):
@@ -369,7 +406,15 @@ def load_manifest_entries(manifest_path: str) -> list[dict[str, Any]]:
 
 
 def _entry_execution_key(entry: dict[str, Any]) -> tuple[str, int]:
-    """Genera una clave estable por entrada soportando iteraciones repetidas."""
+    """
+    Genera una clave estable por entrada soportando iteraciones repetidas.
+    
+    Args:
+        entry: Entrada del manifiesto.
+        
+    Returns:
+        Clave estable por entrada.
+    """
     image_path = str(entry.get("image_path") or "").strip()
     iteration_index = safe_positive_int(entry.get("run_iteration_index"))
     return image_path, iteration_index
@@ -382,13 +427,17 @@ def _load_last_records_by_entry_for_model(
     schema_name: str,
     include_reasoning: bool,
 ) -> dict[tuple[str, int], dict[str, Any]]:
-    """Index latest result record by entry key filtered by model id.
+    """
+    Indexa el último registro de resultado por clave de entrada filtrado por ID de modelo.
 
     Args:
-        output_path: Path to batch output JSONL.
+        output_path: Ruta al JSONL de salida por lotes.
+        model_tag: Identificador del modelo para filtrar.
+        schema_name: Nombre del esquema para filtrar.
+        include_reasoning: Si se incluye el razonamiento en la variante.
 
     Returns:
-        Mapping `(image_path, run_iteration_index) -> last seen record`.
+        Mapeo de `(image_path, run_iteration_index) -> último registro visto`.
     """
     records_by_entry: dict[tuple[str, int], dict[str, Any]] = {}
     output_file = Path(output_path)
@@ -423,16 +472,17 @@ def prune_output_records_for_model(
     schema_name: str,
     include_reasoning: bool,
 ) -> bool:
-    """Remove records for one model from a shared batch output JSONL.
+    """
+    Elimina los registros de un modelo específico de un JSONL de salida por lotes compartido.
 
     Args:
-        output_path: Shared batch output path.
-        model_tag: Model id whose rows should be removed.
-        schema_name: Base schema name shared by variants.
-        include_reasoning: Variant mode flag used to isolate rows.
+        output_path: Ruta del JSONL de salida compartido.
+        model_tag: ID del modelo cuyas filas deben ser eliminadas.
+        schema_name: Nombre base del esquema compartido por las variantes.
+        include_reasoning: Flag de modo de variante utilizado para aislar filas.
 
     Returns:
-        `True` when rewrite succeeds.
+        `True` cuando la reescritura tiene éxito.
     """
     out_file = Path(output_path)
     if not out_file.exists() or not out_file.is_file():
@@ -463,13 +513,14 @@ def prune_output_records_for_model(
 
 
 def _is_success_record(record: dict[str, Any]) -> bool:
-    """Determine whether an output record is considered successful.
+    """
+    Determina si un registro de salida se considera exitoso.
 
     Args:
-        record: Parsed result row.
+        record: Fila de resultado parseada.
 
     Returns:
-        `True` when status is `ok` and payload contains meaningful content.
+        `True` cuando el estado es `ok` y el payload contiene contenido significativo.
     """
     if str(record.get("status") or "") != "ok":
         return False
@@ -486,16 +537,17 @@ def manifest_execution_snapshot(
     schema_name: str,
     include_reasoning: bool,
 ) -> dict[str, Any]:
-    """Compute execution semaphore snapshot for a manifest/model/schema run.
+    """
+    Calcula la instantánea del semáforo de ejecución para una ejecución de manifiesto/modelo/esquema.
 
     Args:
-        manifest_path: Manifest JSONL path.
-        model_tag: LM Studio model tag.
-        schema_name: Base schema name.
-        include_reasoning: Variant mode flag.
+        manifest_path: Ruta al JSONL del manifiesto.
+        model_tag: Etiqueta del modelo de LM Studio.
+        schema_name: Nombre base del esquema.
+        include_reasoning: Flag de modo de variante.
 
     Returns:
-        Snapshot dictionary with status, counters, pending entries and output path.
+        Diccionario de instantánea con estado, contadores, entradas pendientes y ruta de salida.
     """
     entries = load_manifest_entries(manifest_path)
     output_path = str(linked_batch_output_path(manifest_path=manifest_path, schema_name=schema_name))
@@ -559,14 +611,15 @@ def manifest_execution_snapshot(
 
 
 def status_label(kit: "UIKit", snapshot: dict[str, Any]) -> str:
-    """Render colored label for manifest snapshot status.
+    """
+    Renderiza una etiqueta coloreada para el estado de la instantánea del manifiesto.
 
     Args:
-        kit: Terminal UI toolkit.
-        snapshot: Snapshot dictionary produced by `manifest_execution_snapshot`.
+        kit: Toolkit de interfaz de usuario de terminal.
+        snapshot: Diccionario de instantánea producido por `manifest_execution_snapshot`.
 
     Returns:
-        ANSI-colored status label.
+        Etiqueta de estado coloreada con ANSI.
     """
     style = kit.style
     color_by_status = {
@@ -582,14 +635,15 @@ def status_label(kit: "UIKit", snapshot: dict[str, Any]) -> str:
 
 
 def create_pending_manifest(*, pending_entries: list[dict[str, Any]], source_manifest_path: str) -> str | None:
-    """Write temporary pending-only manifest for retry execution.
+    """
+    Escribe un manifiesto temporal solo con las entradas pendientes para una reejecución.
 
     Args:
-        pending_entries: Entries still pending or failed.
-        source_manifest_path: Original manifest path.
+        pending_entries: Entradas que aún están pendientes o fallidas.
+        source_manifest_path: Ruta original del manifiesto.
 
     Returns:
-        Temporary manifest path, or `None` when nothing is pending.
+        Ruta del manifiesto temporal, o `None` cuando no hay nada pendiente.
     """
     if not pending_entries:
         return None
@@ -605,13 +659,14 @@ def create_pending_manifest(*, pending_entries: list[dict[str, Any]], source_man
 
 
 def _format_class_distribution(summary: dict[str, Any]) -> str:
-    """Format compact class distribution text from generation summary.
+    """
+    Formatea el texto compacto de distribución de clases a partir del resumen de generación.
 
     Args:
-        summary: Manifest generation summary dictionary.
+        summary: Diccionario de resumen de generación de manifiesto.
 
     Returns:
-        Human-readable class distribution string.
+        Cadena de distribución de clases legible por humanos.
     """
     counts = cast(dict[str, Any], summary.get("written_by_class") or {})
     if not counts:
@@ -621,7 +676,16 @@ def _format_class_distribution(summary: dict[str, Any]) -> str:
 
 
 def _estimate_manifest_sample_size(*, manifest_path: str, iterations_per_image: int) -> int:
-    """Estimate original sample size from manifest rows and iteration metadata."""
+    """
+    Estima el tamaño original de la muestra a partir de las filas del manifiesto y los metadatos de iteración.
+    
+    Args:
+        manifest_path: Ruta al JSONL del manifiesto.
+        iterations_per_image: Número de iteraciones por imagen.
+        
+    Returns:
+        Tamaño estimado de la muestra original.
+    """
     entries = load_manifest_entries(manifest_path)
     if not entries:
         return 1
@@ -639,7 +703,16 @@ def _estimate_manifest_sample_size(*, manifest_path: str, iterations_per_image: 
 
 
 def _select_manifest_sample_size_with_default(kit: "UIKit", *, initial_value: int | None = None) -> int | str:
-    """Solicita tamaño de muestra con un valor inicial precargado."""
+    """
+    Solicita tamaño de muestra con un valor inicial precargado.
+    
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        initial_value: Valor inicial para el campo de entrada.
+        
+    Returns:
+        Tamaño de muestra confirmado o mensaje de error.
+    """
     class_counts = _load_manifest_class_counts(Path("data/raw/m_train/train.csv"))
     total_available = sum(class_counts.values())
 
@@ -649,6 +722,15 @@ def _select_manifest_sample_size_with_default(kit: "UIKit", *, initial_value: in
     )
 
     def _validate_sample_size(raw_value: str) -> str | None:
+        """
+        Valida el tamaño de muestra introducido por el usuario.
+        
+        Args:
+            raw_value: Valor introducido por el usuario.
+            
+        Returns:
+            Mensaje de error si la validación falla, None en caso contrario.
+        """
         if not raw_value:
             return "Debes indicar un número entero positivo."
         if not raw_value.isdigit():
@@ -658,6 +740,16 @@ def _select_manifest_sample_size_with_default(kit: "UIKit", *, initial_value: in
         return None
 
     def _render_preview_lines(current_value: str, _ui_width: int) -> list[str]:
+        """
+        Renderiza las líneas de preview para el tamaño de muestra.
+        
+        Args:
+            current_value: Valor actual del campo de entrada.
+            _ui_width: Ancho de la interfaz de usuario.
+            
+        Returns:
+            Lista de líneas de preview.
+        """
         style = kit.style
         sample_size = int(current_value) if current_value.isdigit() else 0
         preview_counts: dict[str, int] = {}
@@ -722,9 +814,27 @@ def _select_manifest_iterations_per_image_with_default(
     *,
     initial_value: int | None = None,
 ) -> int | str:
-    """Solicita iteraciones con valor inicial precargado."""
+    """
+    Solicita iteraciones con valor inicial precargado.
+    
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        initial_value: Valor inicial para el campo de entrada.
+        
+    Returns:
+        Número de iteraciones confirmado o mensaje de error.
+    """
 
     def _validate_iterations(raw_value: str) -> str | None:
+        """
+        Valida el número de iteraciones introducido por el usuario.
+        
+        Args:
+            raw_value: Valor introducido por el usuario.
+            
+        Returns:
+            Mensaje de error si la validación falla, None en caso contrario.
+        """
         if not raw_value:
             return "Debes indicar un número entero positivo."
         if not raw_value.isdigit():
@@ -736,6 +846,16 @@ def _select_manifest_iterations_per_image_with_default(
         return None
 
     def _render_iterations_preview(current_value: str, _ui_width: int) -> list[str]:
+        """
+        Renderiza las líneas de preview para el número de iteraciones.
+        
+        Args:
+            current_value: Valor actual del campo de entrada.
+            _ui_width: Ancho de la interfaz de usuario.
+            
+        Returns:
+            Lista de líneas de preview.
+        """
         style = kit.style
         value = int(current_value) if current_value.isdigit() else 0
         lines: list[str] = [
@@ -774,13 +894,14 @@ def _select_manifest_iterations_per_image_with_default(
 
 
 def extract_manifest_run_config(manifest_path: str) -> dict[str, Any] | None:
-    """Extract embedded run configuration from manifest first row.
+    """
+    Extrae la configuración de ejecución embebida de la primera fila del manifiesto.
 
     Args:
-        manifest_path: Manifest JSONL path.
+        manifest_path: Ruta del JSONL del manifiesto.
 
     Returns:
-        Config dictionary with models and schema settings, or `None`.
+        Diccionario de configuración con ajustes de modelos y esquema, o `None`.
     """
     meta = _read_manifest_meta(manifest_path)
     if not isinstance(meta, dict):
@@ -803,14 +924,15 @@ def extract_manifest_run_config(manifest_path: str) -> dict[str, Any] | None:
 
 
 def execution_schema_name(schema_name: str, include_reasoning: bool) -> str:
-    """Build public schema name used in status and reporting.
+    """
+    Construye el nombre público del esquema utilizado en el estado y los informes.
 
     Args:
-        schema_name: Base schema name.
-        include_reasoning: Whether reasoning variant is enabled.
+        schema_name: Nombre base del esquema.
+        include_reasoning: Si está habilitada la variante con razonamiento.
 
     Returns:
-        Effective schema name.
+        Nombre de esquema efectivo.
     """
     if include_reasoning and not schema_name.endswith("WithReasoning"):
         return f"{schema_name}WithReasoning"
@@ -824,7 +946,18 @@ def _select_source_manifest_to_modify(
     overviews: dict[str, dict[str, Any]],
     make_header: Callable[[str], Callable[[], None]],
 ) -> str | None:
-    """Prompt source manifest selection for derivation flow."""
+    """
+    Solicita la selección del manifiesto de origen para el flujo de derivación.
+    
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        manifests: Lista de rutas de manifiestos disponibles.
+        overviews: Diccionario de resúmenes de manifiestos.
+        make_header: Función para crear el encabezado del menú.
+        
+    Returns:
+        Ruta del manifiesto seleccionado o None si se cancela.
+    """
     options = [
         kit.MenuItem(
             f"{os.path.basename(path)} · {status_label(kit, overviews[path])}",
@@ -856,7 +989,18 @@ def _select_source_manifest_to_delete(
     overviews: dict[str, dict[str, Any]],
     make_header: Callable[[str], Callable[[], None]],
 ) -> str | None:
-    """Prompt manifest selection for deletion flow."""
+    """
+    Solicita la selección del manifiesto para el flujo de eliminación.
+    
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        manifests: Lista de rutas de manifiestos disponibles.
+        overviews: Diccionario de resúmenes de manifiestos.
+        make_header: Función para crear el encabezado del menú.
+        
+    Returns:
+        Ruta del manifiesto seleccionado o None si se cancela.
+    """
     options = [
         kit.MenuItem(
             f"{os.path.basename(path)} · {status_label(kit, overviews[path])}",
@@ -887,48 +1031,57 @@ def _confirm_manifest_deletion(
     manifest_path: str,
     make_header: Callable[[str], Callable[[], None]],
 ) -> bool:
-    """Render an explicit confirmation step before deleting a manifest file."""
+    """
+    Muestra un paso de confirmación explícito antes de eliminar un archivo de manifiesto.
+    
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        manifest_path: Ruta del archivo de manifiesto a eliminar.
+        make_header: Función para crear el encabezado del menú.
+        
+    Returns:
+        True si se confirma la eliminación, False en caso contrario.
+    """
     manifest_name = os.path.basename(manifest_path)
-    linked_outputs = _linked_shared_jsonl_outputs(manifest_path)
-    linked_names = [str(path) for path in linked_outputs]
-    if linked_names:
-        linked_summary = " | ".join(linked_names[:2])
-        if len(linked_names) > 2:
-            linked_summary += f" | +{len(linked_names) - 2} más"
-    else:
-        linked_summary = "No se detectaron JSONL compartidos vinculados."
+    linked_output = _linked_shared_jsonl_output(manifest_path)
+    linked_summary = (
+        str(linked_output) if linked_output is not None else "No se detectó JSONL compartido vinculado."
+    )
 
     kit.log(f"Manifest a eliminar: {manifest_path}", "warning")
-    kit.log(f"JSONL compartidos que se eliminarán: {linked_summary}", "warning")
-    options = [
-        kit.MenuItem(
-            f"Eliminar definitivamente {manifest_name}",
-            description=(
-                "Esta acción borra el manifiesto y sus JSONL compartidos vinculados. "
-                f"Archivos detectados: {len(linked_outputs)}"
-            ),
-        ),
-        kit.MenuItem("Cancelar", lambda: None, description="No borrar y volver al selector."),
-    ]
-    selected = kit.menu(
-        options,
-        header_func=make_header("BATCH RUNNER · CONFIRM DELETE"),
-        menu_id="batch_runner_manifest_delete_confirm",
-        nav_hint_text="↑/↓ elegir acción · ENTER confirmar · ESC volver",
-        description_slot_rows=8,
-    )
-    if not selected:
-        return False
-    return selected.label.startswith("Eliminar definitivamente")
+    kit.log(f"JSONL compartido que se eliminará: {linked_summary}", "warning")
+
+    # Renderizar encabezado del menú antes de preguntar
+    try:
+        header_fn = make_header("BATCH RUNNER · CONFIRM DELETE")
+        kit.clear()
+        header_fn()
+    except Exception:
+        # Si la factoría de cabecera no está disponible, continuar silenciosamente
+        pass
+
+    question = f"Eliminar definitivamente {manifest_name}?"
+    info_text = linked_summary
+
+    confirmed = kit.ask(question=question, default="n", info_text=info_text)
+    return bool(confirmed)
 
 
-def _linked_shared_jsonl_outputs(manifest_path: str) -> list[Path]:
-    """Resolve shared batch JSONL outputs linked to a manifest path."""
+def _linked_shared_jsonl_output(manifest_path: str) -> Path | None:
+    """
+    Resuelve la salida JSONL de lotes compartida vinculada a una ruta de manifiesto.
+    
+    Args:
+        manifest_path: Ruta del archivo de manifiesto.
+        
+    Returns:
+        Ruta del archivo JSONL compartido vinculado, o `None` si no existe.
+    """
     manifest_stem = _sanitize_name(Path(manifest_path).stem)
     batch_dir = Path("data/processed/batch_results")
     if not batch_dir.exists() or not batch_dir.is_dir():
-        return []
-    return sorted(
+        return None
+    candidates = sorted(
         [
             path
             for path in batch_dir.glob(f"batch_{manifest_stem}_*.jsonl")
@@ -936,34 +1089,43 @@ def _linked_shared_jsonl_outputs(manifest_path: str) -> list[Path]:
         ],
         key=lambda value: value.name,
     )
+    return candidates[0] if candidates else None
 
 
 def _delete_manifest_file(manifest_path: str) -> tuple[bool, str | None]:
-    """Delete a manifest file and linked shared batch JSONL outputs."""
+    """
+    Elimina un archivo de manifiesto y las salidas JSONL de lotes compartidas vinculadas.
+    
+    Args:
+        manifest_path: Ruta del archivo de manifiesto a eliminar.
+        
+    Returns:
+        Tupla de (éxito, error_mensaje).
+    """
     target = Path(manifest_path)
     if not target.exists() or not target.is_file():
         return False, "El archivo no existe o no es un manifiesto válido."
 
-    linked_outputs = _linked_shared_jsonl_outputs(manifest_path)
+    linked_output = _linked_shared_jsonl_output(manifest_path)
 
     try:
         target.unlink()
-        for output_file in linked_outputs:
-            if output_file.is_file():
-                output_file.unlink()
+        if linked_output is not None and linked_output.is_file():
+            linked_output.unlink()
     except OSError as error:
         return False, str(error)
     return True, None
 
 
 def manifest_overview(manifest_path: str) -> dict[str, Any]:
-    """Aggregate manifest status across all configured queue models.
+    """
+    Agrega el estado del manifiesto a través de todos los modelos de cola configurados.
 
     Args:
-        manifest_path: Manifest JSONL path.
+        manifest_path: Ruta del JSONL del manifiesto.
 
     Returns:
-        Overview dictionary with global status, per-model runs and description.
+        Diccionario de resumen con estado global, ejecuciones por modelo y descripción.
     """
     config = extract_manifest_run_config(manifest_path)
     if config is None:
@@ -1037,19 +1199,20 @@ def _generate_manifest_with_prompt(
     initial_model_variants: list[dict[str, Any]] | None = None,
     initial_schema_name: str | None = None,
 ) -> dict[str, Any] | None:
-    """Interactively generate a new autosufficient execution manifest.
+    """
+    Genera interactivamente un nuevo manifiesto de ejecución autosuficiente.
 
     Args:
-        kit: Terminal UI toolkit.
-        app: Application context used by selectors.
-        subtitle: Subtitle for generation screen.
-        make_header: Header factory for interactive menus.
-        select_schema_base: Callback for base schema selection.
-        source_manifest_path: Optional source manifest for derivation.
-        source_seed: Seed inherited from source manifest.
+        kit: Toolkit de interfaz de usuario de terminal.
+        app: Contexto de la aplicación utilizado por los selectores.
+        subtitle: Subtítulo para la pantalla de generación.
+        make_header: Factoría de cabeceras para menús interactivos.
+        select_schema_base: Callback para la selección del esquema base.
+        source_manifest_path: Manifiesto de origen opcional para la derivación.
+        source_seed: Semilla heredada del manifiesto original.
 
     Returns:
-        Manifest generation summary or `None` when cancelled.
+        Resumen de generación de manifiesto o `None` cuando se cancela.
     """
     from .manifest_generation import generate_manifest
 
@@ -1146,16 +1309,17 @@ def select_manifest_for_batch(
     make_header: Callable[[str], Callable[[], None]],
     select_schema_base: Callable[..., str | None],
 ) -> dict[str, Any] | None:
-    """Select an existing autosufficient manifest or generate a new one.
+    """
+    Selecciona un manifiesto autosuficiente existente o genera uno nuevo.
 
     Args:
-        kit: Terminal UI toolkit.
-        app: Application context used by model selector and UI rendering.
-        make_header: Header factory for interactive menus.
-        select_schema_base: Callback for schema base selection.
+        kit: Toolkit de interfaz de usuario de terminal.
+        app: Contexto de la aplicación utilizado por el selector de modelos y el renderizado de la UI.
+        make_header: Factoría de cabeceras para menús interactivos.
+        select_schema_base: Callback para la selección de la base del esquema.
 
     Returns:
-        Dictionary with selected manifest path, overview and run config, or `None`.
+        Diccionario con la ruta del manifiesto seleccionado, resumen y configuración de ejecución, o `None`.
     """
     while True:
         manifests = discover_experiment_manifests()

@@ -2,6 +2,7 @@ from argparse import Namespace
 from types import SimpleNamespace
 
 from src.scripts import test_response as inspector
+from src.utils.tests_ui.cli_reporters import print_response_summary
 
 
 def test_resolve_schema_defaults_to_generic_when_reasoning_is_requested():
@@ -132,7 +133,7 @@ def test_print_summary_renders_visual_sections(capsys):
         },
     }
 
-    inspector.print_summary(payload)
+    print_response_summary(payload)
     output = capsys.readouterr().out
 
     assert "LM STUDIO RESPONSE INSPECTOR" in output
@@ -161,7 +162,7 @@ def test_print_summary_omits_empty_rows_and_sections(capsys):
         },
     }
 
-    inspector.print_summary(payload)
+    print_response_summary(payload)
     output = capsys.readouterr().out
 
     assert "REST RESOURCES" not in output

@@ -312,7 +312,7 @@ def should_repaint_static(
     if not static_rendered:
         return True
     # Si cambió el tamaño, SIEMPRE repintamos todo para limpiar la basura
-    if force_full or width_changed or height_changed or signature_changed:
+    if force_full or width_changed or height_changed or signature_changed or has_wrapped_lines:
         return True
     return False
 
@@ -377,6 +377,7 @@ class IncrementalPanelRenderer:
         self.static_rendered = False
         self.prev_dynamic_visual_rows = 0
         self.prev_terminal_width: int | None = None
+        self.prev_terminal_height: int | None = None
 
     def reset(self) -> None:
         """
@@ -385,6 +386,7 @@ class IncrementalPanelRenderer:
         self.static_rendered = False
         self.prev_dynamic_visual_rows = 0
         self.prev_terminal_width = None
+        self.prev_terminal_height = None
 
     def render(self, dynamic_lines: list[str], *, force_full: bool = False) -> None:
         """
@@ -394,7 +396,11 @@ class IncrementalPanelRenderer:
             dynamic_lines (list[str]): Líneas de texto que componen la parte dinámica.
             force_full (bool, optional): Si es True, fuerza un redibujado completo (clrs + static + dynamic).
         """
-        terminal_width = shutil.get_terminal_size(fallback=(120, 30)).columns
+        terminal_size = shutil.get_terminal_size(fallback=(120, 30))
+        terminal_width = terminal_size.columns
+        terminal_height = terminal_size.lines
+        height_changed = self.prev_terminal_height is not None and self.prev_terminal_height != terminal_height
+
         decision = compute_render_decision(
             dynamic_lines=dynamic_lines,
             terminal_width=terminal_width,
@@ -403,6 +409,7 @@ class IncrementalPanelRenderer:
             force_full=force_full,
         )
         self.prev_terminal_width = terminal_width
+        self.prev_terminal_height = terminal_height
 
         has_wrapped_lines = bool(decision["has_wrapped_lines"])
         current_dynamic_rows = int(decision["current_dynamic_rows"])
@@ -415,6 +422,7 @@ class IncrementalPanelRenderer:
             static_rendered=self.static_rendered,
             force_full=effective_force_full,
             width_changed=bool(decision["width_changed"]), # AÑADIDO: Pasamos el cambio de ancho
+            height_changed=height_changed,
             has_wrapped_lines=has_wrapped_lines,
         ):
             self.clear_screen_fn()
@@ -531,7 +539,8 @@ def ask_text(
     max_length: int | None = None,
     force_full_on_update: bool = False,
 ) -> str | None:
-    """Renderiza un panel reactivo de entrada de texto reutilizable.
+    """
+    Renderiza un panel reactivo de entrada de texto reutilizable.
 
     Args:
         kit: Instancia de ``UIKit`` o compatible.
@@ -698,7 +707,8 @@ def ask_choice(
     info_text: str | Callable[[], str] = "",
     nav_hint_text: str = "Acciones: ←/→ (o ↑/↓) cambiar opción · ENTER confirmar · ESC cancelar.",
 ) -> int | None:
-    """Solicita al usuario elegir una opción horizontal con teclado.
+    """
+    Solicita al usuario elegir una opción horizontal con teclado.
 
     Args:
         question: Pregunta principal.

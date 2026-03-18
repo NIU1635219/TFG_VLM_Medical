@@ -7,6 +7,7 @@ para ser llamadas desde ``setup_tests_ui.py``, que gestiona la navegación.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import random
@@ -59,12 +60,29 @@ DEFAULT_PROMPT_FALLBACK = "Analiza esta imagen médica y describe lo que observa
 
 
 def _base_schema_name(schema_name: str) -> str:
-    """Normaliza nombres de variantes para resolver el prompt base."""
+    """
+    Normaliza nombres de variantes para resolver el prompt base.
+
+    Args:
+        schema_name: Nombre del esquema.
+
+    Returns:
+        Nombre normalizado del esquema.
+    """
     return schema_name.removesuffix("WithReasoning")
 
 
 def build_prompt_for_schema(schema_name: str, schema_cls: type[BaseModel]) -> str:
-    """Construye el prompt final según el schema y si exige razonamiento explícito."""
+    """
+    Construye el prompt final según el schema y si exige razonamiento explícito.
+
+    Args:
+        schema_name: Nombre del esquema.
+        schema_cls: Clase del esquema.
+
+    Returns:
+        Prompt final.
+    """
     base_prompt = DEFAULT_PROMPTS.get(_base_schema_name(schema_name), DEFAULT_PROMPT_FALLBACK)
     if not schema_uses_reasoning(schema_cls):
         return base_prompt
@@ -132,7 +150,16 @@ def format_schema_info(
         Cadena multi-línea con la información formateada.
     """
     def _wrap_desc(text: str, indent: str) -> list[str]:
-        """Envuelve *text* al ancho disponible; cada línea lleva *indent*."""
+        """
+        Envuelve *text* al ancho disponible; cada línea lleva *indent*.
+
+        Args:
+            text: Texto a envolver.
+            indent: Sangría a aplicar.
+
+        Returns:
+            Lista de líneas envueltas.
+        """
         if text_width is None:
             return [f"{indent}{text}"]
         avail = max(8, text_width - len(indent) - 2)
@@ -248,14 +275,6 @@ def _validate_result(result: BaseModel, schema_cls: type[BaseModel]) -> tuple[bo
         return False, str(exc)
 
 
-def _print_result(image_path: str, result: BaseModel, idx: int, total: int) -> None:
-    """Imprime un resultado de inferencia como JSON indentado."""
-    try:
-        rel = os.path.relpath(image_path, _PROJECT_ROOT)
-    except ValueError:
-        rel = image_path
-    print(f"\n  [{idx}/{total}] {rel}")
-    print(json.dumps(result.model_dump(), indent=4, ensure_ascii=False))
 
 
 def _build_schema_summary(
@@ -269,7 +288,22 @@ def _build_schema_summary(
     fail: int,
     invalid: int,
 ) -> dict[str, Any]:
-    """Construye un resumen parcial o final del schema tester."""
+    """
+    Construye un resumen parcial o final del schema tester.
+
+    Args:
+        model_id: ID del modelo.
+        schema_name: Nombre del esquema.
+        prompt: Prompt usado.
+        sample_size: Tamaño de la muestra.
+        total_available: Total de imágenes disponibles.
+        ok: Número de inferencias correctas.
+        fail: Número de errores de inferencia.
+        invalid: Número de inferencias inválidas.
+
+    Returns:
+        Resumen del schema tester.
+    """
     return {
         "model_id": model_id,
         "schema_name": schema_name,
@@ -315,12 +349,8 @@ def run_batch(
         sample = random.sample(images, max_images)
 
     if on_progress is None:
-        print(f"\nModelo  : {model_id}")
-        print(f"Esquema : {schema_name}")
-        print(f"Imágenes: {len(sample)} (de {len(images)} disponibles)")
-        print(f"Prompt  : {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
-        print(f"Modo    : {'con razonamiento' if schema_uses_reasoning(schema_cls) else 'sin razonamiento'}")
-        print("-" * 60)
+        from src.utils.tests_ui.cli_reporters import print_schema_progress
+        on_progress = print_schema_progress
 
     loader = VLMLoader(model_path=model_id, verbose=False)
     ok = 0
@@ -328,6 +358,12 @@ def run_batch(
     invalid = 0
 
     def build_summary() -> dict[str, Any]:
+        """
+        Construye un resumen del schema tester.
+
+        Returns:
+            Resumen del schema tester.
+        """
         return _build_schema_summary(
             model_id=model_id,
             schema_name=schema_name,
@@ -347,6 +383,16 @@ def run_batch(
         status: str | None = None,
         record: dict[str, Any] | None = None,
     ) -> None:
+        """
+        Emite un evento de progreso.
+
+        Args:
+            event: Evento de progreso.
+            index: Índice del evento.
+            image_path: Ruta de la imagen.
+            status: Estado del evento.
+            record: Registro del evento.
+        """
         if on_progress is None:
             return
         on_progress(
@@ -364,17 +410,9 @@ def run_batch(
     emit_progress("start")
 
     for i, img_path in enumerate(sample, start=1):
-        try:
-            rel = os.path.relpath(img_path, _PROJECT_ROOT)
-        except ValueError:
-            rel = img_path
-        if on_progress is None:
-            print(f"\n  ▶ [{i}/{len(sample)}] {rel}")
         emit_progress("image_start", index=i, image_path=img_path, status="running")
         try:
             result = loader.inference(image_path=img_path, prompt=prompt, schema=schema_cls)
-            if on_progress is None:
-                _print_result(img_path, result, i, len(sample))
             valid, reason = _validate_result(result, schema_cls)
             payload = result.model_dump()
             if valid:
@@ -386,8 +424,6 @@ def run_batch(
                     "status": status,
                     "payload": payload,
                 }
-                if on_progress is None:
-                    print("  ✔ Schema OK")
             else:
                 invalid += 1
                 status = "invalid"
@@ -398,8 +434,6 @@ def run_batch(
                     "payload": payload,
                     "validation_error": reason,
                 }
-                if on_progress is None:
-                    print(f"  ⚠ Schema INVALID: {reason}")
         except FileNotFoundError:
             fail += 1
             status = "error"
@@ -409,8 +443,6 @@ def run_batch(
                 "status": status,
                 "error": "Imagen no encontrada",
             }
-            if on_progress is None:
-                print("  ✗ Imagen no encontrada")
         except RuntimeError as exc:
             fail += 1
             status = "error"
@@ -420,8 +452,6 @@ def run_batch(
                 "status": status,
                 "error": str(exc),
             }
-            if on_progress is None:
-                print(f"  ✗ Error: {exc}")
         except Exception as exc:
             fail += 1
             status = "error"
@@ -431,8 +461,6 @@ def run_batch(
                 "status": status,
                 "error": f"{type(exc).__name__}: {exc}",
             }
-            if on_progress is None:
-                print(f"  ✗ {type(exc).__name__}: {exc}")
 
         emit_progress(
             "image_done",
@@ -447,9 +475,62 @@ def run_batch(
     except Exception:
         pass
 
-    if on_progress is None:
-        print("\n" + "-" * 60)
-        print(f"  ✔ {ok} válidas  ⚠ {invalid} inválidas  ✗ {fail} errores  (de {len(sample)} imágenes)\n")
     emit_progress("complete", index=len(sample), status="complete")
     return ok, fail, invalid
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """
+    Construye el parser CLI para el schema tester.
+
+    Returns:
+        ArgumentParser con los argumentos de la CLI.
+    """
+    parser = argparse.ArgumentParser(description="Prueba un esquema contra imágenes aleatorias.")
+    parser.add_argument("--model", required=True, help="Identificador del modelo cargado en LM Studio.")
+    parser.add_argument("--schema", required=True, help="Nombre del esquema base registrado.")
+    parser.add_argument("--with-reasoning", action="store_true", help="Usa la variante del esquema con reasoning.")
+    parser.add_argument("--max-images", type=int, default=5, help="Número máximo de imágenes a muestrear.")
+    parser.add_argument("--image-dir", help="Directorio opcional de imágenes para usar en lugar de find_images().")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """
+    CLI puro de test_schema.
+
+    Args:
+        argv: Argumentos de línea de comandos.
+
+    Returns:
+        Código de salida (0 si todo va bien, >0 si hay errores).
+    """
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    normalized_name = args.schema.removesuffix("WithReasoning")
+    from src.inference.schemas import get_schema_variant
+    schema_name, schema_cls = get_schema_variant(normalized_name, args.with_reasoning)
+
+    if args.image_dir:
+        from src.scripts.batch_runner import iter_image_paths
+        images = [str(x) for x in iter_image_paths(Path(args.image_dir))]
+    else:
+        images = find_images()
+
+    if not images:
+        raise RuntimeError("No se encontraron imágenes en los directorios.")
+
+    ok, fail, invalid = run_batch(
+        model_id=args.model,
+        schema_name=schema_name,
+        schema_cls=schema_cls,
+        images=images,
+        max_images=args.max_images,
+    )
+    return 0 if fail == 0 and invalid == 0 else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
 

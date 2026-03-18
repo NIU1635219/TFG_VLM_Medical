@@ -26,12 +26,13 @@ def run_smoke_test_wrapper(
     *,
     select_model: Callable[[str, str], str | None],
 ) -> None:
-    """Run interactive smoke inference tests for a selected model.
+    """
+    Ejecuta pruebas de inferencia interactivas (smoke tests) para un modelo seleccionado.
 
     Args:
-        kit: Terminal UI toolkit.
-        app: Application context used to render shared UI chrome.
-        select_model: Callback that resolves the model tag to execute.
+        kit: Toolkit de interfaz de usuario de terminal.
+        app: Contexto de la aplicación utilizado para renderizar la UI compartida.
+        select_model: Callback que resuelve la etiqueta del modelo a ejecutar.
     """
     while True:
         model_tag = select_model(
@@ -67,7 +68,8 @@ def run_smoke_test_wrapper(
         }
 
         def on_smoke_progress(payload: dict[str, object]) -> None:
-            """Actualiza dashboard en vivo durante el smoke test.
+            """
+            Actualiza el dashboard en vivo durante el smoke test.
 
             Args:
                 payload: Evento de progreso emitido por `run_smoke_test`.

@@ -10,12 +10,28 @@ if TYPE_CHECKING:
 
 
 def normalize_state_value(value: object) -> str:
-    """Normaliza el estado textual para comparaciones internas."""
+    """
+    Normaliza el estado textual para comparaciones internas.
+    
+    Args:
+        value (object): Valor a normalizar.
+        
+    Returns:
+        str: Valor normalizado.
+    """
     return str(value or "").strip().lower()
 
 
 def as_yes(value: object) -> bool:
-    """Interpreta respuestas interactivas como afirmativas/negativas explícitas."""
+    """
+    Interpreta respuestas interactivas como afirmativas/negativas explícitas.
+    
+    Args:
+        value (object): Valor a interpretar.
+        
+    Returns:
+        bool: True si la respuesta es afirmativa, False en caso contrario.
+    """
     if isinstance(value, bool):
         return value
     text = str(value).strip().lower()
@@ -23,11 +39,12 @@ def as_yes(value: object) -> bool:
 
 
 def normalize_model_variants(raw_variants: Any) -> list[dict[str, Any]]:
-    """Normaliza y deduplica variantes `(model_id, include_reasoning)`.
-
+    """
+    Normaliza y deduplica variantes `(model_id, include_reasoning)`.
+    
     Args:
         raw_variants: Lista cruda de variantes proveniente de UI o manifiesto.
-
+        
     Returns:
         Lista estable de variantes válidas.
     """
@@ -57,13 +74,31 @@ def normalize_model_variants(raw_variants: Any) -> list[dict[str, Any]]:
 
 
 def variant_label(model_id: str, include_reasoning: bool) -> str:
-    """Etiqueta de variante con modo de razonamiento."""
+    """
+    Etiqueta de variante con modo de razonamiento.
+    
+    Args:
+        model_id (str): ID del modelo.
+        include_reasoning (bool): Si incluye razonamiento.
+        
+    Returns:
+        str: Etiqueta de la variante.
+    """
     mode = "con razonamiento" if include_reasoning else "sin razonamiento"
     return f"{model_id} [{mode}]"
 
 
 def safe_positive_int(value: Any, default: int = 1) -> int:
-    """Parsea enteros positivos con fallback seguro."""
+    """
+    Parsea enteros positivos con fallback seguro.
+    
+    Args:
+        value (Any): Valor a parsear.
+        default (int): Valor por defecto.
+        
+    Returns:
+        int: Entero positivo parseado.
+    """
     try:
         return max(1, int(value or default))
     except (TypeError, ValueError):
@@ -71,7 +106,15 @@ def safe_positive_int(value: Any, default: int = 1) -> int:
 
 
 def parse_required_positive_int(value: Any) -> int | None:
-    """Parsea entero positivo obligatorio; devuelve None si falta o es inválido."""
+    """
+    Parsea entero positivo obligatorio; devuelve None si falta o es inválido.
+    
+    Args:
+        value (Any): Valor a parsear.
+        
+    Returns:
+        int | None: Entero positivo parseado o None si no es válido.
+    """
     if value is None:
         return None
     try:
@@ -101,9 +144,30 @@ def build_live_status_line(
     done_event: str = "image_done",
     complete_event: str = "complete",
 ) -> str:
-    """Construye mensajes de estado en vivo para paneles de progreso.
-
+    """
+    Construye mensajes de estado en vivo para paneles de progreso.
+    
     Las plantillas aceptan placeholders: {current_index}, {total}, {item}, {status}, {completed}.
+    
+    Args:
+        event (str): Evento que desencadena el mensaje.
+        current_index (int): Índice actual.
+        total (int): Total de elementos.
+        item_label (str): Etiqueta del elemento.
+        status (str): Estado actual.
+        completed (int): Número de elementos completados.
+        on_start (str): Plantilla para el evento de inicio.
+        on_done_ok (str | None): Plantilla para el evento de finalización exitosa.
+        on_done_invalid (str | None): Plantilla para el evento de finalización inválida.
+        on_done_default (str | None): Plantilla por defecto para el evento de finalización.
+        on_complete (str): Plantilla para el evento de completitud.
+        on_prepare (str): Plantilla para el evento de preparación.
+        start_event (str): Evento de inicio.
+        done_event (str): Evento de finalización.
+        complete_event (str): Evento de completitud.
+        
+    Returns:
+        str: Mensaje de estado en vivo.
     """
     context = {
         "current_index": current_index,
@@ -132,7 +196,16 @@ def build_live_status_line(
 
 
 def compact_model_label(model_tag: str, *, ui_width: int) -> str:
-    """Compacta el model tag para pantallas estrechas preservando inicio/fin."""
+    """
+    Compacta el model tag para pantallas estrechas preservando inicio/fin.
+    
+    Args:
+        model_tag (str): Etiqueta del modelo.
+        ui_width (int): Ancho de la interfaz de usuario.
+        
+    Returns:
+        str: Etiqueta del modelo compactada.
+    """
     text = str(model_tag or "").strip()
     if not text:
         return "N/D"
@@ -145,7 +218,15 @@ def compact_model_label(model_tag: str, *, ui_width: int) -> str:
 
 
 def is_model_snapshot_complete(snapshot: dict[str, Any]) -> bool:
-    """Valida de forma estricta si un modelo está realmente completado."""
+    """
+    Valida de forma estricta si un modelo está realmente completado.
+    
+    Args:
+        snapshot (dict[str, Any]): Snapshot del modelo.
+        
+    Returns:
+        bool: True si el modelo está completado, False en caso contrario.
+    """
     status = normalize_state_value(snapshot.get("status"))
     total = int(snapshot.get("total", 0) or 0)
     ok = int(snapshot.get("ok", 0) or 0)
@@ -155,7 +236,15 @@ def is_model_snapshot_complete(snapshot: dict[str, Any]) -> bool:
 
 
 def rel_path(path_value: str) -> str:
-    """Convierte rutas absolutas a relativas para mejorar legibilidad en terminal."""
+    """
+    Convierte rutas absolutas a relativas para mejorar legibilidad en terminal.
+    
+    Args:
+        path_value (str): Ruta a convertir.
+        
+    Returns:
+        str: Ruta relativa.
+    """
     path_text = str(path_value or "").strip()
     if not path_text:
         return "N/D"
@@ -166,7 +255,16 @@ def rel_path(path_value: str) -> str:
 
 
 def truncate_middle(text: str, limit: int) -> str:
-    """Recorta texto largo preservando inicio/fin para columnas estrechas."""
+    """
+    Recorta texto largo preservando inicio/fin para columnas estrechas.
+    
+    Args:
+        text (str): Texto a recortar.
+        limit (int): Límite de longitud.
+        
+    Returns:
+        str: Texto recortado.
+    """
     value = str(text or "")
     if len(value) <= limit:
         return value
@@ -178,7 +276,15 @@ def truncate_middle(text: str, limit: int) -> str:
 
 
 def snapshot_status_text(snapshot: dict[str, Any]) -> str:
-    """Etiqueta de estado sin ANSI para tabla resumen final."""
+    """
+    Etiqueta de estado sin ANSI para tabla resumen final.
+    
+    Args:
+        snapshot (dict[str, Any]): Snapshot del modelo.
+        
+    Returns:
+        str: Etiqueta de estado.
+    """
     state = normalize_state_value(snapshot.get("status"))
     if state == "green":
         return "COMPLETO"
@@ -188,7 +294,16 @@ def snapshot_status_text(snapshot: dict[str, Any]) -> str:
 
 
 def snapshot_status_color_code(style: Any, snapshot: dict[str, Any]) -> str:
-    """Obtiene color ANSI asociado al estado del snapshot."""
+    """
+    Obtiene color ANSI asociado al estado del snapshot.
+    
+    Args:
+        style (Any): Estilos de terminal.
+        snapshot (dict[str, Any]): Snapshot del modelo.
+        
+    Returns:
+        str: Código de color ANSI.
+    """
     state = normalize_state_value(snapshot.get("status"))
     if state == "green":
         return str(getattr(style, "OKGREEN", ""))
@@ -198,14 +313,34 @@ def snapshot_status_color_code(style: Any, snapshot: dict[str, Any]) -> str:
 
 
 def colorize_model(style: Any, model_tag: str, snapshot: dict[str, Any]) -> str:
-    """Pinta el nombre del modelo según estado (verde/amarillo/rojo)."""
+    """
+    Pinta el nombre del modelo según estado (verde/amarillo/rojo).
+    
+    Args:
+        style (Any): Estilos de terminal.
+        model_tag (str): Etiqueta del modelo.
+        snapshot (dict[str, Any]): Snapshot del modelo.
+        
+    Returns:
+        str: Etiqueta del modelo coloreada.
+    """
     color = snapshot_status_color_code(style, snapshot)
     endc = str(getattr(style, "ENDC", "")) if color else ""
     return f"{color}{model_tag}{endc}" if color else model_tag
 
 
 def snapshot_summary_line(style: Any, model_tag: str, snapshot: dict[str, Any]) -> str:
-    """Resumen compacto del estado actual para prompts interactivos."""
+    """
+    Resumen compacto del estado actual para prompts interactivos.
+    
+    Args:
+        style (Any): Estilos de terminal.
+        model_tag (str): Etiqueta del modelo.
+        snapshot (dict[str, Any]): Snapshot del modelo.
+        
+    Returns:
+        str: Resumen del estado del modelo.
+    """
     ok = int(snapshot.get("ok", 0) or 0)
     total = int(snapshot.get("total", 0) or 0)
     pending = int(snapshot.get("pending", 0) or 0)
@@ -218,15 +353,16 @@ def snapshot_summary_line(style: Any, model_tag: str, snapshot: dict[str, Any]) 
 
 
 def make_header(kit: "UIKit", app: "AppContext", subtitle: str) -> Callable[[], None]:
-    """Create a reusable header renderer for tests menus.
-
+    """
+    Crea un renderizador de cabecera reutilizable para los menús de pruebas.
+    
     Args:
-        kit: Terminal UI toolkit.
-        app: Application context with banner renderer.
-        subtitle: Subtitle to show below the banner.
+        kit: Toolkit de interfaz de usuario de terminal.
+        app: Contexto de la aplicación con el renderizador de banner.
+        subtitle: Subtítulo para mostrar debajo del banner.
 
     Returns:
-        A callable that renders banner and subtitle when invoked.
+        Un ejecutable que renderiza el banner y el subtítulo cuando se invoca.
     """
 
     def _hdr() -> None:
@@ -244,17 +380,18 @@ def select_schema_reasoning_mode(
     subtitle: str,
     make_header_fn: Callable[[str], Callable[[], None]],
 ) -> bool | str:
-    """Select whether schema execution should include reasoning.
-
+    """
+    Selecciona si la ejecución del esquema debe incluir razonamiento.
+    
     Args:
-        kit: Terminal UI toolkit.
-        menu_id: Stable menu id for cursor memory.
-        subtitle: Menu subtitle.
-        make_header_fn: Header factory callable.
+        kit: Toolkit de interfaz de usuario de terminal.
+        menu_id: ID de menú estable para la memoria del cursor.
+        subtitle: Subtítulo del menú.
+        make_header_fn: Factoría de cabeceras.
 
     Returns:
-        `True` when reasoning is enabled, `False` when disabled, or
-        `"BACK"` when user cancels to previous schema menu.
+        `True` cuando el razonamiento está habilitado, `False` cuando está deshabilitado, o
+        `"BACK"` cuando el usuario cancela para volver al menú anterior.
     """
     items = [
         kit.MenuItem(
@@ -290,16 +427,18 @@ def select_schema_base(
     make_header_fn: Callable[[str], Callable[[], None]],
     initial_schema_name: str | None = None,
 ) -> str | None:
-    """Resolve only the base schema without asking reasoning mode.
-
+    """
+    Resuelve solo el esquema base sin preguntar el modo de razonamiento.
+    
     Args:
-        kit: Terminal UI toolkit.
-        menu_prefix: Prefix used to build deterministic menu ids.
-        subtitle_prefix: Prefix shown in menu subtitle.
-        make_header_fn: Header factory callable.
+        kit: Toolkit de interfaz de usuario de terminal.
+        menu_prefix: Prefijo utilizado para construir IDs de menú deterministas.
+        subtitle_prefix: Prefijo mostrado en el subtítulo del menú.
+        make_header_fn: Factoría de cabeceras.
+        initial_schema_name: Nombre del esquema inicial opcional.
 
     Returns:
-        Selected base schema name, or `None` if cancelled.
+        Nombre del esquema base seleccionado, o `None` si se cancela.
     """
     from src.inference.schemas import SCHEMA_REGISTRY
     from src.scripts.test_schema import format_schema_menu_description
@@ -347,16 +486,17 @@ def select_schema_variant(
     subtitle_prefix: str,
     make_header_fn: Callable[[str], Callable[[], None]],
 ) -> tuple[str, Any] | None:
-    """Resolve base schema plus reasoning variant via interactive menus.
+    """
+    Resuelve el esquema base más la variante de razonamiento mediante menús interactivos.
 
     Args:
-        kit: Terminal UI toolkit.
-        menu_prefix: Prefix used to build deterministic menu ids.
-        subtitle_prefix: Prefix shown in menu subtitle.
-        make_header_fn: Header factory callable.
+        kit: Toolkit de interfaz de usuario de terminal.
+        menu_prefix: Prefijo utilizado para construir IDs de menú deterministas.
+        subtitle_prefix: Prefijo mostrado en el subtítulo del menú.
+        make_header_fn: Factoría de cabeceras.
 
     Returns:
-        Tuple `(schema_name, schema_class)` when selected, or `None` if cancelled.
+        Tupla `(schema_name, schema_class)` cuando se selecciona, o `None` si se cancela.
     """
     from src.inference.schemas import SCHEMA_REGISTRY, get_schema_variant
     from src.scripts.test_schema import format_schema_menu_description
@@ -402,14 +542,15 @@ def select_response_inspector_mode(
     *,
     make_header_fn: Callable[[str], Callable[[], None]],
 ) -> tuple[bool, bool] | None:
-    """Select response inspector mode (raw vs structured).
+    """
+    Selecciona el modo del inspector de respuestas (crudo vs estructurado).
 
     Args:
-        kit: Terminal UI toolkit.
-        make_header_fn: Header factory callable.
+        kit: Toolkit de interfaz de usuario de terminal.
+        make_header_fn: Factoría de cabeceras.
 
     Returns:
-        Tuple `(structured, with_reasoning)` when selected, otherwise `None`.
+        Tupla `(structured, with_reasoning)` cuando se selecciona, de lo contrario `None`.
     """
     items = [
         kit.MenuItem(
@@ -443,17 +584,18 @@ def select_model(
     subtitle: str,
     make_header_fn: Callable[[str], Callable[[], None]],
 ) -> str | None:
-    """Prompt user to choose an installed LM Studio model.
+    """
+    Solicita al usuario que elija un modelo de LM Studio instalado.
 
     Args:
-        kit: Terminal UI toolkit.
-        app: Application context used to discover installed models.
-        menu_id: Stable menu id for cursor memory.
-        subtitle: Menu subtitle.
-        make_header_fn: Header factory callable.
+        kit: Toolkit de interfaz de usuario de terminal.
+        app: Contexto de la aplicación utilizado para descubrir modelos instalados.
+        menu_id: ID de menú estable para la memoria del cursor.
+        subtitle: Subtítulo del menú.
+        make_header_fn: Factoría de cabeceras.
 
     Returns:
-        Selected model tag or `None` if user cancels.
+        Etiqueta del modelo seleccionado o `None` si el usuario cancela.
     """
     installed = app.get_installed_lms_models()
     if not installed:
@@ -496,7 +638,16 @@ def select_model_variants(
     make_header_fn: Callable[[str], Callable[[], None]],
     initial_model_variants: list[dict[str, Any]] | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]] | None:
-    """Selecciona variantes por modelo (sin/con razonamiento).
+    """
+    Selecciona variantes por modelo (sin/con razonamiento).
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        app: Contexto de la aplicación.
+        menu_id: ID de menú para memoria del cursor.
+        subtitle: Subtítulo del menú.
+        make_header_fn: Factoría de cabeceras.
+        initial_model_variants: Variantes iniciales opcionales.
 
     Returns:
         Tupla `(models, model_variants)` o None si se cancela.

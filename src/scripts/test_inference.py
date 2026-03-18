@@ -439,9 +439,8 @@ def run_smoke_test(
         int: Cantidad de casos de prueba exitosos.
     """
     if on_progress is None:
-        print("\n=== TAREA 4: SMOKE TEST VLM (LM STUDIO) ===")
-        print(f"👉 Modelo objetivo: {model_tag}")
-        print("\n1. Inicializando VLMLoader...")
+        from src.utils.tests_ui.cli_reporters import print_smoke_progress
+        on_progress = print_smoke_progress
     loader = VLMLoader(model_path=model_tag, verbose=True)
 
     processed = 0
@@ -483,17 +482,11 @@ def run_smoke_test(
 
     emit_progress("start")
 
-    if on_progress is None:
-        print("2. Validando modelo en LM Studio...")
     start_time = time.time()
     loader.preload_model()
     preload_seconds = time.time() - start_time
-    if on_progress is None:
-        print(f"✅ Modelo precargado en {preload_seconds:.2f} s")
     emit_progress("model_ready", status="ready")
 
-    if on_progress is None:
-        print(f"3. Ejecutando inferencia para {len(test_cases)} imágenes de prueba...")
     all_passed = True
 
     try:
@@ -503,22 +496,9 @@ def run_smoke_test(
             case_id = case["id"]
 
             emit_progress("case_start", index=index, case=case, status="running")
-
-            if on_progress is None:
-                print(f"\n--- Caso: {case_id.upper()} ({label.upper()}) ---")
-                print(f"Imagen: {image_path}")
             try:
                 response = loader.inference(image_path, PROMPT)
-                if on_progress is None:
-                    print("Respuesta estructurada del modelo:")
-                    if isinstance(response, GenericObjectDetection):
-                        print(response.model_dump_json(indent=2, ensure_ascii=False))
-                    else:
-                        print(response)
-
                 valid, message = validate_response(label, response)
-                if on_progress is None:
-                    print(message)
                 processed += 1
                 if valid:
                     passed += 1
@@ -559,17 +539,11 @@ def run_smoke_test(
         try:
             loader.unload_model()
         except Exception as unload_error:
-            if on_progress is None:
-                print(f"⚠️ No se pudo liberar el modelo: {unload_error}")
+            pass
 
     emit_progress("complete", index=processed, status="complete")
     if all_passed:
-        if on_progress is None:
-            print("\n✅ TEST COMPLETADO CON ÉXITO (múltiples imágenes validadas).")
         return 0
-
-    if on_progress is None:
-        print("\n❌ TEST FALLIDO: al menos una validación no pasó.")
     return 1
 
 
@@ -595,7 +569,6 @@ def resolve_model(model_arg: str | None) -> str:
         )
 
     selected_model = installed_models[0]
-    print(f"👉 Modo automático: usando primer modelo detectado: {selected_model}")
     return selected_model
 
 
@@ -614,9 +587,7 @@ def main(model_path: str | None = None) -> int:
         test_cases = ensure_test_images()
         return run_smoke_test(model_tag, test_cases)
     except Exception as error:
-        print(f"\n❌ ERROR CRÍTICO: {error}")
         import traceback
-
         traceback.print_exc()
         return 1
 

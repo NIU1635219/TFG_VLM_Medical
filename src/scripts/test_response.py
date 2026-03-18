@@ -21,17 +21,26 @@ from src.inference.schemas import SCHEMA_REGISTRY, get_schema_variant
 from src.inference.vlm_runner import VLMLoader
 from src.scripts.test_schema import build_prompt_for_schema, find_images
 from src.utils.models_ui.lms_models import get_installed_lms_models, get_installed_models, list_loaded_llm_model_keys
+from src.utils.tests_ui.cli_reporters import (
+    build_summary_sections,
+    print_response_summary,
+    print_section,
+)
 
 DEFAULT_RAW_PROMPT = (
     "Analiza esta imagen y responde con el máximo detalle posible para fines de depuración. "
     "Si puedes, describe el contenido visible y la confianza de tu respuesta."
 )
 DEFAULT_STRUCTURED_SCHEMA = "GenericObjectDetection"
-SUMMARY_WIDTH = 76
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Construye la CLI del inspector de respuestas."""
+    """
+    Construye la CLI del inspector de respuestas.
+
+    Returns:
+        ArgumentParser con los argumentos de la CLI.
+    """
     parser = argparse.ArgumentParser(
         description="Inspecciona los campos útiles devueltos por LM Studio ante una petición multimodal."
     )
@@ -53,7 +62,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_schema(schema_name: str | None, include_reasoning: bool) -> tuple[str | None, type[BaseModel] | None]:
-    """Resuelve un schema opcional desde el registro del proyecto."""
+    """
+    Resuelve un schema opcional desde el registro del proyecto.
+
+    Args:
+        schema_name: Nombre del schema.
+        include_reasoning: Si se debe incluir razonamiento.
+
+    Returns:
+        Nombre del schema y clase del schema.
+    """
     if include_reasoning and not schema_name:
         schema_name = DEFAULT_STRUCTURED_SCHEMA
 
@@ -73,7 +91,15 @@ def resolve_schema(schema_name: str | None, include_reasoning: bool) -> tuple[st
 
 
 def resolve_default_model(explicit_model: str | None) -> tuple[str, bool]:
-    """Resuelve el modelo a usar, priorizando el valor explícito y luego la autodetección."""
+    """
+    Resuelve el modelo a usar, priorizando el valor explícito y luego la autodetección.
+
+    Args:
+        explicit_model: ID del modelo.
+
+    Returns:
+        ID del modelo y si fue autodetectado.
+    """
     if explicit_model and explicit_model.strip():
         return explicit_model.strip(), False
 
@@ -89,7 +115,15 @@ def resolve_default_model(explicit_model: str | None) -> tuple[str, bool]:
 
 
 def resolve_default_image(explicit_image: str | None) -> tuple[str, bool]:
-    """Resuelve la imagen a inspeccionar, priorizando el valor explícito y luego el dataset del proyecto."""
+    """
+    Resuelve la imagen a inspeccionar, priorizando el valor explícito y luego el dataset del proyecto.
+
+    Args:
+        explicit_image: Ruta de la imagen.
+
+    Returns:
+        Ruta de la imagen y si fue autodetectada.
+    """
     if explicit_image and explicit_image.strip():
         image_path = os.path.abspath(explicit_image.strip())
         if not os.path.isfile(image_path):
@@ -104,7 +138,18 @@ def resolve_default_image(explicit_image: str | None) -> tuple[str, bool]:
 
 
 def deep_serialize(value: Any, *, max_depth: int = 8, _depth: int = 0, _seen: set[int] | None = None) -> Any:
-    """Convierte objetos del SDK a estructuras JSON-friendly sin perder demasiada información."""
+    """
+    Convierte objetos del SDK a estructuras JSON-friendly sin perder demasiada información.
+
+    Args:
+        value: Objeto a serializar.
+        max_depth: Profundidad máxima de serialización.
+        _depth: Profundidad actual.
+        _seen: Conjunto de objetos ya serializados.
+
+    Returns:
+        Objeto serializado.
+    """
     if _seen is None:
         _seen = set()
 
@@ -162,7 +207,16 @@ def deep_serialize(value: Any, *, max_depth: int = 8, _depth: int = 0, _seen: se
 
 
 def safe_getattr(value: Any, attr_name: str) -> Any:
-    """Lee un atributo sin propagar errores del SDK."""
+    """
+    Lee un atributo sin propagar errores del SDK.
+
+    Args:
+        value: Objeto a inspeccionar.
+        attr_name: Nombre del atributo.
+
+    Returns:
+        Valor del atributo.
+    """
     try:
         return getattr(value, attr_name)
     except Exception as error:
@@ -170,7 +224,15 @@ def safe_getattr(value: Any, attr_name: str) -> Any:
 
 
 def collect_public_attributes(value: Any) -> dict[str, Any]:
-    """Recoge atributos públicos simples del objeto de respuesta."""
+    """
+    Recoge atributos públicos simples del objeto de respuesta.
+
+    Args:
+        value: Objeto a inspeccionar.
+
+    Returns:
+        Diccionario con atributos públicos.
+    """
     attrs: dict[str, Any] = {}
     for attr_name in sorted(dir(value)):
         if attr_name.startswith("_"):
@@ -183,7 +245,15 @@ def collect_public_attributes(value: Any) -> dict[str, Any]:
 
 
 def prune_absent_response_fields(value: Any) -> Any:
-    """Elimina claves ausentes serializadas como null en payloads de inspeccion."""
+    """
+    Elimina claves ausentes serializadas como null en payloads de inspeccion.
+
+    Args:
+        value: Valor a inspeccionar.
+
+    Returns:
+        Valor con claves ausentes eliminadas.
+    """
     if isinstance(value, Mapping):
         cleaned: dict[str, Any] = {}
         for key, item in value.items():
@@ -203,7 +273,15 @@ def prune_absent_response_fields(value: Any) -> Any:
 
 
 def default_output_path(model_id: str) -> str:
-    """Construye una ruta por defecto para guardar la inspección."""
+    """
+    Construye una ruta por defecto para guardar la inspección.
+
+    Args:
+        model_id: ID del modelo.
+
+    Returns:
+        Ruta por defecto.
+    """
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_model = "".join(char if char.isalnum() or char in ("-", "_", "@") else "_" for char in model_id)
     output_dir = os.path.join(_PROJECT_ROOT, "data", "processed", "debug")
@@ -212,7 +290,16 @@ def default_output_path(model_id: str) -> str:
 
 
 def save_inspection_payload(payload: dict[str, Any], output_path: str | None = None) -> str:
-    """Guarda la inspección en disco y devuelve la ruta final usada."""
+    """
+    Guarda la inspección en disco y devuelve la ruta final usada.
+
+    Args:
+        payload: Payload de la inspección.
+        output_path: Ruta de salida.
+
+    Returns:
+        Ruta final usada.
+    """
     resolved_output_path = os.path.abspath(output_path) if output_path else default_output_path(str(payload["request"]["model_id"]))
     os.makedirs(os.path.dirname(resolved_output_path), exist_ok=True)
     with open(resolved_output_path, "w", encoding="utf-8") as file_handler:
@@ -220,122 +307,18 @@ def save_inspection_payload(payload: dict[str, Any], output_path: str | None = N
     return resolved_output_path
 
 
-def has_display_value(value: Any) -> bool:
-    """Indica si un valor merece mostrarse en el resumen visual."""
-    if value is None:
-        return False
-    if isinstance(value, str):
-        return bool(value.strip())
-    if isinstance(value, Mapping):
-        return any(has_display_value(item) for item in value.values())
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return any(has_display_value(item) for item in value)
-    return True
-
-
-def format_scalar(value: Any) -> str:
-    """Convierte un valor a texto compacto para tablas de resumen."""
-    if not has_display_value(value):
-        return "N/D"
-    if isinstance(value, float):
-        return f"{value:.4f}".rstrip("0").rstrip(".")
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
-
-
-def truncate_text(value: Any, width: int = SUMMARY_WIDTH) -> str:
-    """Recorta textos largos para el resumen por consola."""
-    text = format_scalar(value).replace("\n", " ").strip()
-    if len(text) <= width:
-        return text
-    return f"{text[: max(0, width - 3)]}..."
-
-
-def print_section(title: str) -> None:
-    """Imprime una sección ASCII consistente."""
-    divider = "=" * SUMMARY_WIDTH
-    print(divider)
-    print(title)
-    print(divider)
-
-
-def print_rows(rows: list[tuple[str, Any]], kit_for_json: Any = None) -> bool:
-    """Imprime filas clave/valor con alineación simple, omitiendo valores vacíos."""
-    visible_rows = [(label, value) for label, value in rows if has_display_value(value)]
-    if not visible_rows:
-        return False
-    label_width = max((len(label) for label, _ in visible_rows), default=10)
-
-    for label, value in visible_rows:
-        if isinstance(value, (dict, list)):
-            print(f"{label:<{label_width}} :")
-        else:
-            print(f"{label:<{label_width}} : {truncate_text(value)}")
-    print()
-    return True
-
-
-def build_summary_sections(payload: dict[str, Any]) -> list[tuple[str, list[tuple[str, Any]]]]:
-    """Extrae secciones y filas visibles para CLI o TUI sin duplicar lógica."""
-    request = payload["request"]
-    response = payload["response"]
-    stats = response.get("stats") or {}
-    model_info = response.get("model_info") or {}
-    parsed = response.get("parsed") or {}
-
-    # Prioridad: Si hay datos parseados, evitamos duplicar atributos y texto crudo
-    has_parsed = isinstance(parsed, dict) and any(has_display_value(v) for v in parsed.values())
-
-    sections: list[tuple[str, list[tuple[str, Any]]]] = [
-        (
-            "LM STUDIO RESPONSE INSPECTOR",
-            [
-                ("Model", request.get("model_id")),
-                ("Image", request.get("image_path")),
-                ("Schema", request.get("schema_name")),
-                ("Response type", response.get("python_type")),
-                ("Structured", response.get("structured")),
-            ],
-        ),
-    ]
-
-    # Atributos del modelo (SDK Info) - Simplificado si hay parseo
-    attr_rows = [
-        ("Model key", model_info.get("model_key")),
-        ("Architecture", model_info.get("architecture")),
-        ("Params", model_info.get("params_string")),
-        ("Display name", model_info.get("display_name")),
-    ]
-    if not has_parsed:
-        # Solo mostrar atributos crudos y preview si no hay salida estructurada útil
-        attr_rows.insert(0, ("Public attrs", ", ".join(response.get("public_attributes", {}).keys()) or None))
-        attr_rows.append(("Text preview", response.get("text_extracted")))
-
-    sections.append(("SDK ATTRIBUTES", attr_rows))
-
-    stats_rows = [
-        ("stop_reason", stats.get("stop_reason")),
-        ("tokens_per_second", stats.get("tokens_per_second")),
-        ("time_to_first_token_sec", stats.get("time_to_first_token_sec")),
-        ("prompt_tokens_count", stats.get("prompt_tokens_count")),
-        ("predicted_tokens_count", stats.get("predicted_tokens_count")),
-        ("total_tokens_count", stats.get("total_tokens_count")),
-        ("num_gpu_layers", stats.get("num_gpu_layers")),
-    ]
-    if any(has_display_value(value) for _, value in stats_rows):
-        sections.append(("SDK STATS", stats_rows))
-
-    if has_parsed:
-        sections.append(("PARSED PAYLOAD", [(key, value) for key, value in parsed.items()]))
-    elif has_display_value(parsed):
-        sections.append(("PARSED PAYLOAD", [("parsed", parsed)]))
-
-    return sections
-
-
 def respond_without_schema(model_handle: Any, payload: Any, temperature: float) -> Any:
-    """Lanza una petición cruda sin response_format para inspeccionar la respuesta real del SDK."""
+    """
+    Lanza una petición cruda sin response_format para inspeccionar la respuesta real del SDK.
+
+    Args:
+        model_handle: Handle del modelo cargado.
+        payload: Payload de la petición.
+        temperature: Temperatura de la petición.
+
+    Returns:
+        Respuesta real del SDK.
+    """
     kwargs: dict[str, Any] = {"config": {"temperature": temperature}}
 
     while True:
@@ -354,7 +337,15 @@ def respond_without_schema(model_handle: Any, payload: Any, temperature: float) 
 
 
 def run_inspection(args: argparse.Namespace) -> dict[str, Any]:
-    """Ejecuta la petición real y construye un payload de inspección completo."""
+    """
+    Ejecuta la petición real y construye un payload de inspección completo.
+
+    Args:
+        args: Argumentos de línea de comandos.
+
+    Returns:
+        Payload de inspección completo.
+    """
     model_id, auto_model = resolve_default_model(args.model)
     image_path, auto_image = resolve_default_image(args.image)
 
@@ -442,33 +433,29 @@ def run_inspection(args: argparse.Namespace) -> dict[str, Any]:
         loader.unload_model()
 
 
-def print_summary(payload: dict[str, Any]) -> None:
-    """Imprime un resumen visual solo con la información que realmente existe."""
-    for title, rows in build_summary_sections(payload):
-        visible_rows = [(label, value) for label, value in rows if has_display_value(value)]
-        if not visible_rows:
-            continue
-        print_section(title)
-        print_rows(visible_rows)
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Punto de entrada CLI."""
+def main() -> int:
+    """Función de entrada para ejecución CLI."""
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args()
 
-    payload = run_inspection(args)
-    output_path = save_inspection_payload(payload, args.output)
+    try:
+        payload = run_inspection(args)
+        output_path = save_inspection_payload(payload, args.output)
 
-    print_summary(payload)
-    if args.print_json:
-        print_section("FULL JSON")
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        from src.utils.tests_ui.cli_reporters import print_response_summary, print_section
+
+        print_response_summary(payload)
+        if args.print_json:
+            print_section("FULL JSON")
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            print()
         print()
-    print()
-    print(f"Inspección guardada en: {output_path}")
-    return 0
+        print(f"Inspección guardada en: {output_path}")
+        return 0
+    except Exception as error:
+        print(f"\n❌ Error durante la inspección: {error}")
+        return 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

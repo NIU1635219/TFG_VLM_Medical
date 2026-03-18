@@ -48,7 +48,16 @@ def _validate_generate_manifest_inputs(
 
 
 def _format_output_image_path(*, resolved: Path, relative_paths: bool) -> str:
-    """Construye el valor final de image_path en el manifiesto."""
+    """
+    Construye el valor final de image_path en el manifiesto.
+    
+    Args:
+        resolved (Path): Path resuelto de la imagen.
+        relative_paths (bool): Si es True, se construye el path relativo.
+        
+    Returns:
+        str: Valor final de image_path en el manifiesto.
+    """
     if not relative_paths:
         return str(resolved)
 
@@ -66,7 +75,19 @@ def _build_manifest_record(
     iteration_index: int,
     run_iterations_per_image: int,
 ) -> dict[str, Any]:
-    """Compone una fila JSONL del manifiesto."""
+    """
+    Compone una fila JSONL del manifiesto.
+    
+    Args:
+        image_path_value (str): Valor de image_path.
+        ground_truth (Any): Ground truth de la imagen.
+        image_id (str): ID de la imagen.
+        iteration_index (int): Índice de iteración.
+        run_iterations_per_image (int): Número total de iteraciones.
+        
+    Returns:
+        dict[str, Any]: Fila JSONL del manifiesto.
+    """
     record: dict[str, Any] = {
         "image_path": image_path_value,
         "ground_truth_cls": str(ground_truth),
@@ -78,13 +99,13 @@ def _build_manifest_record(
 
 
 def _normalize_image_id(value: Any) -> str | None:
-    """Normalize image identifiers to stable filename stems.
+    """Normaliza los identificadores de imagen a nombres de archivo estables.
 
     Args:
-        value: Raw identifier value from CSV.
+        value: Valor de identificador en crudo del CSV.
 
     Returns:
-        Normalized string identifier or `None` when value is empty.
+        Identificador de cadena normalizado o `None` cuando el valor está vacío.
     """
     if value is None or pd.isna(value):
         return None
@@ -108,14 +129,15 @@ def _normalize_image_id(value: Any) -> str | None:
 
 
 def _compute_target_counts(class_counts: dict[str, int], sample_size: int) -> dict[str, int]:
-    """Compute per-class sample allocation preserving class proportions.
+    """
+    Calcula la asignación de muestras por clase preservando las proporciones de las clases.
 
     Args:
-        class_counts: Mapping class -> available rows.
-        sample_size: Target total sample size.
+        class_counts: Mapeo de clase -> filas disponibles.
+        sample_size: Tamaño total de muestra objetivo.
 
     Returns:
-        Mapping class -> sampled rows.
+        Mapeo de clase -> filas de muestra.
     """
     if sample_size <= 0:
         raise ValueError("sample_size must be greater than zero")
@@ -169,16 +191,16 @@ def _compute_target_counts(class_counts: dict[str, int], sample_size: int) -> di
 
 
 def stratified_sample(df: pd.DataFrame, *, stratify_col: str, sample_size: int, seed: int) -> pd.DataFrame:
-    """Generate a reproducible stratified sample.
+    """Genera una muestra estratificada reproducible.
 
     Args:
-        df: Full input dataframe.
-        stratify_col: Column used for stratification.
-        sample_size: Target sample size.
-        seed: Random seed.
+        df: Dataframe de entrada completo.
+        stratify_col: Columna utilizada para la estratificación.
+        sample_size: Tamaño de muestra objetivo.
+        seed: Semilla aleatoria.
 
     Returns:
-        Sampled dataframe.
+        Dataframe muestreado.
     """
     if stratify_col not in df.columns:
         raise ValueError(f"Missing stratification column: {stratify_col}")
@@ -206,13 +228,13 @@ def stratified_sample(df: pd.DataFrame, *, stratify_col: str, sample_size: int, 
 
 
 def _build_image_index(images_dir: Path) -> dict[str, list[Path]]:
-    """Index images by stem for fast id->path resolution.
+    """Indexa las imágenes por nombre base para una resolución rápida de id->ruta.
 
     Args:
-        images_dir: Directory containing image files.
+        images_dir: Directorio que contiene los archivos de imagen.
 
     Returns:
-        Mapping image stem -> matching file paths.
+        Mapeo de nombre base de imagen -> rutas de archivo coincidentes.
     """
     index: dict[str, list[Path]] = defaultdict(list)
     for path in sorted(images_dir.rglob("*")):
@@ -223,15 +245,15 @@ def _build_image_index(images_dir: Path) -> dict[str, list[Path]]:
 
 
 def _resolve_image_path(image_id: str, image_index: dict[str, list[Path]], images_dir: Path) -> Path | None:
-    """Resolve physical image path from normalized image id.
+    """Resuelve la ruta física de la imagen a partir del id de imagen normalizado.
 
     Args:
-        image_id: Normalized image identifier.
-        image_index: Precomputed image index.
-        images_dir: Base images directory.
+        image_id: Identificador de imagen normalizado.
+        image_index: Índice de imágenes precalculado.
+        images_dir: Directorio base de imágenes.
 
     Returns:
-        Resolved image path or `None` if not found.
+        Ruta de imagen resuelta o `None` si no se encuentra.
     """
     if not image_id:
         return None
@@ -267,25 +289,25 @@ def generate_manifest(
     run_iterations_per_image: int = 1,
     run_derived_from: str | None = None,
 ) -> dict[str, Any]:
-    """Create experiment JSONL manifest and return summary.
+    """Crea un manifiesto JSONL de experimento y devuelve un resumen.
 
     Args:
-        input_csv: CSV path containing source metadata.
-        images_dir: Directory with processed images.
-        output_path: JSONL output path.
-        sample_size: Target sample size.
-        seed: Random seed.
-        stratify_col: Stratification column name.
-        id_col: Image id column name.
-        label_col: Label column name.
-        relative_paths: Whether to store image paths relative to project root.
-        run_schema_name: Schema base name stored in manifest metadata.
-        run_model_variants: Per-model reasoning variants stored in metadata.
-        run_iterations_per_image: Number of repeated runs per image/model.
-        run_derived_from: Optional source manifest path when deriving.
+        input_csv: Ruta del CSV que contiene metadatos de origen.
+        images_dir: Directorio con imágenes procesadas.
+        output_path: Ruta de salida JSONL.
+        sample_size: Tamaño de muestra objetivo.
+        seed: Semilla aleatoria.
+        stratify_col: Nombre de columna de estratificación.
+        id_col: Nombre de columna de id de imagen.
+        label_col: Nombre de columna de etiqueta.
+        relative_paths: Si se deben almacenar las rutas de imagen relativas a la raíz del proyecto.
+        run_schema_name: Nombre base del esquema almacenado en los metadatos del manifiesto.
+        run_model_variants: Variantes de razonamiento por modelo almacenadas en metadatos.
+        run_iterations_per_image: Número de ejecuciones repetidas por imagen/modelo.
+        run_derived_from: Ruta opcional del manifiesto de origen al derivar.
 
     Returns:
-        Summary dictionary for logging and UI.
+        Diccionario de resumen para registro e interfaz de usuario.
     """
     run_iterations_per_image = _validate_generate_manifest_inputs(
         input_csv=input_csv,

@@ -20,13 +20,14 @@ def run_response_inspector_wrapper(
     select_model: Callable[[str, str], str | None],
     select_response_inspector_mode: Callable[[], tuple[bool, bool] | None],
 ) -> None:
-    """Run the SDK response inspector using interactive defaults.
+    """
+    Ejecuta el inspector de respuestas del SDK utilizando valores predeterminados interactivos.
 
     Args:
-        kit: Terminal UI toolkit.
-        app: Application context used to render shared UI chrome.
-        select_model: Callback that resolves the target model tag.
-        select_response_inspector_mode: Callback that resolves raw/structured mode.
+        kit: Kit de herramientas de interfaz de usuario de terminal.
+        app: Contexto de la aplicación utilizado para renderizar el cromo de UI compartido.
+        select_model: Callback que resuelve la etiqueta del modelo.
+        select_response_inspector_mode: Callback que resuelve el modo raw/structured.
     """
     from src.scripts.test_response import build_summary_sections, run_inspection, save_inspection_payload
 

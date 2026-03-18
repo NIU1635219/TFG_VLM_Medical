@@ -39,7 +39,17 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class _BatchQueueResultContext:
-    """Resultado de ejecución por variante para resumen final."""
+    """
+    Resultado de ejecución por variante para resumen final.
+    
+    Args:
+        model_label (str): Etiqueta del modelo.
+        model_id (str): ID del modelo.
+        include_reasoning (bool): Incluir razonamiento en la etiqueta.
+        initial_snapshot (dict[str, Any]): Snapshot inicial del modelo.
+        final_snapshot (dict[str, Any]): Snapshot final del modelo.
+        output_path (str): Ruta del archivo de salida.
+    """
 
     model_label: str
     model_id: str
@@ -51,7 +61,16 @@ class _BatchQueueResultContext:
 
 @dataclass(frozen=True)
 class _BatchFinalRenderContext:
-    """Contexto compacto para render de pantalla final de batch."""
+    """
+    Contexto compacto para render de pantalla final de batch.
+    
+    Args:
+        selected_manifest (str): Manifest seleccionado.
+        summary_schema_base_name (str): Nombre base del esquema.
+        schema_exec_name (str): Nombre de ejecución del esquema.
+        selected_model_ids (list[str]): Lista de IDs de modelos seleccionados.
+        queue_results (list[_BatchQueueResultContext]): Resultados de ejecución por variante.
+    """
 
     selected_manifest: str
     summary_schema_base_name: str
@@ -62,7 +81,17 @@ class _BatchFinalRenderContext:
 
 @dataclass(frozen=True)
 class _BatchModelSelectionContext:
-    """Contexto para resolver qué variantes ejecutar."""
+    """
+    Contexto para resolver qué variantes ejecutar.
+    
+    Args:
+        schema_exec_name (str): Nombre de ejecución del esquema.
+        queued_models (list[str]): Lista de modelos en cola.
+        completed_models (list[str]): Lista de modelos completados.
+        snapshot_for (Callable[[str], dict[str, Any]]): Función para obtener el snapshot del modelo.
+        default_models (set[str]): Conjunto de modelos por defecto.
+        display_label_for (Callable[[str], str]): Función para obtener la etiqueta del modelo.
+    """
 
     schema_exec_name: str
     queued_models: list[str]
@@ -74,7 +103,19 @@ class _BatchModelSelectionContext:
 
 @dataclass(frozen=True)
 class _BatchProgressBarsContext:
-    """Contexto para construir líneas de barras de progreso extra."""
+    """
+    Contexto para construir líneas de barras de progreso extra.
+    
+    Args:
+        show_model_queue_bar (bool): Mostrar barra de cola de modelos.
+        model_queue_current (int): Contador actual de la cola de modelos.
+        models_target (int): Objetivo de la cola de modelos.
+        compact_model (str): Modelo compacto.
+        model_completed_total (int): Total de modelos completados.
+        current_model_target (int): Objetivo actual del modelo.
+        iteration_progress (int): Progreso de la iteración.
+        iterations_value (int): Valor de las iteraciones.
+    """
 
     show_model_queue_bar: bool
     model_queue_current: int
@@ -88,7 +129,16 @@ class _BatchProgressBarsContext:
 
 @dataclass(frozen=True)
 class _BatchExecutionCatalog:
-    """Índices por execution_id para evitar pasar múltiples dicts sueltos."""
+    """
+    Índices por execution_id para evitar pasar múltiples dicts sueltos.
+    
+    Args:
+        queued_models (list[str]): Lista de modelos en cola.
+        label_by_id (dict[str, str]): Diccionario de etiquetas por ID.
+        schema_by_id (dict[str, str]): Diccionario de esquemas por ID.
+        model_id_by_id (dict[str, str]): Diccionario de IDs por ID.
+        include_reasoning_by_id (dict[str, bool]): Diccionario de razonamiento por ID.
+    """
 
     queued_models: list[str]
     label_by_id: dict[str, str]
@@ -103,7 +153,17 @@ def _select_models_to_execute(
     app: "AppContext",
     context: _BatchModelSelectionContext,
 ) -> set[str]:
-    """Resuelve la lista final de modelos a ejecutar incluyendo reejecuciones."""
+    """
+    Resuelve la lista final de modelos a ejecutar incluyendo reejecuciones.
+    
+    Args:
+        kit ("UIKit"): Kit de UI.
+        app ("AppContext"): Contexto de la aplicación.
+        context (_BatchModelSelectionContext): Contexto de selección de modelos.
+        
+    Returns:
+        set[str]: Conjunto de modelos a ejecutar.
+    """
     schema_exec_name = context.schema_exec_name
     queued_models = context.queued_models
     completed_models = context.completed_models
@@ -123,6 +183,12 @@ def _select_models_to_execute(
         return models_to_execute
 
     def _rerun_info_text() -> str:
+        """
+        Obtiene el texto informativo para la reejecución.
+        
+        Returns:
+            str: Texto informativo para la reejecución.
+        """
         lines: list[str] = []
         lines.append("Resumen actual por modelo:")
         lines.extend(
@@ -159,6 +225,14 @@ def _select_models_to_execute(
         models_to_execute = set(queued_models)
     elif rerun_choice == 2:
         def _render_rerun_header() -> None:
+            """
+            Renderiza el encabezado para la reejecución.
+            
+            Args:
+                kit ("UIKit"): Kit de UI.
+                app ("AppContext"): Contexto de la aplicación.
+                schema_exec_name (str): Nombre de ejecución del esquema.
+            """
             kit.clear()
             app.print_banner()
             kit.subtitle(f"BATCH RUNNER · {schema_exec_name} · REEJECUTAR MODELOS")
@@ -185,6 +259,17 @@ def _select_models_to_execute(
                 _label: str = model_label,
                 _snapshot: dict[str, Any] = model_snapshot,
             ) -> str:
+                """
+                Función dinámica para el label del modelo.
+                
+                Args:
+                    _is_selected_row (bool): Indica si la fila está seleccionada.
+                    _label (str): Etiqueta del modelo.
+                    _snapshot (dict[str, Any]): Snapshot del modelo.
+                    
+                Returns:
+                    str: Label dinámico del modelo.
+                """
                 return snapshot_summary_line(kit.style, _label, _snapshot)
 
             model_item.dynamic_label = _dynamic_model_label
@@ -220,7 +305,15 @@ def _select_models_to_execute(
 
 
 def _format_accuracy_text(accuracy_payload: dict[str, Any] | None) -> str:
-    """Formatea aciertos como 'ok/evaluados (xx.x%)' o N/D."""
+    """
+    Formatea aciertos como 'ok/evaluados (xx.x%)' o N/D.
+    
+    Args:
+        accuracy_payload (dict[str, Any] | None): Payload de aciertos.
+        
+    Returns:
+        str: Texto formateado de aciertos.
+    """
     if not isinstance(accuracy_payload, dict):
         return "N/D"
     evaluated = int(accuracy_payload.get("evaluated", 0) or 0)
@@ -234,7 +327,17 @@ def _format_accuracy_text(accuracy_payload: dict[str, Any] | None) -> str:
 def _collect_queue_rows(
     queue_results: list[_BatchQueueResultContext],
 ) -> tuple[list[tuple[str, str, bool, dict[str, Any], str]], int, int, int, int, int, int, list[str]]:
-    """Normaliza filas por modelo y acumula totales globales de la cola."""
+    """
+    Normaliza filas por modelo y acumula totales globales de la cola.
+    
+    Args:
+        queue_results (list[_BatchQueueResultContext]): Resultados de ejecución por variante.
+        
+    Returns:
+        tuple[list[tuple[str, str, bool, dict[str, Any], str]], int, int, int, int, int, int, list[str]]:
+            Tupla con filas de cola, totales de OK, items, pendientes, modelos completos,
+            modelos parciales, modelos fallidos y lista de modelos en cola.
+    """
     total_ok = 0
     total_items = 0
     total_pending = 0
@@ -285,7 +388,19 @@ def _resolve_iteration_progress(
     payload_iteration_index: int,
     payload_iteration_total: int,
 ) -> tuple[int, int]:
-    """Resuelve progreso/total de iteraciones de la imagen actual."""
+    """
+    Resuelve progreso/total de iteraciones de la imagen actual.
+    
+    Args:
+        event (str): Evento que disparó la resolución.
+        current_index (int): Índice actual.
+        iterations_per_image (int): Número de iteraciones por imagen.
+        payload_iteration_index (int): Índice de iteración del payload.
+        payload_iteration_total (int): Total de iteraciones del payload.
+        
+    Returns:
+        tuple[int, int]: Tupla con el progreso de la iteración y el valor total de iteraciones.
+    """
     iterations_value = max(1, int(iterations_per_image or 1))
     iteration_progress = iterations_value
     if event == "complete":
@@ -306,7 +421,16 @@ def _build_extra_progress_lines(
     kit: "UIKit",
     context: _BatchProgressBarsContext,
 ) -> list[str]:
-    """Compone líneas extra de barras de progreso del dashboard vivo."""
+    """
+    Compone líneas extra de barras de progreso del dashboard vivo.
+    
+    Args:
+        kit ("UIKit"): Kit de UI.
+        context (_BatchProgressBarsContext): Contexto de barras de progreso.
+        
+    Returns:
+        list[str]: Líneas extra de barras de progreso.
+    """
     show_model_queue_bar = context.show_model_queue_bar
     model_queue_current = context.model_queue_current
     models_target = context.models_target
@@ -347,7 +471,15 @@ def _build_extra_progress_lines(
 
 
 def _resolve_pending_entries_and_paths(snapshot: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
-    """Extrae entradas pendientes y su lista de paths limpios desde snapshot."""
+    """
+    Extrae entradas pendientes y su lista de paths limpios desde snapshot.
+    
+    Args:
+        snapshot (dict[str, Any]): Snapshot del modelo.
+        
+    Returns:
+        tuple[list[dict[str, Any]], list[str]]: Tupla con entradas pendientes y lista de paths limpios.
+    """
     pending_entries = cast(list[dict[str, Any]], snapshot.get("pending_entries") or [])
     pending_paths = [
         str(item.get("image_path") or "").strip()
@@ -358,7 +490,16 @@ def _resolve_pending_entries_and_paths(snapshot: dict[str, Any]) -> tuple[list[d
 
 
 def _retry_made_progress(*, pending_before_retry: int, pending_after_retry: int) -> bool:
-    """Determina si un reintento redujo pendientes y por tanto hubo progreso."""
+    """
+    Determina si un reintento redujo pendientes y por tanto hubo progreso.
+    
+    Args:
+        pending_before_retry (int): Número de pendientes antes del reintento.
+        pending_after_retry (int): Número de pendientes después del reintento.
+        
+    Returns:
+        bool: True si hubo progreso (menos pendientes después), False en caso contrario.
+    """
     return pending_after_retry < pending_before_retry
 
 
@@ -368,7 +509,17 @@ def _build_output_path_by_model(
     selected_manifest: str,
     linked_batch_output_path: Callable[..., Any],
 ) -> dict[str, str]:
-    """Precalcula la ruta de salida compartida por cada modelo."""
+    """
+    Precalcula la ruta de salida compartida por cada modelo.
+    
+    Args:
+        catalog (_BatchExecutionCatalog): Catálogo de ejecución.
+        selected_manifest (str): Manifest seleccionado.
+        linked_batch_output_path (Callable[..., Any]): Función para obtener la ruta de salida.
+        
+    Returns:
+        dict[str, str]: Diccionario con la ruta de salida por modelo.
+    """
     return {
         model: str(
             linked_batch_output_path(
@@ -386,7 +537,17 @@ def _build_snapshot_kwargs_by_model(
     selected_manifest: str,
     schema_name_by_model: dict[str, str],
 ) -> dict[str, dict[str, Any]]:
-    """Precalcula kwargs de snapshot por modelo para evitar duplicaciones."""
+    """
+    Precalcula kwargs de snapshot por modelo para evitar duplicaciones.
+    
+    Args:
+        catalog (_BatchExecutionCatalog): Catálogo de ejecución.
+        selected_manifest (str): Manifest seleccionado.
+        schema_name_by_model (dict[str, str]): Diccionario de nombres de esquema por modelo.
+        
+    Returns:
+        dict[str, dict[str, Any]]: Diccionario con kwargs de snapshot por modelo.
+    """
     return {
         model: {
             "manifest_path": selected_manifest,
@@ -399,7 +560,15 @@ def _build_snapshot_kwargs_by_model(
 
 
 def _build_execution_catalog(execution_variants: list[dict[str, Any]]) -> _BatchExecutionCatalog:
-    """Construye catálogo de ejecución y sus índices por id."""
+    """
+    Construye catálogo de ejecución y sus índices por id.
+    
+    Args:
+        execution_variants (list[dict[str, Any]]): Lista de variantes de ejecución.
+        
+    Returns:
+        _BatchExecutionCatalog: Catálogo de ejecución.
+    """
     queued_models = [str(item.get("execution_id") or "") for item in execution_variants]
     return _BatchExecutionCatalog(
         queued_models=queued_models,
@@ -427,7 +596,16 @@ def _build_queue_targets(
     runnable_models: list[str],
     initial_snapshots: dict[str, dict[str, Any]],
 ) -> dict[str, int]:
-    """Calcula objetivo de imágenes por modelo runnable desde snapshot inicial."""
+    """
+    Calcula objetivo de imágenes por modelo runnable desde snapshot inicial.
+    
+    Args:
+        runnable_models (list[str]): Lista de modelos ejecutables.
+        initial_snapshots (dict[str, dict[str, Any]]): Snapshot inicial por modelo.
+        
+    Returns:
+        dict[str, int]: Diccionario con el objetivo de imágenes por modelo.
+    """
     return {
         model: int(cast(dict[str, Any], initial_snapshots.get(model) or {}).get("total", 0))
         for model in runnable_models
@@ -436,7 +614,27 @@ def _build_queue_targets(
 
 @dataclass(frozen=True)
 class _BatchModelExecutionContext:
-    """Contexto inmutable para ejecutar una variante de modelo con menos parámetros."""
+    """
+    Contexto inmutable para ejecutar una variante de modelo con menos parámetros.
+    
+    Args:
+        selected_manifest (str): Manifest seleccionado.
+        schema_exec_name (str): Nombre de ejecución del esquema.
+        schema_base_name (str): Nombre base del esquema.
+        include_reasoning (bool): Indica si se debe incluir razonamiento.
+        model_id (str): ID del modelo.
+        model_label (str): Etiqueta del modelo.
+        output_path (str): Ruta de salida.
+        manifest_snapshot (dict[str, Any]): Snapshot del manifiesto.
+        rerun_only_pending (bool): Indica si se debe ejecutar solo pendientes.
+        completed_global_images_before_model (int): Imágenes completadas globalmente antes del modelo.
+        total_global_target (int): Objetivo global de imágenes.
+        current_model_target (int): Objetivo actual del modelo.
+        models_done_before (int): Modelos completados antes.
+        models_target (int): Objetivo de modelos.
+        iterations_per_image (int): Iteraciones por imagen.
+        baseline_completed_for_model (int): Completados de baseline para el modelo.
+    """
 
     selected_manifest: str
     schema_exec_name: str
@@ -463,9 +661,26 @@ def _render_batch_final_summary(
     context: _BatchFinalRenderContext,
     upsert_batch_execution_summary: Callable[..., dict[str, Any] | None],
 ) -> None:
-    """Construye y renderiza el dashboard final del batch runner."""
+    """
+    Construye y renderiza el dashboard final del batch runner.
+    
+    Args:
+        kit ("UIKit"): Kit de UI.
+        app ("AppContext"): Contexto de la aplicación.
+        context (_BatchFinalRenderContext): Contexto de renderizado final.
+        upsert_batch_execution_summary (Callable[..., dict[str, Any] | None]): Función para actualizar el resumen del batch.
+    """
     def _format_metric_triplet(stats: dict[str, Any], *, suffix: str = "") -> str:
-        """Formatea min/media/max para una métrica agregada."""
+        """
+        Formatea min/media/max para una métrica agregada.
+        
+        Args:
+            stats (dict[str, Any]): Estadísticas de la métrica.
+            suffix (str): Sufijo a añadir al valor.
+            
+        Returns:
+            str: Texto formateado con min/media/max.
+        """
         return (
             f"min={_format_metric_value(stats.get('min'), suffix=suffix)} | "
             f"media={_format_metric_value(stats.get('avg'), suffix=suffix)} | "
@@ -618,7 +833,19 @@ def _execute_model_with_retries(
     manifest_execution_snapshot: Callable[..., dict[str, Any]],
     execution: _BatchModelExecutionContext,
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
-    """Ejecuta un modelo de la cola con progreso en vivo y reintentos de pendientes."""
+    """
+    Ejecuta un modelo de la cola con progreso en vivo y reintentos de pendientes.
+    
+    Args:
+        kit ("UIKit"): Kit de UI.
+        app ("AppContext"): Contexto de la aplicación.
+        run_batch_job (Callable[..., dict[str, Any]]): Función para ejecutar el batch.
+        manifest_execution_snapshot (Callable[..., dict[str, Any]]): Función para obtener el snapshot del manifiesto.
+        execution (_BatchModelExecutionContext): Contexto de ejecución del modelo.
+        
+    Returns:
+        tuple[dict[str, Any], dict[str, Any], bool]: Tupla con el resumen del modelo, el snapshot final y un flag de progreso.
+    """
     model_label = execution.model_label.strip() or execution.model_id
     kit.clear()
     app.print_banner()
@@ -663,7 +890,12 @@ def _execute_model_with_retries(
         }
 
         def on_batch_progress(payload: dict[str, object]) -> None:
-            """Renderiza progreso en vivo durante el batch actual."""
+            """
+            Renderiza progreso en vivo durante el batch actual.
+            
+            Args:
+                payload (dict[str, object]): Payload con el progreso del batch.
+            """
             summary_progress = cast(dict[str, object], payload.get("summary") or {})
             total = _coerce_int(payload.get("total"))
             event = str(payload.get("event") or "")
@@ -753,7 +985,16 @@ def _execute_model_with_retries(
             pending_image_paths: list[str] | None = None,
             pending_entries: list[dict[str, Any]] | None = None,
         ) -> dict[str, Any]:
-            """Ejecuta una iteración de batch (completa o reanudada)."""
+            """
+            Ejecuta una iteración de batch (completa o reanudada).
+            
+            Args:
+                pending_image_paths (list[str] | None): Lista de paths de imágenes pendientes.
+                pending_entries (list[dict[str, Any]] | None): Lista de entradas pendientes.
+                
+            Returns:
+                dict[str, Any]: Resumen del batch.
+            """
             try:
                 return run_batch_job(
                     **base_batch_kwargs,
@@ -837,16 +1078,16 @@ def run_batch_runner_wrapper(
     manifest_execution_snapshot: Callable[..., dict[str, Any]],
     prune_output_records_for_model: Callable[..., bool],
 ) -> None:
-    """Run queued batch inference jobs defined by autosufficient manifests.
+    """Ejecuta trabajos de inferencia por lotes en cola definidos por manifiestos autosuficientes.
 
     Args:
-        kit: Terminal UI toolkit.
-        app: Application context used to render shared UI chrome.
-        select_manifest_for_batch: Callback that selects or creates the manifest bundle.
-        execution_schema_name: Callback that derives execution schema display name.
-        linked_batch_output_path: Callback that computes output JSONL path.
-        manifest_execution_snapshot: Callback that computes current execution status.
-        prune_output_records_for_model: Callback that removes rows for one model in shared JSONL.
+        kit: Toolkit de interfaz de usuario de terminal.
+        app: Contexto de la aplicación utilizado para renderizar el cromo de la UI compartida.
+        select_manifest_for_batch: Callback que selecciona o crea el paquete del manifiesto.
+        execution_schema_name: Callback que deriva el nombre de visualización del esquema de ejecución.
+        linked_batch_output_path: Callback que calcula la ruta JSONL de salida.
+        manifest_execution_snapshot: Callback que calcula el estado de ejecución actual.
+        prune_output_records_for_model: Callback que elimina filas para un modelo en el JSONL compartido.
     """
     from src.scripts.batch_runner import run_batch_job, seed_batch_meta_header, upsert_batch_execution_summary
 
@@ -854,11 +1095,27 @@ def run_batch_runner_wrapper(
     execution_label_by_id: dict[str, str] = {}
 
     def _snapshot_for(execution_id: str) -> dict[str, Any]:
-        """Obtiene snapshot inicial por ejecución (modelo + modo)."""
+        """
+        Obtiene snapshot inicial por ejecución (modelo + modo).
+        
+        Args:
+            execution_id (str): ID de ejecución.
+            
+        Returns:
+            dict[str, Any]: Snapshot inicial.
+        """
         return cast(dict[str, Any], initial_snapshots.get(execution_id) or {})
 
     def _label_for(execution_id: str) -> str:
-        """Resuelve etiqueta de ejecución para mostrar en menús y logs."""
+        """
+        Resuelve etiqueta de ejecución para mostrar en menús y logs.
+        
+        Args:
+            execution_id (str): ID de ejecución.
+            
+        Returns:
+            str: Etiqueta de ejecución.
+        """
         return str(execution_label_by_id.get(execution_id) or execution_id)
 
     while True:

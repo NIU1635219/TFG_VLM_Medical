@@ -12,7 +12,16 @@ if TYPE_CHECKING:
 
 
 def _format_metric_value(value: object, *, suffix: str = "") -> str:
-    """Representa metricas opcionales de forma amigable para la TUI."""
+    """
+    Representa metricas opcionales de forma amigable para la TUI.
+
+    Args:
+        value: Valor de la métrica (puede ser None).
+        suffix: Sufijo a añadir al valor (ej. " s").
+
+    Returns:
+        Representación en string de la métrica.
+    """
     if value is None:
         return "N/D"
     if isinstance(value, int) or (isinstance(value, float) and value.is_integer()):
@@ -23,7 +32,15 @@ def _format_metric_value(value: object, *, suffix: str = "") -> str:
 
 
 def _build_partial_metrics_line(summary: dict[str, object]) -> str:
-    """Construye línea estándar de promedios parciales TTFT/TPS/latencia."""
+    """
+    Construye línea estándar de promedios parciales TTFT/TPS/latencia.
+
+    Args:
+        summary: Resumen de métricas.
+
+    Returns:
+        Línea con los promedios parciales.
+    """
     ttft = cast(dict[str, object], summary.get("ttft") or {})
     tps = cast(dict[str, object], summary.get("tps") or {})
     duration = cast(dict[str, object], summary.get("total_duration") or {})
@@ -36,12 +53,31 @@ def _build_partial_metrics_line(summary: dict[str, object]) -> str:
 
 
 def _style_token(kit: "UIKit", name: str) -> str:
-    """Devuelve un token ANSI si existe en el estilo actual."""
+    """
+    Devuelve un token ANSI si existe en el estilo actual.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        name: Nombre del token de estilo.
+
+    Returns:
+        Token ANSI si existe, string vacío si no.
+    """
     return str(getattr(kit.style, name, ""))
 
 
 def _wrap_text(kit: "UIKit", text: str, width: int) -> list[str]:
-    """Envuelve texto con el helper del kit o usa un fallback simple en tests."""
+    """
+    Envuelve texto con el helper del kit o usa un fallback simple en tests.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        text: Texto a envolver.
+        width: Ancho máximo por línea.
+
+    Returns:
+        Lista de líneas envueltas.
+    """
     wrap_fn = getattr(kit, "wrap", None)
     if callable(wrap_fn):
         wrapped = wrap_fn(text, width)
@@ -53,7 +89,15 @@ def _wrap_text(kit: "UIKit", text: str, width: int) -> list[str]:
 
 
 def _stringify_payload_value(value: object) -> str:
-    """Normaliza valores JSON para mostrarlos en líneas legibles."""
+    """
+    Normaliza valores JSON para mostrarlos en líneas legibles.
+
+    Args:
+        value: Valor a convertir a string.
+
+    Returns:
+        String normalizado.
+    """
     if isinstance(value, (dict, list, tuple)):
         try:
             return json.dumps(value, ensure_ascii=False)
@@ -66,7 +110,17 @@ def _stringify_payload_value(value: object) -> str:
 
 
 def _format_payload_lines(kit: "UIKit", payload: object, width: int) -> list[str]:
-    """Convierte un payload en líneas con wrapping conservando claves."""
+    """
+    Convierte un payload en líneas con wrapping conservando claves.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        payload: Payload a formatear.
+        width: Ancho máximo por línea.
+
+    Returns:
+        Lista de líneas formateadas.
+    """
     if payload is None:
         return[]
 
@@ -89,14 +143,31 @@ def _format_payload_lines(kit: "UIKit", payload: object, width: int) -> list[str
 
 
 def _recent_record_separator(kit: "UIKit") -> str:
-    """Crea una linea divisoria para separar registros recientes."""
+    """
+    Crea una linea divisoria para separar registros recientes.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+
+    Returns:
+        Línea divisoria. 
+    """
     dim = _style_token(kit, "DIM")
     endc = _style_token(kit, "ENDC")
     return f"  {dim}{'─' * max(2, kit.width() - 4)}{endc}"
 
 
 def _cap_detail_lines(lines: list[str], *, max_lines: int) -> list[str]:
-    """Recorta lineas muy largas para evitar cortes a mitad de registro."""
+    """
+    Recorta lineas muy largas para evitar cortes a mitad de registro.
+
+    Args:
+        lines: Líneas a recortar.
+        max_lines: Número máximo de líneas a mantener.
+
+    Returns:
+        Líneas recortadas.
+    """
     if max_lines <= 0 or len(lines) <= max_lines:
         return lines
     if max_lines == 1:
@@ -107,7 +178,15 @@ def _cap_detail_lines(lines: list[str], *, max_lines: int) -> list[str]:
 
 
 def _coerce_int(value: object) -> int:
-    """Convierte valores numericos opcionales del callback de progreso a enteros."""
+    """
+    Convierte valores numericos opcionales del callback de progreso a enteros.
+
+    Args:
+        value: Valor a convertir.
+
+    Returns:
+        Valor entero.
+    """
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, int):
@@ -123,12 +202,29 @@ def _coerce_int(value: object) -> int:
 
 
 def _telemetry_available(availability: dict[str, object], key: str) -> bool:
-    """Indica si una metrica tiene al menos un registro valido en la ejecucion."""
+    """
+    Indica si una metrica tiene al menos un registro valido en la ejecucion.
+
+    Args:
+        availability: Disponibilidad de métricas.
+        key: Clave de la métrica.
+
+    Returns:
+        True si la métrica está disponible, False en caso contrario.
+    """
     return _coerce_int(availability.get(key)) > 0
 
 
 def _coverage_fragments(availability: dict[str, object]) -> list[str]:
-    """Construye una linea compacta de cobertura omitiendo metricas ausentes."""
+    """
+    Construye una linea compacta de cobertura omitiendo metricas ausentes.
+
+    Args:
+        availability: Disponibilidad de métricas.
+
+    Returns:
+        Línea compacta de cobertura.
+    """
     ok_records = _coerce_int(availability.get("ok_records"))
     if ok_records <= 0:
         return []
@@ -147,7 +243,16 @@ def _coverage_fragments(availability: dict[str, object]) -> list[str]:
 
 
 def _build_probe_detail_parts(record: dict[str, object], availability: dict[str, object]) -> list[str]:
-    """Genera solo las columnas utiles para una inferencia concreta del probe."""
+    """
+    Genera solo las columnas utiles para una inferencia concreta del probe.
+
+    Args:
+        record: Registro de inferencia.
+        availability: Disponibilidad de métricas.
+
+    Returns:
+        Lista de partes de la línea de detalle.
+    """
     parts =[f"TTFT={_format_metric_value(record.get('ttft_seconds'), suffix=' s')}"]
 
     if _telemetry_available(availability, "tps_records"):
@@ -171,14 +276,32 @@ def _build_probe_detail_parts(record: dict[str, object], availability: dict[str,
 
 
 def _rel_probe_path(image_path: str | None) -> str:
-    """Normaliza rutas de imagenes para mostrarlas de forma compacta."""
+    """
+    Normaliza rutas de imagenes para mostrarlas de forma compacta.
+
+    Args:
+        image_path: Ruta de la imagen.
+
+    Returns:
+        Ruta relativa de la imagen.
+    """
     if not image_path:
         return "N/D"
     return os.path.relpath(image_path, ".")
 
 
 def _build_progress_bar(kit: "UIKit", current: int, total: int) -> str:
-    """Construye una barra de progreso coloreada y adaptada al ancho disponible."""
+    """
+    Construye una barra de progreso coloreada y adaptada al ancho disponible.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        current: Progreso actual.
+        total: Progreso total.
+
+    Returns:
+        Barra de progreso en formato string.
+    """
     if total <= 0:
         return f"{_style_token(kit, 'DIM')}[sin muestra]{_style_token(kit, 'ENDC')}"
     ui_width = max(60, kit.width())
@@ -204,17 +327,42 @@ def _build_progress_bar(kit: "UIKit", current: int, total: int) -> str:
 
 
 def _should_show_progress_bar(total: int) -> bool:
-    """Regla global: ocultar barras triviales (0/0 o 1/1)."""
+    """
+    Regla global: ocultar barras triviales (0/0 o 1/1).
+
+    Args:
+        total: Progreso total.
+
+    Returns:
+        True si se debe mostrar la barra de progreso, False en caso contrario.
+    """
     return total > 1
 
 
 def _status_icon(status: str) -> str:
-    """Devuelve un símbolo Unicode indicativo del estado para la TUI."""
+    """
+    Devuelve un símbolo Unicode indicativo del estado para la TUI.
+
+    Args:
+        status: Estado del registro.
+
+    Returns:
+        Símbolo Unicode indicativo del estado.
+    """
     return {"OK": "✓", "WARN": "⚠", "FAIL": "✗"}.get(status.upper(), "·")
 
 
 def _status_color(kit: "UIKit", status: str) -> str:
-    """Devuelve el color ANSI asociado a un estado textual."""
+    """
+    Devuelve el color ANSI asociado a un estado textual.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        status: Estado del registro.
+
+    Returns:
+        Color ANSI asociado al estado.
+    """
     if status == "OK":
         return _style_token(kit, "OKGREEN")
     if status == "WARN":
@@ -225,7 +373,17 @@ def _status_color(kit: "UIKit", status: str) -> str:
 
 
 def _section_header(kit: "UIKit", title: str, *, width: int | None = None) -> str:
-    """Genera un encabezado de sección con título integrado en la línea divisora."""
+    """
+    Genera un encabezado de sección con título integrado en la línea divisora.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        title: Título de la sección.
+        width: Ancho de la línea (opcional).
+
+    Returns:
+        Encabezado de sección en formato string.
+    """
     w = (width if width is not None else max(60, kit.width())) - 4
     fill = max(2, w - len(title) - 5)
     dim = _style_token(kit, "DIM")
@@ -235,12 +393,26 @@ def _section_header(kit: "UIKit", title: str, *, width: int | None = None) -> st
 
 
 def _make_recent_records(*, limit: int = 5) -> deque[dict[str, object]]:
-    """Crea un buffer para guardar los registros crudos (NO strings formateados)."""
+    """
+    Crea un buffer para guardar los registros crudos (NO strings formateados).
+
+    Args:
+        limit: Número máximo de registros a guardar.
+
+    Returns:
+        Buffer de registros recientes.
+    """
     return deque(maxlen=limit)
 
 
 def _append_recent_record(buffer: deque[dict[str, object]], record: dict[str, object]) -> None:
-    """Añade el diccionario crudo al buffer. El formato se hará en caliente en el render."""
+    """
+    Añade el diccionario crudo al buffer. El formato se hará en caliente en el render.
+
+    Args:
+        buffer: Buffer de registros recientes.
+        record: Registro de inferencia.
+    """
     buffer.append(record)
 
 
@@ -250,7 +422,17 @@ def _format_recent_status_lines(
     *,
     truncate: bool = True,
 ) -> list[str]:
-    """Formatea un registro adaptando los anchos al tamaño EXACTO actual del terminal."""
+    """
+    Formatea un registro adaptando los anchos al tamaño EXACTO actual del terminal.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        record: Registro de inferencia.
+        truncate: Si es True, trunca las líneas largas.
+
+    Returns:
+        Lista de líneas formateadas.
+    """
     status = str(record.get("status") or "unknown")
     if status == "ok":
         color = _style_token(kit, "OKGREEN")
@@ -329,7 +511,18 @@ def _build_recent_record_lines(
     empty_message: str = "  Sin registros.",
     truncate: bool = True,
 ) -> list[str]:
-    """Convierte registros crudos en líneas de actividad formateándolos al momento."""
+    """
+    Convierte registros crudos en líneas de actividad formateándolos al momento.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        records: Lista de registros de inferencia.
+        empty_message: Mensaje a mostrar si no hay registros.
+        truncate: Si es True, trunca las líneas largas.
+
+    Returns:
+        Lista de líneas de actividad formateadas.
+    """
     if not records:
         return [empty_message]
     lines: list[str] =[]
@@ -348,7 +541,19 @@ def _make_live_panel(
     intro: str,
     static_lines: list[str] | None = None,
 ):
-    """Crea un panel incremental con banner estatico y subtitulo reutilizable."""
+    """
+    Crea un panel incremental con banner estatico y subtitulo reutilizable.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        app: Contexto de la aplicación.
+        subtitle: Subtítulo del panel.
+        intro: Introducción del panel.
+        static_lines: Líneas estáticas del panel.
+
+    Returns:
+        Panel incremental.
+    """
     def render_static() -> None:
         """Pinta cabecera, subtítulo y bloque estático del panel en vivo."""
         app.print_banner()
@@ -382,7 +587,24 @@ def _render_live_dashboard(
     extra_lines: list[str] | None = None,
     force_full: bool | None = None,
 ) -> None:
-    """Compone un frame dinámico homogéneo calculando todos los anchos al vuelo."""
+    """
+    Compone un frame dinámico homogéneo calculando todos los anchos al vuelo.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        panel: Panel incremental.
+        current: Progreso actual.
+        total: Progreso total.
+        stats_line: Línea de estadísticas.
+        status_line: Línea de estado.
+        metrics_line: Línea de métricas.
+        coverage_line: Línea de cobertura.
+        recent_title: Título de la sección de registros recientes.
+        recent_records: Lista de registros crudos.
+        recent_limit: Número máximo de registros recientes.
+        extra_lines: Líneas adicionales.
+        force_full: Si es True, fuerza el render completo.
+    """
     dim = _style_token(kit, "DIM")
     endc = _style_token(kit, "ENDC")
     section_title = recent_title.rstrip(":")
@@ -428,7 +650,16 @@ def _render_live_dashboard(
 
 
 def _build_summary_lines(kit: "UIKit", rows: list[tuple[str, str, str]]) -> list[str]:
-    """Convierte filas tipo tabla en lineas compactas para el panel final."""
+    """
+    Convierte filas tipo tabla en lineas compactas para el panel final.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        rows: Lista de filas tipo tabla.
+
+    Returns:
+        Lista de líneas compactas.
+    """
     if not rows:
         return ["  Sin datos."]
     label_width = min(28, max(len(str(name)) for name, _, _ in rows))
@@ -458,7 +689,16 @@ def _build_summary_lines(kit: "UIKit", rows: list[tuple[str, str, str]]) -> list
 
 
 def _build_named_value_lines(kit: "UIKit", rows: list[tuple[str, object]]) -> list[str]:
-    """Convierte pares clave/valor en lineas compactas para paneles finales."""
+    """
+    Convierte pares clave/valor en lineas compactas para paneles finales.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        rows: Lista de pares clave/valor.
+
+    Returns:
+        Lista de líneas compactas.
+    """
     visible_rows =[(str(name), str(value)) for name, value in rows if value not in (None, "")]
     if not visible_rows:
         return ["  Sin datos."]
@@ -479,7 +719,15 @@ def _build_named_value_lines(kit: "UIKit", rows: list[tuple[str, object]]) -> li
 
 
 def _normalize_final_section_title(title: str) -> str:
-    """Homogeneiza titulos de secciones entre distintos runners del menu."""
+    """
+    Homogeneiza titulos de secciones entre distintos runners del menu.
+
+    Args:
+        title: Título de la sección.
+
+    Returns:
+        Título normalizado.
+    """
     normalized = title.strip().upper()
     title_map = {
         "LM STUDIO RESPONSE INSPECTOR": "Resumen",
@@ -498,7 +746,12 @@ def _normalize_final_section_title(title: str) -> str:
 
 
 def _standard_final_intro() -> str:
-    """Mensaje final homogeneo para los resumenes del menu de tests."""
+    """
+    Mensaje final homogeneo para los resumenes del menu de tests.
+
+    Returns:
+        Mensaje final en formato string.
+    """
     return "Proceso finalizado. Revisa el resumen y las observaciones."
 
 
@@ -510,7 +763,16 @@ def _render_final_sections_screen(
     intro: str,
     sections: list[tuple[str, list[str]]],
 ) -> None:
-    """Pinta una pantalla final compacta reutilizable sin salida cruda dispersa."""
+    """
+    Pinta una pantalla final compacta reutilizable sin salida cruda dispersa.
+
+    Args:
+        kit: Toolkit de interfaz de usuario de terminal.
+        app: Contexto de la aplicación.
+        subtitle: Subtítulo del panel.
+        intro: Introducción del panel.
+        sections: Lista de secciones con título y líneas.
+    """
     dim = _style_token(kit, "DIM")
     endc = _style_token(kit, "ENDC")
     panel = _make_live_panel(kit, app, subtitle=subtitle, intro=intro)
@@ -524,7 +786,15 @@ def _render_final_sections_screen(
 
 
 def _format_batch_summary_rows(summary: dict[str, object]) -> list[tuple[str, str, str]]:
-    """Prepara filas compactas para el resumen final del batch runner."""
+    """
+    Prepara filas compactas para el resumen final del batch runner.
+
+    Args:
+        summary: Resumen del batch runner.
+
+    Returns:
+        Lista de filas compactas.
+    """
     processed = _coerce_int(summary.get("processed"))
     sample_size = _coerce_int(summary.get("sample_size")) or processed
     ok_count = _coerce_int(summary.get("ok"))
@@ -545,7 +815,15 @@ def _format_batch_summary_rows(summary: dict[str, object]) -> list[tuple[str, st
 
 
 def _format_schema_summary_rows(summary: dict[str, object]) -> list[tuple[str, str, str]]:
-    """Prepara filas compactas para el resumen final del schema tester."""
+    """
+    Prepara filas compactas para el resumen final del schema tester.
+
+    Args:
+        summary: Resumen del schema tester.
+
+    Returns:
+        Lista de filas compactas.
+    """
     return[
         ("Modelo", str(summary["model_id"]), "OK"),
         ("Esquema", str(summary["schema_name"]), "OK"),

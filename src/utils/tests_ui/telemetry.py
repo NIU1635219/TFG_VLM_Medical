@@ -31,13 +31,14 @@ def run_telemetry_probe_wrapper(
     select_model: Callable[[str, str], str | None],
     select_schema_variant: Callable[[str, str], tuple[str, Any] | None],
 ) -> None:
-    """Run telemetry probe flow with interactive model and schema selection.
+    """
+    Ejecuta el flujo de prueba de telemetría con selección interactiva de modelo y esquema.
 
     Args:
-        kit: Terminal UI toolkit.
-        app: Application context used to render shared UI chrome.
-        select_model: Callback that resolves the model tag.
-        select_schema_variant: Callback that resolves schema class and variant.
+        kit: Toolkit de interfaz de usuario de terminal.
+        app: Contexto de la aplicación utilizado para renderizar la UI compartida.
+        select_model: Callback que resuelve la etiqueta del modelo.
+        select_schema_variant: Callback que resuelve la clase y variante del esquema.
     """
     from src.scripts.test_schema import find_images
     from src.scripts.test_telemetry import run_telemetry_batch
@@ -78,7 +79,8 @@ def run_telemetry_probe_wrapper(
             )
 
             def on_probe_progress(payload: dict[str, object]) -> None:
-                """Refresca el panel para cada evento de inferencia.
+                """
+                Refresca el panel para cada evento de inferencia.
 
                 Args:
                     payload: Evento de progreso emitido por el probe de telemetría.

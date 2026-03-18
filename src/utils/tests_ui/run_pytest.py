@@ -8,10 +8,11 @@ if TYPE_CHECKING:
 
 
 def list_test_files() -> list[str]:
-    """List available pytest files under the tests folder.
-
+    """
+    Lista los archivos de pytest disponibles en la carpeta 'tests'.
+    
     Returns:
-        Sorted filenames matching `test_*.py`, or an empty list.
+        Lista ordenada de nombres de archivo que coinciden con `test_*.py`, o una lista vacía.
     """
     test_dir = "tests"
     if not os.path.exists(test_dir):
@@ -24,13 +25,14 @@ def list_test_files() -> list[str]:
 
 
 def _coerce_test_files(value: object) -> list[str]:
-    """Normalize dynamic menu sources into a stable list of filenames.
+    """
+    Normaliza las fuentes dinámicas del menú en una lista estable de nombres de archivo.
 
     Args:
-        value: Raw value returned by app.list_test_files.
+        value: Valor bruto devuelto por app.list_test_files.
 
     Returns:
-        Cleaned list of test filenames.
+        Lista limpia de nombres de archivos de prueba.
     """
     if not isinstance(value, list):
         return []
@@ -38,10 +40,12 @@ def _coerce_test_files(value: object) -> list[str]:
 
 
 def run_all_unit_tests(kit: "UIKit") -> None:
-    """Run the full project unit-test suite.
+    """
+    Ejecuta la suite completa de pruebas unitarias del proyecto.
 
     Args:
-        kit: Terminal UI toolkit used to render logs and execute commands.
+        kit: Kit de herramientas de interfaz de usuario de terminal utilizado para 
+             renderizar registros y ejecutar comandos.
     """
     kit.log("Running All Unit Tests...", "step")
     kit.run_cmd("uv run python -m pytest tests/")
@@ -54,12 +58,13 @@ def run_specific_test(
     *,
     make_header: Callable[[str], Callable[[], None]],
 ) -> None:
-    """Run a single pytest file selected interactively.
+    """
+    Ejecuta un único archivo de pytest seleccionado de forma interactiva.
 
     Args:
-        kit: Terminal UI toolkit.
-        app: Application context that provides test file discovery.
-        make_header: Header factory used by the interactive selector.
+        kit: Kit de herramientas de interfaz de usuario de terminal.
+        app: Contexto de la aplicación que proporciona la búsqueda de archivos de prueba.
+        make_header: Fábrica de encabezados utilizada por el selector interactivo.
     """
     while True:
         app_list_test_files = getattr(app, "list_test_files", None)

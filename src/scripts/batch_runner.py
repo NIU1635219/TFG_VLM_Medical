@@ -63,7 +63,13 @@ _MANIFEST_META_KEY = "__manifest_meta__"
 
 @dataclasses.dataclass(frozen=True)
 class BatchInputItem:
-    """Representa una entrada de inferencia con metadatos opcionales."""
+    """
+    Representa una entrada de inferencia con metadatos opcionales.
+    
+    Args:
+        image_path (Path): Ruta de la imagen.
+        metadata (dict[str, Any] | None): Metadatos opcionales.
+    """
 
     image_path: Path
     metadata: dict[str, Any] | None = None
@@ -71,7 +77,15 @@ class BatchInputItem:
 
 @dataclasses.dataclass(frozen=True)
 class _BatchInputRequest:
-    """Entrada normalizada para resolver origen de datos del batch."""
+    """
+    Entrada normalizada para resolver origen de datos del batch.
+    
+    Args:
+        image_dir (str | Path | None): Ruta del directorio de imágenes.
+        manifest (str | Path | None): Ruta del manifiesto.
+        pending_image_paths (list[str] | None): Lista de paths de imágenes pendientes.
+        pending_entries (list[dict[str, Any]] | None): Lista de entradas pendientes.
+    """
 
     image_dir: str | Path | None
     manifest: str | Path | None
@@ -81,7 +95,17 @@ class _BatchInputRequest:
 
 @dataclasses.dataclass(frozen=True)
 class _BatchMetaRequest:
-    """Solicitud de actualización de cabecera __batch_meta__."""
+    """
+    Solicitud de actualización de cabecera __batch_meta__.
+    
+    Args:
+        output_path (Path): Ruta del archivo de salida.
+        model_id (str): Identificador del modelo.
+        schema_name (str): Nombre del esquema.
+        input_source (str): Fuente de entrada.
+        manifest_path (Path | None): Ruta del manifiesto.
+        seed_model_ids (list[str] | None): Lista de IDs de modelos semilla.
+    """
 
     output_path: Path
     model_id: str
@@ -93,7 +117,29 @@ class _BatchMetaRequest:
 
 @dataclasses.dataclass(frozen=True)
 class _BatchSummaryContext:
-    """Contexto compacto para construir el resumen parcial/final del batch."""
+    """
+    Contexto compacto para construir el resumen parcial/final del batch.
+    
+    Args:
+        model_id (str): Identificador del modelo.
+        schema_name (str): Nombre del esquema.
+        prompt (str): Prompt utilizado.
+        output_path (Path): Ruta del archivo de salida.
+        processed (int): Número de items procesados.
+        ok (int): Número de items procesados correctamente.
+        invalid (int): Número de items inválidos.
+        fail (int): Número de items fallidos.
+        total_available (int): Número total de items disponibles.
+        sample_size (int): Tamaño de la muestra.
+        ttft_total (float): Total de tiempo hasta el primer token.
+        ttft_count (int): Conteo de tiempo hasta el primer token.
+        tps_total (float): Total de tokens por segundo.
+        tps_count (int): Conteo de tokens por segundo.
+        total_duration_total (float): Duración total del procesamiento.
+        total_duration_count (int): Conteo de duración total.
+        input_source (str): Fuente de entrada.
+        discarded_manifest_rows (int): Número de filas descartadas del manifiesto.
+    """
 
     model_id: str
     schema_name: str
@@ -121,7 +167,17 @@ def _filter_items_by_pending_entries(
     pending_entries: list[dict[str, Any]],
     manifest_path: Path,
 ) -> list[BatchInputItem]:
-    """Filtra entradas descubiertas usando clave (ruta, iteración) pendiente."""
+    """
+    Filtra entradas descubiertas usando clave (ruta, iteración) pendiente.
+    
+    Args:
+        discovered_items (list[BatchInputItem]): Lista de items descubiertos.
+        pending_entries (list[dict[str, Any]]): Lista de entradas pendientes.
+        manifest_path (Path): Ruta del manifiesto.
+        
+    Returns:
+        list[BatchInputItem]: Lista de items filtrados por entradas pendientes.
+    """
     pending_keys: set[tuple[str, int]] = set()
     resolved_manifest_path = manifest_path.expanduser().resolve()
     for pending_entry in pending_entries:
@@ -155,7 +211,16 @@ def _filter_items_by_pending_image_paths(
     discovered_items: list[BatchInputItem],
     pending_image_paths: list[str],
 ) -> list[BatchInputItem]:
-    """Filtra entradas descubiertas por path de imagen pendiente."""
+    """
+    Filtra entradas descubiertas por path de imagen pendiente.
+    
+    Args:
+        discovered_items (list[BatchInputItem]): Lista de items descubiertos.
+        pending_image_paths (list[str]): Lista de paths de imágenes pendientes.
+        
+    Returns:
+        list[BatchInputItem]: Lista de items filtrados por paths de imágenes pendientes.
+    """
     pending_set = {
         _as_posix_key(path)
         for path in pending_image_paths
@@ -177,7 +242,14 @@ def _update_metric_totals(
     counts: dict[str, int],
     telemetry_payload: dict[str, Any],
 ) -> None:
-    """Acumula métricas numéricas de telemetría para promedios de resumen."""
+    """
+    Acumula métricas numéricas de telemetría para promedios de resumen.
+    
+    Args:
+        totals (dict[str, float]): Diccionario de totales de métricas.
+        counts (dict[str, int]): Diccionario de conteos de métricas.
+        telemetry_payload (dict[str, Any]): Payload de telemetría con métricas.
+    """
     metric_key_mapping = {
         "ttft_total": "ttft_seconds",
         "tps_total": "tokens_per_second",
@@ -201,7 +273,12 @@ T = TypeVar("T")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Construye el parser CLI del batch runner."""
+    """
+    Construye el parser CLI del batch runner.
+    
+    Returns:
+        argparse.ArgumentParser: Parser CLI del batch runner.
+    """
     parser = argparse.ArgumentParser(
         description=(
             "Procesa un directorio de imágenes con un VLM en LM Studio y guarda "
@@ -257,7 +334,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def iter_image_paths(image_dir: Path) -> list[Path]:
-    """Descubre imágenes compatibles bajo un directorio o archivo concreto."""
+    """
+    Descubre imágenes compatibles bajo un directorio o archivo concreto.
+    
+    Args:
+        image_dir (Path): Ruta del directorio o archivo de imágenes.
+        
+    Returns:
+        list[Path]: Lista de rutas de imágenes compatibles.
+    """
     normalized_path = image_dir.expanduser().resolve()
     if not normalized_path.exists():
         raise FileNotFoundError(f"No existe la ruta indicada: {normalized_path}")
@@ -278,7 +363,16 @@ def iter_image_paths(image_dir: Path) -> list[Path]:
 
 
 def _resolve_manifest_image_path(raw_value: Any, manifest_path: Path) -> Path | None:
-    """Resuelve una ruta de imagen desde el manifiesto admitiendo rutas relativas."""
+    """
+    Resuelve una ruta de imagen desde el manifiesto admitiendo rutas relativas.
+    
+    Args:
+        raw_value (Any): Valor crudo de la ruta de imagen.
+        manifest_path (Path): Ruta del manifiesto.
+        
+    Returns:
+        Path | None: Ruta resuelta de la imagen o None si no se pudo resolver.
+    """
     if raw_value is None:
         return None
     candidate_text = str(raw_value).strip()
@@ -302,7 +396,16 @@ def _resolve_manifest_image_path(raw_value: Any, manifest_path: Path) -> Path | 
 
 
 def _safe_positive_int(value: Any, default: int = 1) -> int:
-    """Convierte valores a entero positivo con fallback seguro."""
+    """
+    Convierte valores a entero positivo con fallback seguro.
+    
+    Args:
+        value (Any): Valor a convertir.
+        default (int, optional): Valor por defecto si la conversión falla. Defaults to 1.
+        
+    Returns:
+        int: Entero positivo resultante.
+    """
     try:
         return max(1, int(value or default))
     except (TypeError, ValueError):
@@ -310,7 +413,16 @@ def _safe_positive_int(value: Any, default: int = 1) -> int:
 
 
 def _derive_inference_seed(*, base_seed: int | None, metadata: dict[str, Any] | None) -> int | None:
-    """Deriva una semilla estable por iteración para aumentar variación entre repeticiones."""
+    """
+    Deriva una semilla estable por iteración para aumentar variación entre repeticiones.
+    
+    Args:
+        base_seed (int | None): Semilla base.
+        metadata (dict[str, Any] | None): Metadatos de la entrada.
+        
+    Returns:
+        int | None: Semilla derivada para la inferencia.
+    """
     iteration_index = _safe_positive_int((metadata or {}).get("run_iteration_index"))
     has_iteration = bool(metadata and metadata.get("run_iteration_index") is not None)
     if base_seed is None:
@@ -319,14 +431,29 @@ def _derive_inference_seed(*, base_seed: int | None, metadata: dict[str, Any] | 
 
 
 def _serialize_telemetry_payload(telemetry: Any) -> dict[str, Any]:
-    """Serializa telemetría admitiendo dataclass instancia y objetos con __dict__."""
+    """
+    Serializa telemetría admitiendo dataclass instancia y objetos con __dict__.
+    
+    Args:
+        telemetry (Any): Objeto de telemetría a serializar.
+        
+    Returns:        dict[str, Any]: Payload serializado de telemetría.
+    """
     if dataclasses.is_dataclass(telemetry) and not isinstance(telemetry, type):
         return dataclasses.asdict(telemetry)
     return dict(getattr(telemetry, "__dict__", {}))
 
 
 def _extract_run_iteration_values(metadata: dict[str, Any] | None) -> tuple[int, int]:
-    """Extrae índices de iteración con fallback seguro desde metadata de entrada."""
+    """
+    Extrae índices de iteración con fallback seguro desde metadata de entrada.
+    
+    Args:
+        metadata (dict[str, Any] | None): Metadatos de la entrada.
+        
+    Returns:
+        tuple[int, int]: Tupla con (run_iteration_index, run_iteration_total).
+    """
     metadata_dict = metadata if isinstance(metadata, dict) else {}
     run_iteration_index = _safe_positive_int(metadata_dict.get("run_iteration_index"))
     run_iteration_total = _safe_positive_int(metadata_dict.get("run_iteration_total"))
@@ -334,7 +461,15 @@ def _extract_run_iteration_values(metadata: dict[str, Any] | None) -> tuple[int,
 
 
 def _extract_record_iteration_values(record: dict[str, Any]) -> tuple[int, int]:
-    """Extrae índices de iteración desde un registro final exportado."""
+    """
+    Extrae índices de iteración desde un registro final exportado.
+    
+    Args:
+        record (dict[str, Any]): Registro final con índices de iteración.
+        
+    Returns:
+        tuple[int, int]: Tupla con (run_iteration_index, run_iteration_total).
+    """
     run_iteration_index = _safe_positive_int(record.get("run_iteration_index"))
     run_iteration_total = _safe_positive_int(record.get("run_iteration_total"))
     return run_iteration_index, run_iteration_total
@@ -352,7 +487,23 @@ def _build_progress_payload(
     run_iteration_index: int | None = None,
     run_iteration_total: int | None = None,
 ) -> dict[str, Any]:
-    """Construye el payload de progreso para callbacks de UI/reporting."""
+    """
+    Construye el payload de progreso para callbacks de UI/reporting.
+    
+    Args:
+        event (str): Evento de progreso.
+        index (int): Índice actual.
+        total (int): Total de items.
+        summary (dict[str, Any]): Resumen del batch.
+        image_path (str | None, optional): Ruta de la imagen. Defaults to None.
+        status (str | None, optional): Estado de la inferencia. Defaults to None.
+        record (dict[str, Any] | None, optional): Registro de la inferencia. Defaults to None.
+        run_iteration_index (int | None, optional): Índice de iteración. Defaults to None.
+        run_iteration_total (int | None, optional): Total de iteraciones. Defaults to None.
+        
+    Returns:
+        dict[str, Any]: Payload de progreso.
+    """
     return {
         "event": event,
         "index": index,
@@ -372,7 +523,17 @@ def _build_inference_kwargs(
     image_path: Path,
     inference_seed: int | None,
 ) -> dict[str, Any]:
-    """Compone kwargs de inferencia por imagen con semilla opcional."""
+    """
+    Compone kwargs de inferencia por imagen con semilla opcional.
+    
+    Args:
+        base_inference_kwargs (dict[str, Any]): Kwargs base de inferencia.
+        image_path (Path): Ruta de la imagen.
+        inference_seed (int | None): Semilla para la inferencia.
+        
+    Returns:
+        dict[str, Any]: Kwargs de inferencia por imagen.
+    """
     inference_kwargs: dict[str, Any] = {
         **base_inference_kwargs,
         "image_path": image_path,
@@ -388,7 +549,17 @@ def _build_base_inference_kwargs(
     schema_cls: type[BaseModel],
     temperature: float,
 ) -> dict[str, Any]:
-    """Construye kwargs base de inferencia que son constantes durante todo el batch."""
+    """
+    Construye kwargs base de inferencia que son constantes durante todo el batch.
+    
+    Args:
+        prompt (str): Prompt de inferencia.
+        schema_cls (type[BaseModel]): Clase de esquema Pydantic.
+        temperature (float): Temperatura del modelo.
+        
+    Returns:
+        dict[str, Any]: Kwargs base de inferencia.
+    """
     return {
         "prompt": prompt,
         "schema": schema_cls,
@@ -403,7 +574,17 @@ def _build_base_record_kwargs(
     schema_name: str,
     include_reasoning: bool,
 ) -> dict[str, Any]:
-    """Construye kwargs base de registro compartidos por todas las iteraciones."""
+    """
+    Construye kwargs base de registro compartidos por todas las iteraciones.
+    
+    Args:
+        model_id (str): Identificador del modelo.
+        schema_name (str): Nombre del esquema.
+        include_reasoning (bool): Incluir razonamiento en el registro.
+        
+    Returns:
+        dict[str, Any]: Kwargs base de registro.
+    """
     return {
         "model_id": model_id,
         "schema_name": schema_name,
@@ -419,7 +600,19 @@ def _build_ok_record(
     result: Any,
     metadata: dict[str, Any] | None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Construye el record de éxito junto con su telemetría serializada."""
+    """
+    Construye el record de éxito junto con su telemetría serializada.
+    
+    Args:
+        base_record_kwargs (dict[str, Any]): Kwargs base de registro.
+        image_path (Path): Ruta de la imagen.
+        duration_seconds (float): Duración de la inferencia.
+        result (Any): Resultado de la inferencia.
+        metadata (dict[str, Any] | None): Metadatos opcionales.
+        
+    Returns:
+        tuple[dict[str, Any], dict[str, Any]]: Tupla con (record, telemetry_payload).
+    """
     payload = result.data.model_dump()
     telemetry_payload = _serialize_telemetry_payload(result.telemetry)
     record = build_record(
@@ -442,7 +635,19 @@ def _build_error_record(
     metadata: dict[str, Any] | None,
     error: BaseException,
 ) -> tuple[dict[str, Any], str]:
-    """Construye el record de error devolviendo también el estado clasificado."""
+    """
+    Construye el record de error devolviendo también el estado clasificado.
+    
+    Args:
+        base_record_kwargs (dict[str, Any]): Kwargs base de registro.
+        image_path (Path): Ruta de la imagen.
+        duration_seconds (float): Duración de la inferencia.
+        metadata (dict[str, Any] | None): Metadatos opcionales.
+        error (BaseException): Excepción ocurrida.
+        
+    Returns:
+        tuple[dict[str, Any], str]: Tupla con (record, status).
+    """
     status = classify_error(error)
     record = build_record(
         **base_record_kwargs,
@@ -456,7 +661,18 @@ def _build_error_record(
 
 
 def _next_status_counts(*, ok: int, invalid: int, fail: int, status: str) -> tuple[int, int, int]:
-    """Calcula los contadores siguientes en función del estado final del record."""
+    """
+    Calcula los contadores siguientes en función del estado final del record.
+    
+    Args:
+        ok (int): Contador de éxitos.
+        invalid (int): Contador de inválidos.
+        fail (int): Contador de fallos.
+        status (str): Estado del record.
+        
+    Returns:
+        tuple[int, int, int]: Tupla con (ok, invalid, fail) actualizados.
+    """
     normalized_status = str(status or "").strip().lower()
     if normalized_status == "ok":
         return ok + 1, invalid, fail
@@ -466,7 +682,16 @@ def _next_status_counts(*, ok: int, invalid: int, fail: int, status: str) -> tup
 
 
 def _call_inference_with_seed_fallback(*, loader: VLMLoader, inference_kwargs: dict[str, Any]) -> Any:
-    """Ejecuta inferencia y elimina `seed` solo si el loader no la soporta."""
+    """
+    Ejecuta inferencia y elimina `seed` solo si el loader no la soporta.
+    
+    Args:
+        loader (VLMLoader): Loader del modelo.
+        inference_kwargs (dict[str, Any]): Kwargs de inferencia.
+        
+    Returns:
+        Any: Resultado de la inferencia.
+    """
     try:
         return loader.inference(**inference_kwargs)
     except TypeError as seed_error:
@@ -480,18 +705,43 @@ def _call_inference_with_seed_fallback(*, loader: VLMLoader, inference_kwargs: d
 
 
 def _as_posix_key(path_like: str | Path) -> str:
-    """Normaliza rutas a string POSIX estable para comparaciones."""
+    """
+    Normaliza rutas a string POSIX estable para comparaciones.
+    
+    Args:
+        path_like (str | Path): Ruta a normalizar.
+        
+    Returns:
+        str: Ruta normalizada como string POSIX.
+    """
     return str(Path(path_like).as_posix()).strip()
 
 
 def _manifest_entry_key(*, image_path: Path, metadata: dict[str, Any] | None) -> tuple[str, int]:
-    """Construye clave de entrada para diferenciar iteraciones de una misma imagen."""
+    """
+    Construye clave de entrada para diferenciar iteraciones de una misma imagen.
+    
+    Args:
+        image_path (Path): Ruta de la imagen.
+        metadata (dict[str, Any] | None): Metadatos opcionales.
+        
+    Returns:
+        tuple[str, int]: Clave de entrada con ruta POSIX e índice de iteración.
+    """
     iteration_index = _safe_positive_int((metadata or {}).get("run_iteration_index"))
     return _as_posix_key(image_path), iteration_index
 
 
 def iter_manifest_items(manifest_path: Path) -> tuple[list[BatchInputItem], int]:
-    """Lee un manifiesto JSONL y devuelve entradas válidas junto al número descartado."""
+    """
+    Lee un manifiesto JSONL y devuelve entradas válidas junto al número descartado.
+    
+    Args:
+        manifest_path (Path): Ruta del manifiesto JSONL.
+        
+    Returns:
+        tuple[list[BatchInputItem], int]: Tupla con (lista de BatchInputItem, número de filas descartadas).
+    """
     normalized_manifest = manifest_path.expanduser().resolve()
     if not normalized_manifest.exists() or not normalized_manifest.is_file():
         raise FileNotFoundError(f"No existe el manifiesto indicado: {normalized_manifest}")
@@ -531,7 +781,16 @@ def iter_manifest_items(manifest_path: Path) -> tuple[list[BatchInputItem], int]
 
 
 def resolve_schema(schema_name: str, include_reasoning: bool) -> tuple[str, type[BaseModel]]:
-    """Resuelve el esquema final a partir del nombre solicitado por CLI."""
+    """
+    Resuelve el esquema final a partir del nombre solicitado por CLI.
+    
+    Args:
+        schema_name (str): Nombre del esquema.
+        include_reasoning (bool): Incluir razonamiento en el esquema.
+        
+    Returns:
+        tuple[str, type[BaseModel]]: Tupla con (nombre normalizado del esquema, clase del esquema).
+    """
     normalized_name = schema_name.strip()
     if normalized_name.endswith("WithReasoning"):
         normalized_name = normalized_name.removesuffix("WithReasoning")
@@ -551,7 +810,18 @@ def select_images(
     shuffle: bool = False,
     seed: int | None = None,
 ) -> list[T]:
-    """Selecciona el subconjunto final de imágenes a procesar."""
+    """
+    Selecciona el subconjunto final de imágenes a procesar.
+    
+    Args:
+        image_paths (list[T]): Lista de rutas de imágenes.
+        max_images (int | None, optional): Número máximo de imágenes a seleccionar.
+        shuffle (bool, optional): Si se debe barajar la lista de imágenes.
+        seed (int | None, optional): Semilla para el barajado.
+        
+    Returns:
+        list[T]: Lista de imágenes seleccionadas.
+    """
     selected = list(image_paths)
     if shuffle:
         random.Random(seed).shuffle(selected)
@@ -565,19 +835,38 @@ def select_images(
 
 
 def build_default_output_path(schema_name: str) -> Path:
-    """Genera una ruta JSONL por defecto bajo data/processed/batch_results."""
+    """
+    Genera una ruta JSONL por defecto bajo data/processed/batch_results.
+    
+    Args:
+        schema_name (str): Nombre del esquema.
+        
+    Returns:
+        Path: Ruta JSONL por defecto.
+    """
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     return Path(_PROJECT_ROOT) / "data" / "processed" / "batch_results" / f"batch_{schema_name}_{timestamp}.jsonl"
 
 
 def _sync_file(file_handle: Any) -> None:
-    """Fuerza el volcado a disco tras cada append para minimizar pérdida de datos."""
+    """
+    Fuerza el volcado a disco tras cada append para minimizar pérdida de datos.
+    
+    Args:
+        file_handle (Any): Handle del archivo.
+    """
     file_handle.flush()
     os.fsync(file_handle.fileno())
 
 
 def append_jsonl_record(output_path: Path, record: dict[str, Any]) -> None:
-    """Añade un registro JSONL y lo fuerza a disco inmediatamente."""
+    """
+    Añade un registro JSONL y lo fuerza a disco inmediatamente.
+    
+    Args:
+        output_path (Path): Ruta del archivo JSONL.
+        record (dict[str, Any]): Registro a añadir.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("a", encoding="utf-8", newline="\n") as file_handle:
         file_handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -585,7 +874,15 @@ def append_jsonl_record(output_path: Path, record: dict[str, Any]) -> None:
 
 
 def _parse_jsonl_dict(line: str) -> dict[str, Any] | None:
-    """Intenta parsear una línea JSONL como diccionario."""
+    """
+    Intenta parsear una línea JSONL como diccionario.
+    
+    Args:
+        line (str): Línea JSONL a parsear.
+        
+    Returns:
+        dict[str, Any] | None: Diccionario si el parseo es exitoso, None en caso contrario.
+    """
     try:
         payload = json.loads(line)
     except Exception:
@@ -596,7 +893,15 @@ def _parse_jsonl_dict(line: str) -> dict[str, Any] | None:
 
 
 def _as_float(value: Any) -> float | None:
-    """Convierte un valor escalar a float cuando es posible."""
+    """
+    Convierte un valor escalar a float cuando es posible.
+    
+    Args:
+        value (Any): Valor a convertir.
+        
+    Returns:
+        float | None: Valor float si la conversión es exitosa, None en caso contrario.
+    """
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
@@ -613,7 +918,12 @@ def _as_float(value: Any) -> float | None:
 
 
 def _empty_metric_agg() -> dict[str, float | int | None]:
-    """Inicializa un acumulador para min/max/media."""
+    """
+    Inicializa un acumulador para min/max/media.
+    
+    Returns:
+        dict[str, float | int | None]: Acumulador de métrica inicializado.
+    """
     return {
         "count": 0,
         "sum": 0.0,
@@ -623,7 +933,13 @@ def _empty_metric_agg() -> dict[str, float | int | None]:
 
 
 def _update_metric_agg(agg: dict[str, float | int | None], value: float | None) -> None:
-    """Actualiza acumulador de métrica con un nuevo valor válido."""
+    """
+    Actualiza acumulador de métrica con un nuevo valor válido.
+    
+    Args:
+        agg (dict[str, float | int | None]): Acumulador de métrica.
+        value (float | None): Valor a actualizar.
+    """
     if value is None:
         return
     count = int(agg.get("count", 0) or 0) + 1
@@ -637,7 +953,15 @@ def _update_metric_agg(agg: dict[str, float | int | None], value: float | None) 
 
 
 def _metric_agg_summary(agg: dict[str, float | int | None]) -> dict[str, float | int | None]:
-    """Materializa estadísticas min/max/media desde un acumulador."""
+    """
+    Materializa estadísticas min/max/media desde un acumulador.
+    
+    Args:
+        agg (dict[str, float | int | None]): Acumulador de métrica.
+        
+    Returns:
+        dict[str, float | int | None]: Resumen de estadísticas con count, min, max y avg.
+    """
     count = int(agg.get("count", 0) or 0)
     total_sum = float(agg.get("sum", 0.0) or 0.0)
     avg: float | None = None
@@ -652,7 +976,15 @@ def _metric_agg_summary(agg: dict[str, float | int | None]) -> dict[str, float |
 
 
 def _read_jsonl_lines(path: Path) -> list[str]:
-    """Lee líneas de un JSONL sin saltos de línea finales."""
+    """
+    Lee líneas de un JSONL sin saltos de línea finales.
+    
+    Args:
+        path (Path): Ruta del archivo JSONL.
+        
+    Returns:
+        list[str]: Lista de líneas del archivo JSONL.
+    """
     if not path.exists() or not path.is_file():
         return []
     with path.open("r", encoding="utf-8") as handle:
@@ -660,7 +992,13 @@ def _read_jsonl_lines(path: Path) -> list[str]:
 
 
 def _write_jsonl_lines(path: Path, lines: list[str]) -> None:
-    """Reescribe un JSONL completo de forma atómica para cabeceras/resúmenes."""
+    """
+    Reescribe un JSONL completo de forma atómica para cabeceras/resúmenes.
+    
+    Args:
+        path (Path): Ruta del archivo JSONL.
+        lines (list[str]): Líneas a escribir en el archivo.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         if lines:
@@ -668,7 +1006,12 @@ def _write_jsonl_lines(path: Path, lines: list[str]) -> None:
         _sync_file(handle)
 
 def _ensure_batch_meta_header(*, request: _BatchMetaRequest) -> None:
-    """Upsert de metadatos globales para JSONL compartido entre modelos."""
+    """
+    Upsert de metadatos globales para JSONL compartido entre modelos.
+    
+    Args:
+        request (_BatchMetaRequest): Solicitud de metadatos.
+    """
     output_path = request.output_path
     model_id = request.model_id
     schema_name = request.schema_name
@@ -758,7 +1101,19 @@ def seed_batch_meta_header(
     input_source: str,
     manifest_path: str | Path | None = None,
 ) -> Path:
-    """Siembra/actualiza __batch_meta__ una sola vez con la cola completa de modelos."""
+    """
+    Siembra/actualiza __batch_meta__ una sola vez con la cola completa de modelos.
+    
+    Args:
+        output_path (str | Path): Ruta del archivo JSONL.
+        model_ids (list[str]): Lista de IDs de modelos.
+        schema_name (str): Nombre del esquema.
+        input_source (str): Fuente de entrada.
+        manifest_path (str | Path | None, optional): Ruta del manifest.
+        
+    Returns:
+        Path: Ruta del archivo JSONL.
+    """
     resolved_output_path = Path(output_path)
     if resolved_output_path.suffix.lower() != ".jsonl":
         resolved_output_path = resolved_output_path.with_suffix(".jsonl")
@@ -778,14 +1133,30 @@ def seed_batch_meta_header(
 
 
 def _normalize_label_for_accuracy(value: Any) -> str:
-    """Normaliza etiquetas de clase para comparar aciertos sin ruido de formato."""
+    """
+    Normaliza etiquetas de clase para comparar aciertos sin ruido de formato.
+    
+    Args:
+        value (Any): Valor a normalizar.
+        
+    Returns:
+        str: Etiqueta normalizada.
+    """
     if value is None:
         return ""
     return str(value).strip().lower()
 
 
 def _base_schema_name(schema_name: str) -> str:
-    """Devuelve el nombre base de schema removiendo sufijo WithReasoning."""
+    """
+    Devuelve el nombre base de schema removiendo sufijo WithReasoning.
+    
+    Args:
+        schema_name (str): Nombre del esquema.
+        
+    Returns:
+        str: Nombre base del esquema.
+    """
     value = str(schema_name or "").strip()
     suffix = "WithReasoning"
     if value.endswith(suffix):
@@ -794,18 +1165,44 @@ def _base_schema_name(schema_name: str) -> str:
 
 
 def _is_reasoning_schema(schema_name: str) -> bool:
-    """Indica si el schema efectivo representa una variante con razonamiento."""
+    """
+    Indica si el schema efectivo representa una variante con razonamiento.
+    
+    Args:
+        schema_name (str): Nombre del esquema.
+        
+    Returns:
+        bool: True si el esquema incluye razonamiento, False en caso contrario.
+    """
     return str(schema_name or "").strip().endswith("WithReasoning")
 
 
 def _variant_label(model_id: str, include_reasoning: bool) -> str:
-    """Etiqueta estable de variante para reportes agregados."""
+    """
+    Etiqueta estable de variante para reportes agregados.
+    
+    Args:
+        model_id (str): ID del modelo.
+        include_reasoning (bool): Incluir razonamiento en la etiqueta.
+        
+    Returns:
+        str: Etiqueta de variante.
+    """
     mode = "con razonamiento" if include_reasoning else "sin razonamiento"
     return f"{model_id} [{mode}]"
 
 
 def _matches_schema_family(*, schema_filter: str, schema_value: str) -> bool:
-    """Comprueba si un schema efectivo pertenece a la familia del schema base."""
+    """
+    Comprueba si un schema efectivo pertenece a la familia del schema base.
+    
+    Args:
+        schema_filter (str): Filtro de esquema.
+        schema_value (str): Valor del esquema.
+        
+    Returns:
+        bool: True si el schema efectivo pertenece a la familia del schema base, False en caso contrario.
+    """
     filter_value = str(schema_filter or "").strip()
     row_schema = str(schema_value or "").strip()
     if not filter_value:
@@ -817,7 +1214,16 @@ def _matches_schema_family(*, schema_filter: str, schema_value: str) -> bool:
 
 
 def _resolve_summary_schema_name(*, requested_schema_name: str, lines: list[str]) -> str:
-    """Resuelve schema base para summary usando request explícito o metadatos."""
+    """
+    Resuelve schema base para summary usando request explícito o metadatos.
+    
+    Args:
+        requested_schema_name (str): Nombre del esquema solicitado.
+        lines (list[str]): Líneas del archivo JSONL.
+        
+    Returns:
+        str: Nombre base del esquema.
+    """
     requested = str(requested_schema_name or "").strip()
     if requested:
         return _base_schema_name(requested)
@@ -856,7 +1262,23 @@ def _aggregate_models_from_jsonl_lines(
     dict[str, dict[str, Any]],
     dict[str, dict[str, float | int | None]],
 ]:
-    """Agrega métricas y exactitud por modelo desde líneas JSONL."""
+    """
+    Agrega métricas y exactitud por modelo desde líneas JSONL.
+    
+    Args:
+        lines (list[str]): Líneas del archivo JSONL.
+        selected_models (set[str]): Conjunto de modelos seleccionados.
+        schema_name (str): Nombre del esquema.
+        metric_keys (list[str]): Claves de métricas a agregar.
+        
+    Returns:
+        tuple[
+            list[str],
+            dict[str, dict[str, Any]],
+            dict[str, dict[str, Any]],
+            dict[str, dict[str, float | int | None]],
+        ]: Tupla con (líneas mantenidas, acumulador de exactitud por modelo, acumulador de variantes, acumulador de métricas globales).
+    """
     kept_lines: list[str] = []
     model_acc: dict[str, dict[str, Any]] = {}
     schema_filter = str(schema_name or "").strip()
@@ -965,7 +1387,14 @@ def _repair_summary_meta_line(
     model_acc: dict[str, dict[str, Any]],
     schema_name: str,
 ) -> None:
-    """Repara/actualiza cabecera __batch_meta__ en formato canónico."""
+    """
+    Repara/actualiza cabecera __batch_meta__ en formato canónico.
+    
+    Args:
+        kept_lines (list[str]): Líneas del archivo JSONL.
+        model_acc (dict[str, dict[str, Any]]): Acumulador de exactitud por modelo.
+        schema_name (str): Nombre del esquema.
+    """
     for index, raw_line in enumerate(kept_lines):
         payload = _parse_jsonl_dict(raw_line.strip())
         if payload is None:
@@ -1030,7 +1459,19 @@ def _materialize_summary_payload(
     metric_keys: list[str],
     schema_name: str,
 ) -> dict[str, Any]:
-    """Construye el payload final de __batch_summary__."""
+    """
+    Construye el payload final de __batch_summary__.
+    
+    Args:
+        model_acc (dict[str, dict[str, Any]]): Acumulador de exactitud por modelo.
+        variant_acc (dict[str, dict[str, Any]]): Acumulador de variantes.
+        global_metric_acc (dict[str, dict[str, float | int | None]]): Acumulador de métricas globales.
+        metric_keys (list[str]): Claves de métricas a agregar.
+        schema_name (str): Nombre del esquema.
+        
+    Returns:
+        dict[str, Any]: Payload final de __batch_summary__.
+    """
     models_summary: dict[str, Any] = {}
     total_processed = 0
     total_ok = 0
@@ -1116,9 +1557,18 @@ def upsert_batch_execution_summary(
     schema_name: str,
     model_ids: list[str] | None = None,
 ) -> dict[str, Any] | None:
-    """Escribe/actualiza una línea de resumen agregado del JSONL batch.
-
+    """
+    Escribe/actualiza una línea de resumen agregado del JSONL batch.
+    
     Incluye métricas min/max/media por modelo y global para facilitar auditoría.
+    
+    Args:
+        output_path (str | Path): Ruta del archivo JSONL.
+        schema_name (str): Nombre del esquema.
+        model_ids (list[str] | None, optional): Lista de IDs de modelos. Si es None, se usan todos los modelos.
+        
+    Returns:
+        dict[str, Any] | None: Payload del resumen si se pudo generar, None en caso contrario.
     """
     out_path = Path(output_path)
     if not out_path.exists() or not out_path.is_file():
@@ -1161,7 +1611,15 @@ def upsert_batch_execution_summary(
 
 
 def classify_error(error: BaseException) -> str:
-    """Clasifica un error para la telemetría del lote."""
+    """
+    Clasifica un error para la telemetría del lote.
+    
+    Args:
+        error (BaseException): Error a clasificar.
+        
+    Returns:
+        str: Clasificación del error ("invalid" o "error").
+    """
     message = str(error).lower()
     if "no cumple el esquema" in message or "json válido" in message:
         return "invalid"
@@ -1169,7 +1627,15 @@ def classify_error(error: BaseException) -> str:
 
 
 def _prune_missing_fields(value: Any) -> Any:
-    """Elimina claves opcionales ausentes en salidas JSON-like sin tocar 0 o False."""
+    """
+    Elimina claves opcionales ausentes en salidas JSON-like sin tocar 0 o False.
+    
+    Args:
+        value (Any): Valor a limpiar.
+        
+    Returns:
+        Any: Valor limpio sin claves opcionales ausentes.
+    """
     if isinstance(value, dict):
         pruned: dict[str, Any] = {}
         for key, item in value.items():
@@ -1201,7 +1667,24 @@ def build_record(
     metadata: dict[str, Any] | None = None,
     error: BaseException | None = None,
 ) -> dict[str, Any]:
-    """Construye un registro homogéneo para JSONL."""
+    """
+    Construye un registro homogéneo para JSONL.
+    
+    Args:
+        model_id (str): ID del modelo.
+        schema_name (str): Nombre del esquema.
+        include_reasoning (bool): Incluir razonamiento en la etiqueta.
+        image_path (Path): Ruta de la imagen.
+        duration_seconds (float): Duración de la inferencia en segundos.
+        status (str): Estado de la inferencia ("ok", "invalid", "error").
+        payload (dict[str, Any] | None, optional): Payload de la inferencia.
+        telemetry (dict[str, Any] | None, optional): Telemetría de la inferencia.
+        metadata (dict[str, Any] | None, optional): Metadatos de la inferencia.
+        error (BaseException | None, optional): Error ocurrido durante la inferencia.
+        
+    Returns:
+        dict[str, Any]: Registro homogéneo para JSONL.
+    """
     record: dict[str, Any] = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "model_id": model_id,
@@ -1234,19 +1717,41 @@ def build_record(
 
 
 def _empty_metric_summary() -> dict[str, float | None]:
-    """Construye una estructura homogénea para métricas opcionales."""
+    """
+    Construye una estructura homogénea para métricas opcionales.
+    
+    Returns:
+        dict[str, float | None]: Estructura homogénea para métricas opcionales.
+    """
     return {"avg": None}
 
 
 def _compute_metric_summary(total: float, count: int) -> dict[str, float | None]:
-    """Calcula una media incremental o marca la métrica como no disponible."""
+    """
+    Calcula una media incremental o marca la métrica como no disponible.
+    
+    Args:
+        total (float): Suma total de la métrica.
+        count (int): Número de muestras.
+        
+    Returns:
+        dict[str, float | None]: Resumen de la métrica con la media calculada.
+    """
     if count <= 0:
         return _empty_metric_summary()
     return {"avg": total / count}
 
 
 def _build_batch_summary(*, context: _BatchSummaryContext) -> dict[str, Any]:
-    """Construye el resumen parcial o final del batch runner."""
+    """
+    Construye el resumen parcial o final del batch runner.
+    
+    Args:
+        context (_BatchSummaryContext): Contexto del batch runner.
+        
+    Returns:
+        dict[str, Any]: Resumen del batch runner.
+    """
     return {
         "model_id": context.model_id,
         "schema_name": context.schema_name,
@@ -1273,7 +1778,15 @@ def _resolve_batch_input_items(
     *,
     request: _BatchInputRequest,
 ) -> tuple[str, list[BatchInputItem], int, Path | None]:
-    """Resuelve origen de entrada y aplica filtros de pendientes cuando corresponde."""
+    """
+    Resuelve origen de entrada y aplica filtros de pendientes cuando corresponde.
+    
+    Args:
+        request (_BatchInputRequest): Solicitud de entrada.
+        
+    Returns:
+        tuple[str, list[BatchInputItem], int, Path | None]: Tupla con (origen de entrada, items de entrada, filas descartadas del manifest, ruta del manifest).
+    """
     discarded_manifest_rows = 0
     manifest_path_obj: Path | None = None
 
@@ -1321,7 +1834,31 @@ def run_batch_job(
     pending_entries: list[dict[str, Any]] | None = None,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Ejecuta el lote completo y devuelve un resumen final."""
+    """
+    Ejecuta el lote completo y devuelve un resumen final.
+    
+    Args:
+        model_id (str): ID del modelo.
+        image_dir (str | Path | None, optional): Directorio de imágenes.
+        manifest (str | Path | None, optional): Ruta del manifest.
+        schema_name (str): Nombre del esquema.
+        include_reasoning (bool, optional): Incluir razonamiento en la etiqueta.
+        output_path (str | Path | None, optional): Ruta del archivo de salida.
+        max_images (int | None, optional): Número máximo de imágenes a procesar.
+        shuffle (bool, optional): Barajar las imágenes.
+        seed (int | None, optional): Semilla para el barajado.
+        temperature (float, optional): Temperatura del modelo.
+        prompt (str | None, optional): Prompt a usar.
+        server_api_host (str | None, optional): Host de la API del servidor.
+        api_token (str | None, optional): Token de la API.
+        verbose (bool, optional): Modo verbose.
+        pending_image_paths (list[str] | None, optional): Lista de rutas de imágenes pendientes.
+        pending_entries (list[dict[str, Any]] | None, optional): Lista de entradas pendientes.
+        on_progress (Callable[[dict[str, Any]], None] | None, optional): Callback de progreso.
+        
+    Returns:
+        dict[str, Any]: Resumen final del lote.
+    """
     if (image_dir is None) == (manifest is None):
         raise ValueError("Debes indicar exactamente uno de estos argumentos: image_dir o manifest")
 
@@ -1382,6 +1919,12 @@ def run_batch_job(
     }
 
     def build_summary() -> dict[str, Any]:
+        """
+        Construye un resumen del lote.
+
+        Returns:
+            dict[str, Any]: Resumen del lote.
+        """
         return _build_batch_summary(
             context=_BatchSummaryContext(
                 model_id=model_id,
@@ -1415,6 +1958,18 @@ def run_batch_job(
         run_iteration_index: int | None = None,
         run_iteration_total: int | None = None,
     ) -> None:
+        """
+        Emite un evento de progreso.
+
+        Args:
+            event (str): Evento de progreso.
+            index (int, optional): Índice del elemento actual.
+            image_path (str | None, optional): Ruta de la imagen.
+            status (str | None, optional): Estado del procesamiento.
+            record (dict[str, Any] | None, optional): Registro de la imagen.
+            run_iteration_index (int | None, optional): Índice de la iteración de ejecución.
+            run_iteration_total (int | None, optional): Total de iteraciones de ejecución.
+        """
         if on_progress is None:
             return
         on_progress(
@@ -1445,7 +2000,7 @@ def run_batch_job(
             schema_name=base_schema_name,
             include_reasoning=include_reasoning,
         )
-        progress_iter = tqdm(images, desc="Procesando imágenes", unit="img") if on_progress is None else images
+        progress_iter = images
         for index, item in enumerate(progress_iter, start=1):
             image_path = item.image_path
             run_iteration_index, run_iteration_total = _extract_run_iteration_values(item.metadata)
@@ -1525,7 +2080,15 @@ def run_batch_job(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Punto de entrada CLI del batch runner."""
+    """
+    Punto de entrada CLI del batch runner.
+    
+    Args:
+        argv (list[str] | None, optional): Argumentos de línea de comandos.
+        
+    Returns:
+        int: Código de salida del programa.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -1546,17 +2109,9 @@ def main(argv: list[str] | None = None) -> int:
         verbose=args.verbose,
     )
 
-    print("\n=== BATCH RUNNER ===")
-    print(f"Modelo        : {summary['model_id']}")
-    print(f"Esquema       : {summary['schema_name']}")
-    print(f"Procesadas    : {summary['processed']} de {summary['total_available']}")
-    print(f"OK            : {summary['ok']}")
-    print(f"Inválidas     : {summary['invalid']}")
-    print(f"Errores       : {summary['fail']}")
-    print(f"Origen entrada: {summary['input_source']}")
-    if summary.get("input_source") == "manifest":
-        print(f"Descartadas   : {summary['discarded_manifest_rows']}")
-    print(f"Salida        : {summary['output_path']}")
+    if args.verbose:
+        from src.utils.tests_ui.cli_reporters import print_batch_summary
+        print_batch_summary(summary)
 
     return 0 if summary["fail"] == 0 and summary["invalid"] == 0 else 1
 

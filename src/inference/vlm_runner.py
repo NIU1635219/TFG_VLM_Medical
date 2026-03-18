@@ -31,7 +31,29 @@ VLMStructuredResponse = GenericObjectDetection
 
 @dataclasses.dataclass(frozen=True)
 class InferenceTelemetry:
-    """Métricas de rendimiento extraídas de una inferencia individual."""
+    """
+    Métricas de rendimiento extraídas de una inferencia individual.
+    
+    Attributes:
+        total_duration_seconds (float): Duración total de la inferencia en segundos.
+        ttft_seconds (float | None): Tiempo hasta el primer token en segundos.
+        generation_duration_seconds (float | None): Duración de la generación en segundos.
+        prompt_tokens_per_second (float | None): Tokens por segundo del prompt.
+        tokens_per_second (float | None): Tokens por segundo totales.
+        reasoning_tokens (int | None): Número de tokens de razonamiento.
+        stop_reason (str | None): Razón de parada de la inferencia.
+        model_id (str | None): ID del modelo.
+        vram_usage_mb (float | None): Uso de VRAM en MB.
+        total_params (int | str | None): Número total de parámetros.
+        architecture (str | None): Arquitectura del modelo.
+        quantization (str | None): Cuantización del modelo.
+        gpu_layers (int | None): Capas en GPU.
+        prompt_tokens (int | None): Tokens del prompt.
+        completion_tokens (int | None): Tokens de completado.
+        total_tokens (int | None): Tokens totales.
+        stats (dict[str, Any]): Estadísticas adicionales.
+        resources (dict[str, Any]): Recursos utilizados.
+    """
 
     total_duration_seconds: float
     ttft_seconds: float | None
@@ -55,7 +77,13 @@ class InferenceTelemetry:
 
 @dataclasses.dataclass(frozen=True)
 class InferenceResult(Generic[T]):
-    """Respuesta tipada del modelo junto con sus métricas de telemetría."""
+    """
+    Respuesta tipada del modelo junto con sus métricas de telemetría.
+    
+    Attributes:
+        data (T): Datos de la respuesta del modelo.
+        telemetry (InferenceTelemetry): Métricas de telemetría de la inferencia.
+    """
 
     data: T
     telemetry: InferenceTelemetry
@@ -72,11 +100,23 @@ except ImportError:
 
 
 class _LMSModelHandle(Protocol):
+    """
+    Protocolo para el handle del modelo en LM Studio.
+    
+    Attributes:
+        respond (Any): Método para responder a una consulta.
+    """
     def respond(self, history: Any, **kwargs: Any) -> Any:
         ...
 
 
 class _LMSChatHandle(Protocol):
+    """
+    Protocolo para el handle del chat en LM Studio.
+    
+    Attributes:
+        add_user_message (Any): Método para agregar un mensaje de usuario.
+    """
     def add_user_message(self, content: Any, *, images: Any = (), _files: Any = ()) -> Any:
         ...
 
@@ -273,6 +313,12 @@ class VLMLoader:
             keys: list[str] = []
 
             def collect(items: Any) -> None:
+                """
+                Recopila las claves de los modelos de la respuesta.
+
+                Args:
+                    items: Items de la respuesta.
+                """
                 if items is None:
                     return
                 if isinstance(items, (list, tuple)):
@@ -365,6 +411,15 @@ class VLMLoader:
         """
 
         def extract(value: Any) -> str:
+            """
+            Función auxiliar para extraer texto de diferentes tipos de valores.
+
+            Args:
+                value (Any): Valor del cual extraer texto.
+
+            Returns:
+                str: Texto extraído.
+            """
             if value is None:
                 return ""
 
@@ -420,7 +475,15 @@ class VLMLoader:
         return extract(response).strip()
 
     def _object_to_dict(self, value: Any) -> dict[str, Any]:
-        """Convierte objetos del SDK o respuestas REST a un diccionario serializable."""
+        """
+        Convierte objetos del SDK o respuestas REST a un diccionario serializable.
+
+        Args:
+            value (Any): Valor a convertir.
+
+        Returns:
+            dict[str, Any]: Diccionario serializable.
+        """
         if value is None:
             return {}
         if isinstance(value, dict):
@@ -471,7 +534,16 @@ class VLMLoader:
         return {}
 
     def _extract_numeric_value(self, payload: dict[str, Any], aliases: tuple[str, ...]) -> float | None:
-        """Extrae un valor numérico desde varios alias posibles."""
+        """
+        Extrae un valor numérico desde varios alias posibles.
+
+        Args:
+            payload (dict[str, Any]): Payload del cual extraer el valor.
+            aliases (tuple[str, ...]): Alias del valor a extraer.
+
+        Returns:
+            float | None: Valor numérico extraído.
+        """
         for alias in aliases:
             if alias not in payload:
                 continue
@@ -488,7 +560,16 @@ class VLMLoader:
         return None
 
     def _extract_string_value(self, payload: dict[str, Any], aliases: tuple[str, ...]) -> str | None:
-        """Extrae un valor de texto desde varios alias posibles."""
+        """
+        Extrae un valor de texto desde varios alias posibles.
+
+        Args:
+            payload (dict[str, Any]): Payload del cual extraer el valor.
+            aliases (tuple[str, ...]): Alias del valor a extraer.
+
+        Returns:
+            str | None: Valor de texto extraído.
+        """
         for alias in aliases:
             value = payload.get(alias)
             if isinstance(value, str):
@@ -498,7 +579,15 @@ class VLMLoader:
         return None
 
     def _estimate_reasoning_tokens(self, validated: BaseModel) -> int | None:
-        """Cuenta tokens aproximados a partir del campo ``reasoning`` del schema validado."""
+        """
+        Cuenta tokens aproximados a partir del campo ``reasoning`` del schema validado.
+
+        Args:
+            validated (BaseModel): Modelo validado.
+
+        Returns:
+            int | None: Número aproximado de tokens de razonamiento.
+        """
         reasoning_value = getattr(validated, "reasoning", None)
         if not isinstance(reasoning_value, str):
             return None
@@ -510,7 +599,16 @@ class VLMLoader:
         return len(re.findall(r"\S+", normalized_reasoning))
 
     def _extract_inference_telemetry(self, response: Any, wall_duration_seconds: float) -> InferenceTelemetry:
-        """Extrae telemetría fiable desde `response.stats` y `/v1/models`."""
+        """
+        Extrae telemetría fiable desde `response.stats` y `/v1/models`.
+
+        Args:
+            response (Any): Respuesta de la inferencia.
+            wall_duration_seconds (float): Duración total de la inferencia en segundos.
+
+        Returns:
+            InferenceTelemetry: Métricas de telemetría extraídas.
+        """
         stats_payload = self._object_to_dict(getattr(response, "stats", None))
         if not stats_payload:
             result_payload = self._object_to_dict(getattr(response, "result", None))
@@ -943,6 +1041,20 @@ class VLMLoader:
         *,
         include_telemetry: Literal[False] = False,
     ) -> T:
+        """
+        Realiza una inferencia con el modelo cargado.
+
+        Args:
+            image_path (str | Path): Ruta de la imagen.
+            prompt (str): Prompt a enviar al modelo.
+            schema (Type[T]): Esquema de respuesta.
+            temperature (float): Temperatura de inferencia.
+            seed (int | None): Semilla para reproducibilidad.
+            include_telemetry (Literal[False]): Incluir telemetría.
+
+        Returns:
+            T: Respuesta del modelo.
+        """
         ...
 
     @overload
@@ -956,6 +1068,20 @@ class VLMLoader:
         *,
         include_telemetry: Literal[True],
     ) -> InferenceResult[T]:
+        """
+        Realiza una inferencia con el modelo cargado.
+
+        Args:
+            image_path (str | Path): Ruta de la imagen.
+            prompt (str): Prompt a enviar al modelo.
+            schema (Type[T]): Esquema de respuesta.
+            temperature (float): Temperatura de inferencia.
+            seed (int | None): Semilla para reproducibilidad.
+            include_telemetry (Literal[True]): Incluir telemetría.
+
+        Returns:
+            InferenceResult[T]: Respuesta del modelo con telemetría.
+        """
         ...
 
     def inference(

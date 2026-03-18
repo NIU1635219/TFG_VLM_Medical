@@ -29,13 +29,14 @@ def run_schema_tester_wrapper(
     select_model: Callable[[str, str], str | None],
     select_schema_variant: Callable[[str, str], tuple[str, Any] | None],
 ) -> None:
-    """Run schema validation flow over sampled images.
+    """
+    Ejecuta el flujo de validación de esquemas sobre imágenes muestreadas.
 
     Args:
-        kit: Terminal UI toolkit.
-        app: Application context used to render shared UI chrome.
-        select_model: Callback that resolves the model tag.
-        select_schema_variant: Callback that resolves schema class and variant.
+        kit: Toolkit de interfaz de usuario de terminal.
+        app: Contexto de la aplicación utilizado para renderizar el cromo de UI compartido.
+        select_model: Callback que resuelve la etiqueta del modelo.
+        select_schema_variant: Callback que resuelve la clase y variante del esquema.
     """
     from src.scripts.test_schema import find_images, format_schema_info, run_batch
 
@@ -80,7 +81,8 @@ def run_schema_tester_wrapper(
             )
 
             def on_schema_progress(payload: dict[str, object]) -> None:
-                """Actualiza panel en vivo para eventos del schema tester.
+                """
+                Actualiza el panel en vivo para eventos del schema tester.
 
                 Args:
                     payload: Evento de progreso emitido por el runner de schema.

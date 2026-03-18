@@ -8,7 +8,6 @@ import random
 import statistics
 import sys
 from pathlib import Path
-from pprint import pformat
 from typing import Any, Callable, cast
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -23,7 +22,12 @@ from src.scripts.test_schema import build_prompt_for_schema, find_images
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Construye el parser CLI para la prueba de telemetría."""
+    """
+    Construye el parser CLI para la prueba de telemetría.
+
+    Returns:
+        ArgumentParser con los argumentos de la CLI.
+    """
     parser = argparse.ArgumentParser(description="Mide TTFT y TPS de un modelo VLM en LM Studio.")
     parser.add_argument("--model", required=True, help="Identificador del modelo cargado en LM Studio.")
     parser.add_argument("--schema", required=True, help="Nombre del esquema base registrado.")
@@ -38,7 +42,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_schema(schema_name: str, include_reasoning: bool) -> tuple[str, type[BaseModel]]:
-    """Resuelve el esquema a partir del nombre CLI."""
+    """
+    Resuelve el esquema a partir del nombre CLI.
+
+    Args:
+        schema_name: Nombre del esquema.
+        include_reasoning: Incluye razonamiento.
+
+    Returns:
+        Tupla con el nombre del esquema y la clase del esquema.
+    """
     normalized_name = schema_name.strip()
     if normalized_name.endswith("WithReasoning"):
         normalized_name = normalized_name.removesuffix("WithReasoning")
@@ -52,7 +65,17 @@ def resolve_schema(schema_name: str, include_reasoning: bool) -> tuple[str, type
 
 
 def select_sample(images: list[str], max_images: int, seed: int | None = None) -> list[str]:
-    """Selecciona una muestra aleatoria reproducible de imágenes."""
+    """
+    Selecciona una muestra aleatoria reproducible de imágenes.
+
+    Args:
+        images: Lista de imágenes.
+        max_images: Número máximo de imágenes a muestrear.
+        seed: Semilla de muestreo aleatorio.
+
+    Returns:
+        Lista de imágenes muestreadas.
+    """
     if max_images <= 0:
         raise ValueError("max_images debe ser mayor que cero")
     if len(images) <= max_images:
@@ -61,7 +84,15 @@ def select_sample(images: list[str], max_images: int, seed: int | None = None) -
 
 
 def summarize_numeric(values: list[float]) -> dict[str, float | None]:
-    """Resume una lista numérica con media, mínimo y máximo."""
+    """
+    Resume una lista numérica con media, mínimo y máximo.
+
+    Args:
+        values: Lista de valores numéricos.
+
+    Returns:
+        Diccionario con la media, mínimo y máximo.
+    """
     if not values:
         return {"avg": None, "min": None, "max": None}
     return {
@@ -71,213 +102,17 @@ def summarize_numeric(values: list[float]) -> dict[str, float | None]:
     }
 
 
-def format_metric(value: float | None, *, suffix: str = "") -> str:
-    """Formatea una métrica numérica o devuelve N/D si no está disponible."""
-    if value is None:
-        return "N/D"
-    if isinstance(value, int) or (isinstance(value, float) and value.is_integer()):
-        return f"{int(value)}{suffix}"
-    return f"{value:.3f}".rstrip("0").rstrip(".") + suffix
-
-
-def _status_tag(status: str) -> str:
-    """Normaliza el estado de una inferencia para mostrarlo en consola."""
-    return "OK" if status == "ok" else "ERR"
-
-
-def _format_metric_window(summary: dict[str, float | None], *, suffix: str = "") -> str:
-    """Representa avg/min/max de una métrica en una sola línea."""
-    avg = summary.get("avg")
-    if avg is None:
-        return "N/D"
-    return (
-        f"{format_metric(avg, suffix=suffix)} "
-        f"(min {format_metric(summary.get('min'), suffix=suffix)} / "
-        f"max {format_metric(summary.get('max'), suffix=suffix)})"
-    )
-
-
-def _print_section(title: str, *, stream: Any = None) -> None:
-    """Imprime una sección ASCII consistente para el informe CLI."""
-    target = stream or sys.stdout
-    divider = "=" * 78
-    print(divider, file=target)
-    print(title, file=target)
-    print(divider, file=target)
-
-
-def _print_rows(rows: list[tuple[str, Any]], *, stream: Any = None) -> None:
-    """Imprime pares clave/valor omitiendo filas vacías."""
-    target = stream or sys.stdout
-    visible_rows = [(label, value) for label, value in rows if value not in (None, "")]
-    if not visible_rows:
-        return
-    label_width = max(len(label) for label, _ in visible_rows)
-    for label, value in visible_rows:
-        print(f"{label:<{label_width}} : {value}", file=target)
-    print(file=target)
-
-
-def build_cli_progress_callback(*, stream: Any = None) -> Callable[[dict[str, Any]], None]:
-    """Construye un callback de progreso legible para ejecuciones CLI."""
-    target = stream or sys.stdout
-
-    def on_progress(payload: dict[str, Any]) -> None:
-        event = str(payload.get("event") or "")
-        index = int(payload.get("index") or 0)
-        total = int(payload.get("total") or 0)
-        image_path = payload.get("image_path")
-        image_name = Path(str(image_path)).name if image_path else "N/D"
-        record_payload = payload.get("record")
-        record = cast(dict[str, Any], record_payload) if isinstance(record_payload, dict) else None
-        summary_payload = payload.get("summary")
-        summary = cast(dict[str, Any], summary_payload) if isinstance(summary_payload, dict) else {}
-
-        if event == "start":
-            print(
-                f"[telemetry] Preparando muestra de {total} imágenes...",
-                file=target,
-            )
-            return
-
-        if event == "image_start":
-            print(f"[{index}/{total}] Procesando {image_name}...", file=target)
-            return
-
-        if event == "image_done" and record is not None:
-            status = str(record.get("status") or "error")
-            if status == "ok":
-                print(
-                    (
-                        f"[{index}/{total}] [{_status_tag(status)}] {image_name} | "
-                        f"TTFT={format_metric(record.get('ttft_seconds'), suffix=' s')} | "
-                        f"TPS={format_metric(record.get('tokens_per_second'))} | "
-                        f"latencia={format_metric(record.get('total_duration_seconds'), suffix=' s')}"
-                    ),
-                    file=target,
-                )
-            else:
-                print(
-                    f"[{index}/{total}] [{_status_tag(status)}] {image_name} | {record.get('error', 'unknown error')}",
-                    file=target,
-                )
-            return
-
-        if event == "complete":
-            availability_payload = summary.get("telemetry_availability")
-            availability = cast(dict[str, Any], availability_payload) if isinstance(availability_payload, dict) else {}
-            ok_records = int(availability.get("ok_records") or 0)
-            print(
-                (
-                    f"[telemetry] Completado: {summary.get('ok', 0)} OK / {summary.get('fail', 0)} errores | "
-                    f"TTFT {availability.get('ttft_records', 0)}/{ok_records} | "
-                    f"TPS {availability.get('tps_records', 0)}/{ok_records} | "
-                    f"VRAM {availability.get('vram_records', 0)}/{ok_records}"
-                ),
-                file=target,
-            )
-
-    return on_progress
-
-
-def render_telemetry_report(summary: dict[str, Any], *, stream: Any = None) -> None:
-    """Renderiza un informe final más legible para CLI."""
-    target = stream or sys.stdout
-    static_info_payload = summary.get("static_model_info")
-    static_info = cast(dict[str, Any], static_info_payload) if isinstance(static_info_payload, dict) else {}
-    availability_payload = summary.get("telemetry_availability")
-    availability = cast(dict[str, Any], availability_payload) if isinstance(availability_payload, dict) else {}
-    ok_records = int(availability.get("ok_records") or 0)
-
-    _print_section("TELEMETRY PROBE", stream=target)
-    _print_rows(
-        [
-            ("Modelo", summary.get("model_id")),
-            ("Esquema", summary.get("schema_name")),
-            ("Muestra", summary.get("sample_size")),
-            ("Inferencias OK", summary.get("ok")),
-            ("Errores", summary.get("fail")),
-            ("Modelo resuelto", static_info.get("resolved_model_id")),
-            ("Arquitectura", static_info.get("architecture") or "N/D"),
-            ("Stop reason", static_info.get("stop_reason") or "N/D"),
-        ],
-        stream=target,
-    )
-
-    _print_section("RENDIMIENTO", stream=target)
-    _print_rows(
-        [
-            ("TTFT", _format_metric_window(summary.get("ttft") or {}, suffix=" s")),
-            ("TPS", _format_metric_window(summary.get("tps") or {})),
-            ("Generación", _format_metric_window(summary.get("generation_duration") or {}, suffix=" s")),
-            ("Latencia total", _format_metric_window(summary.get("total_duration") or {}, suffix=" s")),
-        ],
-        stream=target,
-    )
-
-    _print_section("TOKENS Y RECURSOS", stream=target)
-    _print_rows(
-        [
-            ("Prompt tokens", _format_metric_window(summary.get("prompt_tokens") or {})),
-            ("Output tokens", _format_metric_window(summary.get("completion_tokens") or {})),
-            ("Total tokens", _format_metric_window(summary.get("total_tokens") or {})),
-            ("Reasoning JSON", _format_metric_window(summary.get("reasoning_tokens") or {})),
-            ("GPU layers", _format_metric_window(summary.get("gpu_layers") or {})),
-        ],
-        stream=target,
-    )
-
-    _print_section("COBERTURA", stream=target)
-    _print_rows(
-        [
-            ("TTFT", f"{availability.get('ttft_records', 0)}/{ok_records}"),
-            ("TPS", f"{availability.get('tps_records', 0)}/{ok_records}"),
-            ("GPU layers", f"{availability.get('gpu_layer_records', 0)}/{ok_records}"),
-        ],
-        stream=target,
-    )
-
-    notes_payload = summary.get("notes")
-    notes = cast(dict[str, Any], notes_payload) if isinstance(notes_payload, dict) else {}
-    ttft_note = notes.get("ttft")
-    tps_note = notes.get("tps")
-    if ttft_note or tps_note:
-        _print_section("OBSERVACIONES", stream=target)
-        if ttft_note:
-            print(f"- {ttft_note}", file=target)
-        if tps_note:
-            print(f"- {tps_note}", file=target)
-        print(file=target)
-
-    _print_section("DETALLE POR IMAGEN", stream=target)
-    records = summary.get("records") or []
-    if not records:
-        print("Sin registros.", file=target)
-        print(file=target)
-        return
-    for record in records:
-        image_name = Path(str(record.get("image_path") or "N/D")).name
-        status = str(record.get("status") or "error")
-        if status == "ok":
-            detail = (
-                f"TTFT={format_metric(record.get('ttft_seconds'), suffix=' s')} | "
-                f"TPS={format_metric(record.get('tokens_per_second'))} | "
-                f"total={format_metric(record.get('total_duration_seconds'), suffix=' s')}"
-            )
-        else:
-            detail = str(record.get("error") or "unknown error")
-        print(f"[{_status_tag(status)}] {image_name} | {detail}", file=target)
-    print(file=target)
-
-    prompt = summary.get("prompt")
-    if isinstance(prompt, str) and prompt.strip():
-        _print_section("PROMPT USADO", stream=target)
-        print(pformat(prompt.strip(), width=76), file=target)
-        print(file=target)
-
-
 def first_available_value(records: list[dict[str, Any]], field_name: str) -> Any:
-    """Devuelve el primer valor no vacío encontrado en una lista de registros."""
+    """
+    Devuelve el primer valor no vacío encontrado en una lista de registros.
+
+    Args:
+        records: Lista de registros.
+        field_name: Nombre del campo.
+
+    Returns:
+        Primer valor no vacío encontrado.
+    """
     for record in records:
         value = record.get(field_name)
         if value not in (None, "", []):
@@ -295,7 +130,21 @@ def _build_telemetry_summary(
     fail: int,
     prompt: str,
 ) -> dict[str, Any]:
-    """Construye un resumen parcial o final a partir de los registros acumulados."""
+    """
+    Construye un resumen parcial o final a partir de los registros acumulados.
+
+    Args:
+        model_id: ID del modelo.
+        schema_name: Nombre del esquema.
+        sample_size: Tamaño de la muestra.
+        records: Lista de registros.
+        ok: Número de inferencias correctas.
+        fail: Número de errores de inferencia.
+        prompt: Prompt usado.
+
+    Returns:
+        Resumen parcial o final.
+    """
     ttft_values = [record["ttft_seconds"] for record in records if record.get("status") == "ok" and isinstance(record.get("ttft_seconds"), (int, float))]
     tps_values = [record["tokens_per_second"] for record in records if record.get("status") == "ok" and isinstance(record.get("tokens_per_second"), (int, float))]
     generation_values = [record["generation_duration_seconds"] for record in records if record.get("status") == "ok" and isinstance(record.get("generation_duration_seconds"), (int, float))]
@@ -369,7 +218,25 @@ def run_telemetry_batch(
     api_token: str | None = None,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Ejecuta una prueba de telemetría sobre una muestra de imágenes."""
+    """
+    Ejecuta una prueba de telemetría sobre una muestra de imágenes.
+
+    Args:
+        model_id: ID del modelo.
+        schema_name: Nombre del esquema.
+        schema_cls: Clase del esquema.
+        images: Lista de imágenes.
+        max_images: Número máximo de imágenes a muestrear.
+        seed: Semilla de muestreo aleatorio.
+        temperature: Temperatura de inferencia.
+        prompt: Prompt usado.
+        server_api_host: Host del servidor LM Studio.
+        api_token: Token de API.
+        on_progress: Callback de progreso.
+
+    Returns:
+        Resumen de la prueba de telemetría.
+    """
     sample = select_sample(images, max_images=max_images, seed=seed)
     selected_prompt = prompt.strip() if prompt and prompt.strip() else build_prompt_for_schema(schema_name, schema_cls)
 
@@ -385,6 +252,16 @@ def run_telemetry_batch(
     fail = 0
 
     def emit_progress(event: str, *, index: int = 0, image_path: str | None = None, status: str | None = None, record: dict[str, Any] | None = None) -> None:
+        """
+        Emite un evento de progreso.
+
+        Args:
+            event: Evento de progreso.
+            index: Índice del evento.
+            image_path: Ruta de la imagen.
+            status: Estado del evento.
+            record: Registro del evento.
+        """
         if on_progress is None:
             return
         summary = _build_telemetry_summary(
@@ -470,7 +347,15 @@ def run_telemetry_batch(
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI de la prueba de telemetría."""
+    """
+    CLI de la prueba de telemetría.
+
+    Args:
+        argv: Argumentos de línea de comandos.
+
+    Returns:
+        Código de salida.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -479,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
     if not images:
         raise RuntimeError("No se encontraron imágenes en los directorios del proyecto.")
 
-    progress_callback = build_cli_progress_callback()
+    from src.utils.tests_ui.cli_reporters import print_telemetry_progress, print_telemetry_report
 
     summary = run_telemetry_batch(
         model_id=args.model,
@@ -492,11 +377,11 @@ def main(argv: list[str] | None = None) -> int:
         prompt=args.prompt,
         server_api_host=args.server_api_host,
         api_token=args.api_token,
-        on_progress=progress_callback,
+        on_progress=print_telemetry_progress,
     )
 
     print()
-    render_telemetry_report(summary)
+    print_telemetry_report(summary)
 
     return 0 if summary["fail"] == 0 else 1
 

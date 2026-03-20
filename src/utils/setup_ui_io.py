@@ -10,6 +10,8 @@ import re
 import shutil
 import subprocess
 import time
+import os
+import sys
 from typing import Any, Callable
 
 
@@ -696,6 +698,7 @@ def ask_text(
             current_value += key
             needs_render = True
 
+
 def ask_choice(
     *,
     question: str,
@@ -705,7 +708,7 @@ def ask_choice(
     read_key_fn: Callable[[], str | None],
     clear_screen_fn: Callable[[], None],
     info_text: str | Callable[..., str] = "",
-    nav_hint_text: str = "Acciones: ←/→ (o ↑/↓) cambiar opción · ENTER confirmar · ESC cancelar.",
+    nav_hint_text: str = "Acciones: ←/→ cambiar opción · ENTER confirmar · ESC cancelar.",
 ) -> int | None:
     """
     Solicita al usuario elegir una opción horizontal con teclado.
@@ -727,6 +730,7 @@ def ask_choice(
         return None
 
     selected = max(0, min(int(default_index), len(options) - 1))
+    info_scroll_offset = 0
 
     def _render_static() -> None:
         """Renderiza cabecera estática del selector."""
@@ -741,12 +745,37 @@ def ask_choice(
 
     panel = IncrementalPanelRenderer(clear_screen_fn=clear_screen_fn, render_static_fn=_render_static)
     last_render_signature: tuple[Any, ...] | None = None
+    has_scrollable_info = False
+    can_scroll_down = False
+
+    ANSI_ESCAPE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
+
+    def get_real_visual_rows(text: str, width: int) -> int:
+        """Calcula cuántas líneas físicas ocupa un texto ignorando los códigos de color."""
+        clean_text = ANSI_ESCAPE.sub('', text)
+        length = len(clean_text)
+        if length == 0:
+            return 1
+        return (length + width - 10) // width
 
     while True:
         content_width = get_full_ui_width(shutil_module=shutil)
+        
+        # Obtener el tamaño real de la terminal (soluciona el bug de Windows que devuelve 30 por defecto)
+        try:
+            terminal_height = os.get_terminal_size(sys.stdout.fileno()).lines
+        except OSError:
+            terminal_height = int(shutil.get_terminal_size(fallback=(120, 30)).lines)
+            
         divider = "─" * (content_width + 2)
 
-        rendered_options: list[str] = []
+        static_rows = (
+            len(wrap_plain_text(str(question or ""), max(16, content_width)))
+            + len(wrap_plain_text(nav_hint_text, max(16, content_width)))
+            + 2  # divisores estáticos
+        )
+
+        rendered_options: list[str] =[]
         for idx, option in enumerate(options):
             label = f" {option.strip()} "
             if idx == selected:
@@ -754,7 +783,7 @@ def ask_choice(
             else:
                 rendered_options.append(label)
 
-        dynamic_lines: list[str] = ["", "   " + "    ".join(rendered_options), ""]
+        dynamic_lines: list[str] =["", "   " + "    ".join(rendered_options), ""]
 
         resolved_info_text = ""
         if callable(info_text):
@@ -770,15 +799,69 @@ def ask_choice(
         else:
             resolved_info_text = str(info_text or "")
 
-        info_lines = [line for line in resolved_info_text.splitlines() if line.strip()]
+        info_lines =[line for line in resolved_info_text.splitlines() if line.strip()]
         if info_lines:
-            dynamic_lines.append(divider)
+            rendered_info_lines: list[str] = []
             for info_line in info_lines:
                 if "\x1b[" in info_line:
-                    dynamic_lines.append(info_line)
+                    rendered_info_lines.append(info_line)
                 else:
                     for wrapped in wrap_plain_text(info_line, max(16, content_width)):
-                        dynamic_lines.append(f"{style.DIM}{wrapped}{style.ENDC}")
+                        rendered_info_lines.append(f"{style.DIM}{wrapped}{style.ENDC}")
+
+            option_rows = sum(get_real_visual_rows(line, content_width) for line in dynamic_lines)
+            max_dynamic_rows = max(4, terminal_height - static_rows - 1)
+            info_budget_rows = max(0, max_dynamic_rows - option_rows - 2)
+
+            total_info_rows = sum(get_real_visual_rows(line, content_width) for line in rendered_info_lines)
+            has_scrollable_info = info_budget_rows > 0 and total_info_rows > info_budget_rows
+
+            if has_scrollable_info:
+                max_offset = max(0, len(rendered_info_lines) - 1)
+                info_scroll_offset = max(0, min(info_scroll_offset, max_offset))
+                actual_budget = max(0, info_budget_rows - 1)
+            else:
+                info_scroll_offset = 0
+                actual_budget = info_budget_rows
+
+            clipped_info_lines: list[str] =[]
+            used_rows = 0
+            start_idx = info_scroll_offset if has_scrollable_info else 0
+            for line in rendered_info_lines[start_idx:]:
+                line_rows = get_real_visual_rows(line, content_width)
+                if used_rows + line_rows > actual_budget:
+                    break
+                clipped_info_lines.append(line)
+                used_rows += line_rows
+
+            if has_scrollable_info and info_budget_rows > 0:
+                at_top = info_scroll_offset == 0
+                consumed = start_idx + len(clipped_info_lines)
+                at_bottom = consumed >= len(rendered_info_lines)
+                can_scroll_down = not at_bottom
+                scroll_hint = (
+                    f"{style.DIM}Scroll resumen: {'↑' if not at_top else '·'} / {'↓' if not at_bottom else '·'}"
+                    f"  (usa ↑/↓ para mover, ←/→ para Si/No){style.ENDC}"
+                )
+                clipped_info_lines.append(scroll_hint)
+            else:
+                can_scroll_down = False
+
+            dynamic_lines.append(divider)
+            dynamic_lines.extend(clipped_info_lines)
+        else:
+            has_scrollable_info = False
+            can_scroll_down = False
+
+        # --- RELLENO PARA ALTURA COMPLETA DE TERMINAL ---
+        current_dynamic_rows = sum(get_real_visual_rows(line, content_width) for line in dynamic_lines)
+        target_dynamic_rows = max(0, terminal_height - static_rows - 1)
+        
+        padding_rows = max(0, target_dynamic_rows - current_dynamic_rows - 1)
+        
+        for _ in range(padding_rows):
+            dynamic_lines.append("")
+        # --------------------------------------------------------------
 
         dynamic_lines.append(divider)
 
@@ -787,19 +870,29 @@ def ask_choice(
             content_width,
             tuple(options),
             tuple(info_lines),
+            info_scroll_offset,
+            terminal_height, # Añadido por si redimensionas la pantalla, para forzar redibujado
         )
         if last_render_signature != render_signature:
-            panel.render(dynamic_lines)
+            panel.render(dynamic_lines, force_full=bool(info_lines))
             last_render_signature = render_signature
 
         key = read_key_fn()
-        if key in ("LEFT", "UP"):
+        if key == "UP":
+            if has_scrollable_info and info_scroll_offset > 0:
+                info_scroll_offset -= 1
+        elif key == "DOWN":
+            if has_scrollable_info and can_scroll_down:
+                info_scroll_offset += 1
+        elif key == "LEFT":
             selected = (selected - 1) % len(options)
-        elif key in ("RIGHT", "DOWN"):
+        elif key == "RIGHT":
             selected = (selected + 1) % len(options)
         elif key == "ENTER":
+            clear_screen_fn()
             return selected
         elif key == "ESC":
+            clear_screen_fn()
             return None
         elif key is None:
             time.sleep(0.03)

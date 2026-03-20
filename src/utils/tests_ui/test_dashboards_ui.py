@@ -748,6 +748,20 @@ def _build_recent_record_lines(
 
         summary_text = _recent_payload_summary(payload or {}) if payload else "Resultado válido"
         detail_text = _recent_payload_detail(record, payload, status=status)
+        if status == "ok" and summary_text == "Resultado válido":
+            metric_parts: list[str] = []
+            if record.get("ttft_seconds") is not None:
+                metric_parts.append(f"TTFT={_format_metric_value(record.get('ttft_seconds'), suffix=' s')}")
+            if record.get("tokens_per_second") is not None:
+                metric_parts.append(f"TPS={_format_metric_value(record.get('tokens_per_second'))}")
+            if record.get("total_duration_seconds") is not None:
+                metric_parts.append(
+                    f"total={_format_metric_value(record.get('total_duration_seconds'), suffix=' s')}"
+                )
+            if metric_parts:
+                summary_text = " · ".join(metric_parts)
+                if detail_text == "Resultado válido":
+                    detail_text = summary_text
 
         if truncate:
             summary_text = _clip_inline(summary_text, max(28, width // 4))
@@ -756,8 +770,9 @@ def _build_recent_record_lines(
         merged_rows.append((f"{status_cell} {image_name}", summary_text, detail_text, status_color))
 
         field_rows: list[str] = []
-        if status == "ok" and payload:
-            field_rows.extend(_ordered_payload_items(payload))
+        if status == "ok":
+            if payload:
+                field_rows.extend(_ordered_payload_items(payload))
             if record.get("ttft_seconds") is not None:
                 field_rows.append(f"ttft_seconds={_format_metric_value(record.get('ttft_seconds'), suffix=' s')}")
             if record.get("tokens_per_second") is not None:

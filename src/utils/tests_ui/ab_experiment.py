@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from ..menu_kit import AppContext, UIKit
 
 
-_MAX_PREVIEW_IMAGES_PER_VARIANT = 8
+_MAX_PREVIEW_IMAGES_PER_VARIANT: int | None = None
 
 
 def run_ab_experiment_wrapper(
@@ -24,8 +24,11 @@ def run_ab_experiment_wrapper(
     """Ejecuta el experimento A/B de prompting desde la TUI de tests."""
     from src.scripts.experiment_ab_text import (
         ABVariantPlan,
+        ABResumeSummaryRow,
+        build_resume_summary,
         build_execution_plans,
         build_parser,
+        default_checkpoint_path,
         detect_results_file,
         main as run_ab_experiment_main,
     )
@@ -33,6 +36,8 @@ def run_ab_experiment_wrapper(
     def _build_preview_text(
         results_file: Path,
         plans: Sequence[ABVariantPlan],
+        resume_rows: Sequence[ABResumeSummaryRow],
+        checkpoint_file: Path,
         *,
         ui_width: int | None = None,
     ) -> str:
@@ -115,13 +120,37 @@ def run_ab_experiment_wrapper(
                 ["Campo", "Valor"],
                 [
                     ["JSONL origen", str(results_file)],
+                    ["Checkpoint incremental", str(checkpoint_file)],
                     ["Variantes detectadas", str(len(plans))],
-                    ["Max preview por variante", str(_MAX_PREVIEW_IMAGES_PER_VARIANT)],
+                    [
+                        "Max preview por variante",
+                        "Sin limite" if _MAX_PREVIEW_IMAGES_PER_VARIANT is None else str(_MAX_PREVIEW_IMAGES_PER_VARIANT),
+                    ],
                 ],
                 width=width,
             )
         )
         lines.append("")
+
+        if resume_rows:
+            lines.append("Estado de reanudacion")
+            lines.extend(
+                _table_lines(
+                    ["Modelo", "Schema", "OK/TOTAL", "Pendientes", "Invalidos"],
+                    [
+                        [
+                            row.variant.model_id,
+                            row.variant.schema_name or "N/A",
+                            f"{row.reusable_samples}/{row.total_samples}",
+                            str(row.pending_samples),
+                            str(row.invalid_samples),
+                        ]
+                        for row in resume_rows
+                    ],
+                    width=width,
+                )
+            )
+            lines.append("")
 
         for idx, plan in enumerate(plans, start=1):
             variant = plan.variant
@@ -140,8 +169,11 @@ def run_ab_experiment_wrapper(
                     width=width,
                 )
             )
-            visible_samples = plan.samples[:_MAX_PREVIEW_IMAGES_PER_VARIANT]
-            hidden_count = max(0, len(plan.samples) - len(visible_samples))
+            visible_samples = (
+                list(plan.samples)
+                if _MAX_PREVIEW_IMAGES_PER_VARIANT is None
+                else plan.samples[:_MAX_PREVIEW_IMAGES_PER_VARIANT]
+            )
 
             sample_rows = [
                 [
@@ -159,10 +191,6 @@ def run_ab_experiment_wrapper(
                     width=width,
                 )
             )
-            if hidden_count > 0:
-                lines.append(
-                    f"Nota: ... y {hidden_count} imagen(es) mas para esta variante."
-                )
             lines.append("")
 
         return "\n".join(lines).strip()
@@ -197,25 +225,78 @@ def run_ab_experiment_wrapper(
                 seed=int(defaults.seed),
                 override_model=None,
             )
-            should_run = kit.ask(
-                "Confirmar ejecucion del experimento A/B con las muestras detectadas?",
-                default="n",
-                info_text=lambda current_width=None: _build_preview_text(
-                    results_file,
-                    plans,
-                    ui_width=(int(current_width) if current_width is not None else None),
-                ),
+            checkpoint_file = default_checkpoint_path(Path(str(defaults.output_md)))
+            resume_rows = build_resume_summary(plans=plans, checkpoint_file=checkpoint_file)
+
+            total_samples = sum(int(row.total_samples) for row in resume_rows)
+            reusable_samples = sum(int(row.reusable_samples) for row in resume_rows)
+            pending_samples = sum(int(row.pending_samples) for row in resume_rows)
+            invalid_samples = sum(int(row.invalid_samples) for row in resume_rows)
+
+            has_previous_progress = reusable_samples > 0 or invalid_samples > 0
+            is_checkpoint_complete = (
+                total_samples > 0
+                and reusable_samples == total_samples
+                and pending_samples == 0
+                and invalid_samples == 0
             )
-            if not should_run:
-                kit.log("Ejecucion cancelada por el usuario.", "warning")
-                return
+
+            execution_mode = "resume"
+            if is_checkpoint_complete:
+                should_rerun = kit.ask(
+                    "Se detecto una ejecucion completa. Quieres reejecutar todo desde cero?",
+                    default="n",
+                    info_text=lambda current_width=None: _build_preview_text(
+                        results_file,
+                        plans,
+                        resume_rows,
+                        checkpoint_file,
+                        ui_width=(int(current_width) if current_width is not None else None),
+                    ),
+                )
+                if not should_rerun:
+                    kit.log("Ejecucion cancelada por el usuario.", "warning")
+                    return
+                execution_mode = "force"
+            else:
+                if has_previous_progress:
+                    should_resume = kit.ask(
+                        "Se detecto progreso previo del experimento A/B. Quieres reanudar?",
+                        default="y",
+                        info_text=lambda current_width=None: _build_preview_text(
+                            results_file,
+                            plans,
+                            resume_rows,
+                            checkpoint_file,
+                            ui_width=(int(current_width) if current_width is not None else None),
+                        ),
+                    )
+                    execution_mode = "resume" if should_resume else "force"
+
+                should_run = kit.ask(
+                    "Confirmar ejecucion del experimento A/B con las muestras detectadas?",
+                    default="n",
+                    info_text=lambda current_width=None: _build_preview_text(
+                        results_file,
+                        plans,
+                        resume_rows,
+                        checkpoint_file,
+                        ui_width=(int(current_width) if current_width is not None else None),
+                    ),
+                )
+                if not should_run:
+                    kit.log("Ejecucion cancelada por el usuario.", "warning")
+                    return
 
             exit_code = int(
                 run_ab_experiment_main(
-                    [
-                        "--results-file",
-                        str(results_file),
-                    ]
+                    (
+                        [
+                            "--results-file",
+                            str(results_file),
+                        ]
+                        + (["--force-recompute"] if execution_mode == "force" else [])
+                    )
                 )
             )
             output_path = Path(str(defaults.output_md))
@@ -270,6 +351,11 @@ def run_ab_experiment_wrapper(
                 )
         except Exception as error:
             kit.log(f"A/B experiment terminó con error: {error}", "error")
+            kit.log(
+                "Verifica que exista un JSONL batch con AD suficientes (aciertos y fallos) para construir el plan.",
+                "warning",
+            )
+            kit.wait("Press any key to return to model selector...")
             return
 
         if final_screen_renderer is None:

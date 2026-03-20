@@ -86,6 +86,17 @@ class ABVariantRunResult:
 
 
 @dataclass(frozen=True)
+class ABResumeSummaryRow:
+    """Resumen de reanudacion por variante."""
+
+    variant: ModelVariant
+    total_samples: int
+    reusable_samples: int
+    pending_samples: int
+    invalid_samples: int
+
+
+@dataclass(frozen=True)
 class LegacyRunContext:
     """Compatibilidad con wrapper previo."""
 
@@ -196,6 +207,14 @@ def _autodetect_results_file(results_dir: Path) -> Path:
 def detect_results_file(results_file: Path | None, results_dir: Path) -> Path:
     """Resuelve ruta de resultados previos con autodeteccion opcional."""
     return results_file if results_file is not None else _autodetect_results_file(results_dir)
+
+
+def _display_path(path: Path) -> str:
+    """Devuelve una ruta compacta para mostrar en consola."""
+    try:
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except Exception:
+        return str(path)
 
 
 def _iter_data_records(results_file: Path) -> list[dict[str, Any]]:
@@ -389,6 +408,240 @@ def _safe_text(value: Any) -> str:
     return text
 
 
+def default_checkpoint_path(output_md: Path) -> Path:
+    """Ruta del checkpoint incremental asociado al markdown final."""
+    base = Path(output_md)
+    return base.with_suffix(base.suffix + ".checkpoint.json")
+
+
+def _variant_checkpoint_key(variant: ModelVariant) -> str:
+    """Clave estable para guardar/leer checkpoints por variante."""
+    reasoning_token = "unknown"
+    if variant.include_reasoning is True:
+        reasoning_token = "true"
+    elif variant.include_reasoning is False:
+        reasoning_token = "false"
+    schema_token = str(variant.schema_name or "")
+    return f"{variant.model_id}::{reasoning_token}::{schema_token}"
+
+
+def _sample_checkpoint_key(sample: ABInputSample) -> str:
+    """Clave estable por muestra para poder retomar sin duplicados."""
+    try:
+        return str(sample.image_path.resolve())
+    except Exception:
+        return str(sample.image_path)
+
+
+def _empty_checkpoint_payload() -> dict[str, Any]:
+    """Estructura base de checkpoint."""
+    return {
+        "version": 1,
+        "variants": {},
+    }
+
+
+def _load_checkpoint(path: Path) -> dict[str, Any]:
+    """Carga checkpoint tolerando archivos ausentes o corruptos."""
+    if not path.exists():
+        return _empty_checkpoint_payload()
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return _empty_checkpoint_payload()
+
+    if not isinstance(payload, dict):
+        return _empty_checkpoint_payload()
+
+    variants = payload.get("variants")
+    if not isinstance(variants, dict):
+        payload["variants"] = {}
+    payload.setdefault("version", 1)
+    return payload
+
+
+def _save_checkpoint(path: Path, payload: dict[str, Any]) -> None:
+    """Guarda checkpoint en disco."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _is_description_complete(description: dict[str, str] | Any) -> bool:
+    """Valida que una descripcion no este vacia ni en estado de error."""
+    if not isinstance(description, dict):
+        return False
+    required = ("texture", "color", "morphology", "conclusion")
+    for field in required:
+        value = str(description.get(field) or "").strip()
+        if not value:
+            return False
+        if value.upper().startswith("ERROR:"):
+            return False
+    return True
+
+
+def _is_result_complete(result: ABResult) -> bool:
+    """Valida que un resultado A/B es reutilizable para reanudacion."""
+    return _is_description_complete(result.description_a) and _is_description_complete(result.description_b)
+
+
+def _serialize_result(result: ABResult) -> dict[str, Any]:
+    """Serializa ABResult para checkpoint."""
+    return {
+        "sample": {
+            "image_path": str(result.sample.image_path),
+            "image_name": result.sample.image_name,
+            "ground_truth_cls": result.sample.ground_truth_cls,
+            "predicted_cls": result.sample.predicted_cls,
+            "previous_status": result.sample.previous_status,
+        },
+        "description_a": dict(result.description_a),
+        "description_b": dict(result.description_b),
+    }
+
+
+def _deserialize_result(payload: dict[str, Any], expected_sample: ABInputSample) -> ABResult | None:
+    """Reconstruye ABResult validando estructura y coherencia de muestra."""
+    if not isinstance(payload, dict):
+        return None
+    sample_payload = payload.get("sample")
+    if not isinstance(sample_payload, dict):
+        return None
+
+    path_value = str(sample_payload.get("image_path") or "").strip()
+    if not path_value:
+        return None
+
+    try:
+        sample_path = Path(path_value)
+    except Exception:
+        return None
+
+    expected_key = _sample_checkpoint_key(expected_sample)
+    candidate_key = _sample_checkpoint_key(
+        ABInputSample(
+            image_path=sample_path,
+            image_name=str(sample_payload.get("image_name") or sample_path.name),
+            ground_truth_cls=str(sample_payload.get("ground_truth_cls") or ""),
+            predicted_cls=str(sample_payload.get("predicted_cls") or ""),
+            previous_status=str(sample_payload.get("previous_status") or ""),
+        )
+    )
+    if candidate_key != expected_key:
+        return None
+
+    description_a = payload.get("description_a")
+    description_b = payload.get("description_b")
+    if not isinstance(description_a, dict) or not isinstance(description_b, dict):
+        return None
+
+    return ABResult(
+        sample=expected_sample,
+        description_a={
+            "texture": str(description_a.get("texture") or ""),
+            "color": str(description_a.get("color") or ""),
+            "morphology": str(description_a.get("morphology") or ""),
+            "conclusion": str(description_a.get("conclusion") or ""),
+        },
+        description_b={
+            "texture": str(description_b.get("texture") or ""),
+            "color": str(description_b.get("color") or ""),
+            "morphology": str(description_b.get("morphology") or ""),
+            "conclusion": str(description_b.get("conclusion") or ""),
+        },
+    )
+
+
+def _get_variant_bucket(checkpoint_payload: dict[str, Any], variant: ModelVariant) -> dict[str, Any]:
+    """Obtiene/crea bucket de checkpoint para una variante."""
+    variants = checkpoint_payload.setdefault("variants", {})
+    if not isinstance(variants, dict):
+        checkpoint_payload["variants"] = {}
+        variants = checkpoint_payload["variants"]
+
+    key = _variant_checkpoint_key(variant)
+    bucket = variants.get(key)
+    if not isinstance(bucket, dict):
+        bucket = {}
+        variants[key] = bucket
+
+    bucket["variant"] = {
+        "model_id": variant.model_id,
+        "include_reasoning": variant.include_reasoning,
+        "schema_name": variant.schema_name,
+    }
+    if not isinstance(bucket.get("items"), dict):
+        bucket["items"] = {}
+    return bucket
+
+
+def _get_reusable_results(
+    *,
+    checkpoint_payload: dict[str, Any],
+    variant: ModelVariant,
+    samples: list[ABInputSample],
+) -> tuple[dict[str, ABResult], int]:
+    """Recupera resultados validos del checkpoint y limpia entradas corruptas."""
+    bucket = _get_variant_bucket(checkpoint_payload, variant)
+    items_payload = bucket.get("items")
+    if not isinstance(items_payload, dict):
+        bucket["items"] = {}
+        return {}, 0
+
+    reusable: dict[str, ABResult] = {}
+    invalid_count = 0
+
+    samples_by_key = {_sample_checkpoint_key(sample): sample for sample in samples}
+    for sample_key, sample in samples_by_key.items():
+        raw = items_payload.get(sample_key)
+        if raw is None:
+            continue
+
+        result = _deserialize_result(raw, sample)
+        if result is None or not _is_result_complete(result):
+            invalid_count += 1
+            items_payload.pop(sample_key, None)
+            continue
+        reusable[sample_key] = result
+
+    # Limpieza de entradas huérfanas (muestras fuera del plan actual)
+    for existing_key in list(items_payload.keys()):
+        if existing_key not in samples_by_key:
+            items_payload.pop(existing_key, None)
+
+    return reusable, invalid_count
+
+
+def build_resume_summary(
+    *,
+    plans: list[ABVariantPlan],
+    checkpoint_file: Path,
+) -> list[ABResumeSummaryRow]:
+    """Construye resumen de progreso reutilizable por la TUI."""
+    payload = _load_checkpoint(checkpoint_file)
+    rows: list[ABResumeSummaryRow] = []
+    for plan in plans:
+        reusable, invalid_count = _get_reusable_results(
+            checkpoint_payload=payload,
+            variant=plan.variant,
+            samples=plan.samples,
+        )
+        total = len(plan.samples)
+        reusable_count = len(reusable)
+        pending = max(0, total - reusable_count)
+        rows.append(
+            ABResumeSummaryRow(
+                variant=plan.variant,
+                total_samples=total,
+                reusable_samples=reusable_count,
+                pending_samples=pending,
+                invalid_samples=invalid_count,
+            )
+        )
+    return rows
+
+
 def _run_single_inference(
     *,
     loader: VLMLoader,
@@ -416,6 +669,7 @@ def _run_single_inference(
 
 def _run_ab_inference(
     *,
+    variant: ModelVariant,
     model_id: str,
     samples: list[ABInputSample],
     temperature: float,
@@ -423,9 +677,41 @@ def _run_ab_inference(
     verbose: bool,
     server_api_host: str | None,
     api_token: str | None,
+    checkpoint_payload: dict[str, Any],
+    checkpoint_path: Path,
+    force_recompute: bool,
 ) -> list[ABResult]:
     """Ejecuta ambos prompts por muestra y asegura descarga de VRAM al finalizar."""
     results: list[ABResult] = []
+    bucket = _get_variant_bucket(checkpoint_payload, variant)
+    items_payload = bucket.get("items")
+    if not isinstance(items_payload, dict):
+        bucket["items"] = {}
+        items_payload = bucket["items"]
+
+    if force_recompute:
+        reusable_by_key: dict[str, ABResult] = {}
+        invalid_count = 0
+        if items_payload:
+            bucket["items"] = {}
+            items_payload = bucket["items"]
+            _save_checkpoint(checkpoint_path, checkpoint_payload)
+    else:
+        reusable_by_key, invalid_count = _get_reusable_results(
+            checkpoint_payload=checkpoint_payload,
+            variant=variant,
+            samples=samples,
+        )
+        if invalid_count > 0:
+            print(f"  - Checkpoint invalido detectado en {invalid_count} muestra(s); se recalcularan.")
+
+    pending = sum(1 for sample in samples if _sample_checkpoint_key(sample) not in reusable_by_key)
+    print(f"  - Reutilizables desde checkpoint: {len(reusable_by_key)}/{len(samples)} | pendientes: {pending}")
+
+    if pending <= 0:
+        ordered = [reusable_by_key[_sample_checkpoint_key(sample)] for sample in samples]
+        return ordered
+
     loader = VLMLoader(
         model_path=model_id,
         verbose=verbose,
@@ -436,9 +722,19 @@ def _run_ab_inference(
     try:
         loader.load_model()
         for index, sample in enumerate(samples, start=1):
+            sample_key = _sample_checkpoint_key(sample)
+            cached = reusable_by_key.get(sample_key)
+            if cached is not None:
+                results.append(cached)
+                print(
+                    f"  [{index:>2}/{len(samples)}] {sample.image_name} "
+                    f"| estado previo: {sample.previous_status} | origen: checkpoint"
+                )
+                continue
+
             print(
-                f"[{index}/{len(samples)}] Procesando {sample.image_name} "
-                f"({sample.previous_status} previo)..."
+                f"  [{index:>2}/{len(samples)}] {sample.image_name} "
+                f"| estado previo: {sample.previous_status} | origen: inferencia"
             )
 
             description_a: dict[str, str]
@@ -476,13 +772,14 @@ def _run_ab_inference(
                     "conclusion": f"ERROR: {error}",
                 }
 
-            results.append(
-                ABResult(
-                    sample=sample,
-                    description_a=description_a,
-                    description_b=description_b,
-                )
+            result_item = ABResult(
+                sample=sample,
+                description_a=description_a,
+                description_b=description_b,
             )
+            results.append(result_item)
+            items_payload[sample_key] = _serialize_result(result_item)
+            _save_checkpoint(checkpoint_path, checkpoint_payload)
     finally:
         loader.unload_model()
 
@@ -637,15 +934,24 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Activa logs verbosos de VLMLoader",
     )
+    parser.add_argument(
+        "--force-recompute",
+        action="store_true",
+        help="Ignora checkpoint y recalcula todas las muestras del plan actual",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     """Punto de entrada CLI."""
     args = build_parser().parse_args(argv)
+    output_path: Path = args.output_md
+    checkpoint_path = default_checkpoint_path(output_path)
 
     results_file = detect_results_file(args.results_file, args.results_dir)
-    print(f"Usando resultados previos: {results_file}")
+    print("\n=== Ejecucion experimento A/B ===")
+    print(f"Resultados previos: {_display_path(results_file)}")
+    print(f"Checkpoint incremental: {_display_path(checkpoint_path)}")
 
     plans = build_execution_plans(
         results_file=results_file,
@@ -655,22 +961,40 @@ def main(argv: list[str] | None = None) -> int:
         override_model=args.model,
     )
 
-    print(f"Variantes detectadas para ejecutar: {len(plans)}")
-    for plan in plans:
+    print(f"Variantes a ejecutar: {len(plans)}")
+    for variant_index, plan in enumerate(plans, start=1):
         print(
-            f"- {plan.variant.model_id} | {_reasoning_label(plan.variant.include_reasoning)} "
-            f"| schema={plan.variant.schema_name or 'N/A'} | muestras={len(plan.samples)}"
+            f"  {variant_index}. model={plan.variant.model_id} "
+            f"| reasoning={_reasoning_label(plan.variant.include_reasoning)} "
+            f"| schema={plan.variant.schema_name or 'N/A'} "
+            f"| muestras={len(plan.samples)}"
         )
 
+    checkpoint_payload = _load_checkpoint(checkpoint_path)
+    resume_rows = build_resume_summary(plans=plans, checkpoint_file=checkpoint_path)
+    if resume_rows:
+        print("Resumen de reanudacion:")
+        for row in resume_rows:
+            print(
+                "  - "
+                f"{row.variant.model_id} | "
+                f"reutilizables={row.reusable_samples}/{row.total_samples} | "
+                f"pendientes={row.pending_samples} | "
+                f"invalidos={row.invalid_samples}"
+            )
+
     runs: list[ABVariantRunResult] = []
-    for plan in plans:
+    for variant_index, plan in enumerate(plans, start=1):
         variant = plan.variant
+        print()
         print(
-            "Ejecutando variante -> "
-            f"model={variant.model_id}, reasoning={_reasoning_label(variant.include_reasoning)}, "
+            f"[Variante {variant_index}/{len(plans)}] "
+            f"model={variant.model_id} | "
+            f"reasoning={_reasoning_label(variant.include_reasoning)} | "
             f"schema={variant.schema_name or 'N/A'}"
         )
         items = _run_ab_inference(
+            variant=variant,
             model_id=variant.model_id,
             samples=plan.samples,
             temperature=args.temperature,
@@ -678,6 +1002,9 @@ def main(argv: list[str] | None = None) -> int:
             verbose=args.verbose,
             server_api_host=args.server_api_host,
             api_token=args.api_token,
+            checkpoint_payload=checkpoint_payload,
+            checkpoint_path=checkpoint_path,
+            force_recompute=bool(args.force_recompute),
         )
         runs.append(ABVariantRunResult(variant=variant, items=items))
 
@@ -688,11 +1015,11 @@ def main(argv: list[str] | None = None) -> int:
         results_file=results_file,
     )
 
-    output_path: Path = args.output_md
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(markdown, encoding="utf-8")
 
-    print(f"Reporte generado: {output_path}")
+    print()
+    print(f"Reporte generado: {_display_path(output_path)}")
     return 0
 
 

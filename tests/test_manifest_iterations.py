@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from src.utils.tests_ui.manifest import (
     _delete_manifest_file,
     extract_manifest_run_config,
@@ -9,6 +11,12 @@ from src.utils.tests_ui.manifest import (
     prune_output_records_for_model,
 )
 from src.utils.tests_ui.manifest_generation import generate_manifest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_manifest_tests_fs(tmp_path, monkeypatch):
+    """Aísla los tests para no generar artefactos en data/ del workspace."""
+    monkeypatch.chdir(tmp_path)
 
 
 def test_generate_manifest_repeats_rows_per_iteration(tmp_path):

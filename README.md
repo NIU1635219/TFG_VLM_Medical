@@ -17,10 +17,12 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Telemetría opcional por inferencia en `VLMLoader`: basada en `response.stats` del SDK y, cuando aporta datos, en `GET /v1/models` para recursos del modelo.
 - Smoke test con 5 casos (`sample_01`...`sample_05`) y descarga automática de imágenes si faltan.
 - Manager TUI modularizado y con tests de regresión.
-- `UIKit` incluye API de tablas interactivas (`TableColumn`, `TableRow`, `build_table_items`, `table_menu`) con anchos de columna adaptativos al terminal.
+- `UIKit` incluye API de tablas tipadas y reutilizables (`TableColumn`, `TableRow`, `TableCell`, `build_table_items`, `table_menu`) con anchos adaptativos al terminal.
+- Motor de tablas TUI ampliado con celdas avanzadas (`rowspan`/`colspan`) y control de truncado por líneas (`max_cell_lines`) para mejorar legibilidad en terminales estrechos.
 - `UIKit` añade `render_and_wait_responsive(...)` como helper común de espera reactiva, con repintado automático al redimensionar el terminal.
 - Schema Tester integrado en el manager: selección interactiva de modelo + esquema + inferencia por lotes.
 - Batch Runner CLI con exportado incremental en JSONL compartido por manifiesto+schema.
+- Experimento A/B de prompting integrado: comparación zero-shot vs prompt asistido con Ground Truth AD desde CLI y desde Setup Tests UI.
 - Telemetry Probe integrado en el manager con progreso en vivo, cobertura de métricas y resumen final legible.
 - Response Inspector integrado en el manager para inspeccionar campos reales del SDK con modo crudo o estructurado.
 - UI/IO reforzada en `setup_ui_io.py`:
@@ -76,6 +78,10 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Batch Runner: registros por imagen incluyen `include_reasoning` y agregación de summary por variante.
 - Batch Runner: borrado de manifiesto desde TUI con limpieza de outputs JSONL vinculados.
 - Convención UI: pantallas finales estructuradas migradas al helper común `render_and_wait_responsive(...)` para espera reactiva con repintado por redimensionado (manifest/schema/smoke/telemetry/response inspector/batch summary).
+- Setup Tests UI: nueva opción `Run A/B Prompting Experiment (AD)` con preview previo, confirmación y pantalla final reactiva.
+- Nuevo script `src/scripts/experiment_ab_text.py` para detección automática de variantes desde JSONL (`__batch_meta__`) y comparación cualitativa A/B sobre muestras AD estratificadas.
+- Motor visual/TUI: tablas estáticas y dashboards migrados al render unificado de `table_menu(..., interactive=False, return_lines=True)` con mejor reparto de columnas y truncado controlado.
+- Cobertura de pruebas ampliada para flujo A/B y renderizado reactivo de tablas en pantallas finales.
 
 ## Stack técnico
 
@@ -118,6 +124,7 @@ Dependencias declaradas en `pyproject.toml`.
 │   │   └── preprocess.py               # CLI de recorte de bordes negros y copia de CSV.
 │   ├── scripts/
 │   │   ├── batch_runner.py             # Orquestador masivo con exportado incremental en JSONL compartido.
+│   │   ├── experiment_ab_text.py       # Experimento A/B zero-shot vs asistido con Ground Truth AD y reporte Markdown.
 │   │   ├── test_inference.py           # Smoke test CLI con descarga automática de imágenes de muestra.
 │   │   ├── test_response_inspector.py  # Inspector CLI de respuestas reales del SDK LM Studio.
 │   │   ├── test_schema.py              # Lógica batch reutilizable para el Schema Tester interactivo.
@@ -140,6 +147,7 @@ Dependencias declaradas en `pyproject.toml`.
 │       │   ├── lms_menu_helpers.py     # Utilidades de formateo/capacidad para menús de modelos.
 │       │   └── lms_models.py           # Wrappers de LM Studio para listar, descargar y resolver opciones.
 │       └── tests_ui/                   # Pantallas y helpers extraídos de Setup Tests UI.
+│           ├── ab_experiment.py        # Flujo UI del experimento A/B con preview de variantes y resumen final.
 │           ├── batch.py                # Flujo UI del Batch Runner y selección de parámetros de ejecución.
 │           ├── cli_reporters.py        # Reportes CLI y helpers de render para dashboards y tests
 │           ├── manifest.py             # Gestión completa de manifests (crear/derivar/usar/eliminar) y limpieza de outputs.
@@ -152,8 +160,10 @@ Dependencias declaradas en `pyproject.toml`.
 │           ├── telemetry.py            # Pantallas del Telemetry Probe con métricas y resumen visual.
 │           └── test_dashboards_ui.py   # Dashboards/visualización en terminal para resultados de tests.
 └── tests/
+    ├── test_ab_experiment_ui.py        # Validación del preview/limiter del experimento A/B en la TUI.
     ├── test_app_config.py              # Contratos de configuración estática y registro de modelos.
     ├── test_batch_runner.py            # Exportado incremental y persistencia por imagen.
+    ├── test_experiment_ab_text.py      # Detección de variantes y selección estratificada de muestras AD.
     ├── test_inference_script.py        # Smoke test, keywords esperadas y validación por etiquetas.
     ├── test_inspect_lmstudio_response.py # Inspector de respuesta, autodetección y resumen visual.
     ├── test_lms_download_manager.py    # Descargas de modelos y manejo de estados.
@@ -262,7 +272,7 @@ El manager ofrece:
 - Diagnóstico de entorno (`uv`, dependencias, `lms`, etc.).
 - Gestión de modelos LM Studio (listado, descarga, carga/descarga, pull).
 - Ejecución de tests y smoke test.
-- Ejecución de Schema Tester, Telemetry Probe, Response Inspector y Batch Runner.
+- Ejecución de Schema Tester, Telemetry Probe, Response Inspector, Batch Runner y experimento A/B de prompting.
 - Reinstalación selectiva de librerías.
 - Factory reset con confirmación segura.
 
@@ -273,7 +283,7 @@ directorios temporales del propio test.
 
 La UI de terminal está centralizada en `UIKit` (`src/utils/menu_kit.py`), que encapsula estilo ANSI, helpers de renderizado (banners, tablas, menús, divisores…) y módulos del SO. Todos los submódulos reciben una instancia de `UIKit` + `AppContext` en lugar de dicts `ctx` con referencias sueltas.
 
-`UIKit` incluye un generador de tablas interactivas con columnas y filas tipadas:
+`UIKit` incluye un generador de tablas tipadas con columnas, filas y celdas avanzadas:
 
 ```python
 kit.build_table_items(
@@ -286,6 +296,10 @@ kit.build_table_items(
 ```
 
 O como menú completo con `kit.table_menu(columns, rows)` que devuelve el `TableRow` seleccionado.
+
+Además, para tablas no interactivas (resúmenes finales, dashboards o bloques informativos) se puede reutilizar el mismo motor con `interactive=False` y recuperar líneas renderizadas con `return_lines=True`.
+
+La API legacy `kit.table(...)` fue retirada; la convención actual unifica la salida tabular en `table_menu`/`build_table_items`.
 
 Convención UI: las pantallas finales estructuradas usan `kit.render_and_wait_responsive(...)` para mantener la espera reactiva con repintado automático al redimensionar el terminal.
 
@@ -404,6 +418,7 @@ print(result.telemetry.tokens_per_second)
 - Valida salida JSON y contenido esperado por etiqueta.
 - Acepta variantes léxicas y taxonómicas razonables en `object_detected` y/o `justification`
     (por ejemplo `dog`, `perro`, `canino`, `Canis`).
+- Expone un parser dedicado (`build_parser()`) para facilitar reutilización y testeo del CLI.
 
 ### Ejecutar smoke test
 
@@ -564,6 +579,51 @@ uv run python src/scripts/batch_runner.py --model opengvlab_internvl3_5-14b --im
 
 Nota: en el flujo TUI no se mezclan resultados de variantes; cada variante se agrega y resume de forma independiente dentro del JSONL compartido.
 
+## A/B Prompting Experiment (`src/scripts/experiment_ab_text.py`)
+
+Comparativa controlada entre dos estrategias de prompting sobre casos AD previamente evaluados:
+
+- Prompt A (zero-shot): descripción de textura/color/morfología sin contexto adicional.
+- Prompt B (asistido): misma descripción, condicionada al contexto de Ground Truth AD.
+
+### Qué hace
+
+- Autodetecta un JSONL previo en `data/processed/batch_results` (o usa `--results-file` si se indica).
+- Detecta variantes por `model_id` + `include_reasoning` + `schema_name`.
+- Selecciona muestras AD estratificadas (aciertos/fallos previos) de forma reproducible con semilla.
+- Ejecuta ambos prompts por muestra con salida estructurada (`texture`, `color`, `morphology`, `conclusion`).
+- Genera un reporte Markdown comparativo en `data/processed/ab_results/results_ab_experiment.md`.
+
+### Ejecución CLI
+
+Automática (valores por defecto y autodetección de JSONL):
+
+```bash
+uv run python src/scripts/experiment_ab_text.py
+```
+
+Con parámetros explícitos:
+
+```bash
+uv run python src/scripts/experiment_ab_text.py --results-file data/processed/batch_results/batch_zeroshot_manifest_20260320_184504_PolypDetection.jsonl --n-correct 5 --n-incorrect 5 --seed 42 --temperature 0.2
+```
+
+Parámetros más usados:
+
+- `--model`: filtra una variante concreta.
+- `--results-file`: JSONL de entrada explícito.
+- `--results-dir`: directorio para autodetección de JSONL.
+- `--output-md`: ruta de salida del reporte Markdown.
+- `--n-correct` / `--n-incorrect`: tamaño estratificado por aciertos/fallos AD.
+
+### Integración en TUI
+
+Disponible en Setup Tests como `Run A/B Prompting Experiment (AD)`, con:
+
+- preview de variantes detectadas y muestras candidatas,
+- confirmación previa a ejecución,
+- pantalla final reactiva adaptada al ancho de terminal.
+
 ## Testing
 
 Suite completa:
@@ -578,14 +638,16 @@ Tests más relevantes:
 - `tests/test_inference_script.py`: smoke test y validación por etiquetas.
 - `tests/test_telemetry.py`: extracción de TTFT/TPS y resumen de telemetría.
 - `tests/test_batch_runner.py`: exportado incremental y persistencia de resultados por imagen.
+- `tests/test_experiment_ab_text.py`: detección de variantes y balanceo estratificado de muestras A/B.
 - `tests/test_schemas.py`: validación de esquemas Pydantic base y variantes `WithReasoning`.
 - `tests/test_manifest_iterations.py`: manifests compactos, snapshots por variante y limpieza de JSONL vinculados.
-- `tests/test_menu_kit.py`: `UIKit.table()`, `TableColumn`/`TableRow`, `build_table_items`, `AppContext`.
+- `tests/test_menu_kit.py`: `TableColumn`/`TableRow`/`TableCell`, `build_table_items`, `table_menu`, `AppContext`.
 - `tests/test_setup_menu_engine.py`: `MenuItem`, `MenuSeparator`, `interactive_menu`.
 - `tests/test_setup_diagnostics.py`: diagnóstico de entorno y smart-fix.
 - `tests/test_setup_install_flow.py`: flujos de instalación y check de dependencias.
 - `tests/test_setup_ui_io_render.py`: render incremental, cálculo de columnas, wrap.
 - `tests/test_setup_models_ui.py`: gestor de modelos y descarga.
+- `tests/test_ab_experiment_ui.py`: validación del preview de ejecución A/B y límite de muestras mostrado en UI.
 - `tests/test_app_config.py`: configuración estática de la aplicación.
 - `tests/test_lms_download_manager.py`: máquina de estado de descargas.
 - `tests/test_lms_models.py`, `tests/test_lms_menu_helpers.py`: wrappers lmstudio SDK.

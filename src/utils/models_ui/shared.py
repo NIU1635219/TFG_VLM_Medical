@@ -93,6 +93,9 @@ def pick_download_option(
     def q_header() -> None:
         """Renderiza cabecera del selector de cuantización."""
         ui_width = ctx["current_ui_width"]()
+        print_banner_fn = ctx.get("print_banner")
+        if callable(print_banner_fn):
+            print_banner_fn()
         ctx["kit"].banner(title=title, width=ui_width)
         print(" " + ctx["divider"](ui_width))
         print(f" {style.DIM}Selecciona una cuantización compatible y confirma con ENTER.{style.ENDC}")

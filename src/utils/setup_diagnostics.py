@@ -13,6 +13,31 @@ if TYPE_CHECKING:
     from .menu_kit import AppContext, UIKit
 
 
+def _render_diagnostics_report_table(kit: "UIKit", report: list[tuple[str, str, str]], *, width: int) -> None:
+    """Renderiza el reporte de diagnósticos con el motor de tablas unificado."""
+    columns = [
+        kit.TableColumn(label="Component", width_ratio=0.45, min_width=16),
+        kit.TableColumn(label="Status/Value", width_ratio=0.45, min_width=16),
+        kit.TableColumn(label="Res", fixed_width=6, min_width=6),
+    ]
+    rows = [
+        kit.TableRow(
+            cells=[
+                str(name).replace("cv2", "OpenCV").replace("llama_cpp", "LlamaCPP"),
+                str(value),
+                str(status),
+            ],
+            cell_colors=[
+                None,
+                None,
+                "OKGREEN" if str(status) == "OK" else ("WARNING" if str(status) == "WARN" else "FAIL"),
+            ],
+        )
+        for name, value, status in report
+    ]
+    kit.table_menu(columns, rows, width=width, interactive=False)
+
+
 # ---------------------------------------------------------------------------
 # DiagnosticIssue
 # ---------------------------------------------------------------------------
@@ -153,9 +178,10 @@ def smart_fix_menu(kit: "UIKit", app: "AppContext", issues: list, report: list |
     def draw_header() -> None:
         """Renderiza el encabezado del menú de correcciones."""
         w = kit.width()
+        app.print_banner()
         if report:
             kit.banner("SYSTEM DIAGNOSTICS (CACHED)", width=w)
-            kit.table(report, width=w)
+            _render_diagnostics_report_table(kit, report, width=w)
         kit.banner(f"DIAGNOSTIC ISSUES DETECTED ({len(issues)})", width=w)
         for item in issues:
             print(f" {kit.style.FAIL}●{kit.style.ENDC} {item.description}")
@@ -206,8 +232,9 @@ def run_diagnostics_ui(kit: "UIKit", app: "AppContext") -> None:
         def _render_static() -> None:
             w = kit.width()
             print()
+            app.print_banner()
             kit.banner("SYSTEM DIAGNOSTICS & VERIFICATION", width=w)
-            kit.table(report, width=w)
+            _render_diagnostics_report_table(kit, report, width=w)
 
         panel = kit.IncrementalPanelRenderer(
             clear_screen_fn=kit.clear,

@@ -958,44 +958,95 @@ def _show_manifest_overview_screen(
     """
     style = kit.style
 
-    def _truncate(text: str, width: int) -> str:
-        """
-        Recorta texto a un ancho máximo preservando legibilidad visual.
+    def _table_lines(
+        headers: list[str],
+        rows: list[list[str]],
+        *,
+        width: int,
+        status_col: int | None = None,
+    ) -> list[str]:
+        """Renderiza tabla estática con ancho reactivo para el overview."""
+        if not rows:
+            return ["  Sin datos."]
 
-        Args:
-            text: Texto a renderizar.
-            width: Ancho máximo permitido.
+        table_menu_fn = getattr(kit, "table_menu", None)
+        table_column_cls = getattr(kit, "TableColumn", None)
+        table_row_cls = getattr(kit, "TableRow", None)
+        if not (callable(table_menu_fn) and table_column_cls is not None and table_row_cls is not None):
+            return ["  Sin datos."]
 
-        Returns:
-            Texto recortado con elipsis cuando excede el ancho.
-        """
-        if width <= 0:
-            return ""
-        if len(text) <= width:
-            return text
-        if width <= 1:
-            return text[:width]
-        return text[: width - 1] + "…"
+        # Improve column distribution heuristics:
+        # - Special-case common 2-column tables (Campo|Valor) to give the value column most space
+        # - Give Variante and Schema larger min_width and higher weight
+        # - Keep numeric/short columns compact
+        two_col_value_like = len(headers) == 2 and headers[1].lower() in ("valor", "value")
 
-    def _status_badge(snapshot: dict[str, Any]) -> str:
-        """
-        Devuelve una etiqueta de estado coloreada para resumen y variantes.
-
-        Args:
-            snapshot: Diccionario con estado de ejecución.
-
-        Returns:
-            Texto coloreado con ANSI.
-        """
-        plain = snapshot_status_text(snapshot)
-        color_by_status = {
-            "COMPLETO": str(getattr(style, "OKGREEN", "")),
-            "PARCIAL": str(getattr(style, "WARNING", "")),
-            "ERROR": str(getattr(style, "FAIL", "")),
+        # Base weight mapping for known headers
+        weight_map: dict[str, int] = {
+            "Variante": 4,
+            "Schema": 3,
+            "%": 1,
+            "Estado": 1,
+            "OK/TOTAL": 1,
+            "Pend": 1,
+            "Err": 1,
         }
-        color = color_by_status.get(plain, "")
-        endc = str(getattr(style, "ENDC", "")) if color else ""
-        return f"{color}{plain}{endc}" if color else plain
+
+        if two_col_value_like:
+            weights = [1, 5]
+        else:
+            weights = [weight_map.get(h, 1) for h in headers]
+
+        total_weight = max(1, sum(weights))
+
+        def _min_width_for(header: str, weight: int) -> int:
+            if two_col_value_like:
+                return 10 if header == headers[0] else max(20, int(kit.width() * 0.5))
+            if header in ("Variante", "Schema"):
+                return 22 if header == "Variante" else 18
+            if header in ("OK/TOTAL", "Pend", "Err", "%"):
+                return 8
+            return 10
+
+        columns = [
+            table_column_cls(
+                label=header,
+                width_ratio=(weight / total_weight),
+                min_width=_min_width_for(header, weight),
+            )
+            for header, weight in zip(headers, weights)
+        ]
+        table_rows: list[Any] = []
+        for row in rows:
+            normalized = [str(cell) for cell in row]
+            colors: list[str | None] | None = None
+            if status_col is not None and 0 <= status_col < len(normalized):
+                status_token = normalized[status_col].upper()
+                if "COMPLETO" in status_token or "OK" in status_token:
+                    color_name = "OKGREEN"
+                elif "PARCIAL" in status_token or "WARN" in status_token:
+                    color_name = "WARNING"
+                else:
+                    color_name = "FAIL"
+                typed_colors: list[str | None] = [None for _ in normalized]
+                typed_colors[status_col] = color_name
+                colors = typed_colors
+            row_cells: list[Any] = [str(cell) for cell in normalized]
+            table_rows.append(table_row_cls(cells=row_cells, cell_colors=colors))
+
+        # Allow cell wrapping for value-like tables so long text wraps in the value column
+        rendered = table_menu_fn(
+            columns,
+            table_rows,
+            interactive=False,
+            return_lines=True,
+            width=width,
+            max_cell_lines=True,
+        )
+        if isinstance(rendered, list):
+            return [str(line) for line in rendered]
+        return ["  Sin datos."]
+
 
     def _render_overview_panel(ui_width: int) -> None:
         """
@@ -1007,31 +1058,14 @@ def _show_manifest_overview_screen(
         divider = " " + kit.divider(ui_width)
 
         print(divider)
-        print(
-            f" {style.BOLD}Manifest:{style.ENDC} "
-            f"{os.path.basename(manifest_path)}"
-            f"  {style.DIM}|{style.ENDC}  "
-            f"{style.BOLD}Estado:{style.ENDC} {_status_badge(overview)}"
-        )
-
-        # La ruta puede ser larga en Windows; se envuelve para evitar líneas cortadas.
-        path_prefix = f" {style.BOLD}Ruta:{style.ENDC} "
-        wrapped_path = kit.wrap(str(manifest_path), max(24, ui_width - 8))
-        if wrapped_path:
-            print(path_prefix + wrapped_path[0])
-            for extra_line in wrapped_path[1:]:
-                print(" " * len(path_prefix) + extra_line)
-        else:
-            print(path_prefix + "-")
-
-        summary_text = str(overview.get("description", "-"))
-        wrapped_summary = kit.wrap(summary_text, max(24, ui_width - 12))
-        if wrapped_summary:
-            print(f" {style.BOLD}Resumen:{style.ENDC} {wrapped_summary[0]}")
-            for extra_line in wrapped_summary[1:]:
-                print(" " * 10 + extra_line)
-        else:
-            print(f" {style.BOLD}Resumen:{style.ENDC} -")
+        overview_rows = [
+            ["Manifest", os.path.basename(manifest_path)],
+            ["Estado", snapshot_status_text(overview)],
+            ["Ruta", str(manifest_path)],
+            ["Resumen", str(overview.get("description", "-"))],
+        ]
+        for line in _table_lines(["Campo", "Valor"], overview_rows, width=ui_width):
+            print(line)
         print(divider)
 
         config = cast(dict[str, Any] | None, overview.get("config"))
@@ -1039,78 +1073,49 @@ def _show_manifest_overview_screen(
             schema_name = str(config.get("schema_name") or "-")
             iterations_value = safe_positive_int(config.get("iterations_per_image"), default=1)
             seed_value = safe_positive_int(config.get("seed"), default=42)
-            print(
-                f" {style.BOLD}Config:{style.ENDC} "
-                f"schema={schema_name}  {style.DIM}|{style.ENDC}  "
-                f"iteraciones={iterations_value}x  {style.DIM}|{style.ENDC}  seed={seed_value}"
-            )
+            config_rows = [
+                ["Schema", schema_name],
+                ["Iteraciones", f"{iterations_value}x"],
+                ["Seed", str(seed_value)],
+                ["Variantes", str(len(cast(list[dict[str, Any]], config.get('model_variants') or [])))],
+            ]
+            for line in _table_lines(["Config", "Valor"], config_rows, width=ui_width):
+                print(line)
             print(divider)
 
         runs = cast(list[dict[str, Any]], overview.get("runs") or [])
         if runs:
             print(f" {style.BOLD}{style.OKCYAN}Estado por variante{style.ENDC}")
 
-            # En terminales estrechas cambia a layout en dos líneas para no truncar en exceso.
-            compact_mode = ui_width < 110
-            if not compact_mode:
-                variant_col = max(26, int(ui_width * 0.36))
-                schema_col = max(22, int(ui_width * 0.28))
-                status_col = 10
-                ok_col = 12
-                pending_col = 9
-
-                header_line = (
-                    f" {'VARIANTE':<{variant_col}} "
-                    f"{'SCHEMA':<{schema_col}} "
-                    f"{'STATUS':<{status_col}} "
-                    f"{'OK/TOTAL':>{ok_col}} "
-                    f"{'PEND':>{pending_col}}"
+            variant_rows: list[list[str]] = []
+            for run in runs:
+                model = str(run.get("model") or "-")
+                schema_exec = str(run.get("schema_exec_name") or "-")
+                snapshot = cast(dict[str, Any], run.get("snapshot") or {})
+                total = int(snapshot.get("total", 0))
+                ok_count = int(snapshot.get("ok", 0))
+                pending = int(snapshot.get("pending", 0))
+                errors = int(snapshot.get("errors", 0))
+                completion_pct = f"{(100.0 * ok_count / total):.1f}%" if total > 0 else "0.0%"
+                variant_rows.append(
+                    [
+                        variant_label(model, bool(run.get("include_reasoning"))),
+                        schema_exec,
+                        snapshot_status_text(snapshot),
+                        f"{ok_count}/{total}",
+                        str(pending),
+                        str(errors),
+                        completion_pct,
+                    ]
                 )
-                print(f" {style.DIM}{header_line}{style.ENDC}")
-                print(f" {style.DIM}{'-' * max(40, ui_width)}{style.ENDC}")
 
-                for run in runs:
-                    model = str(run.get("model") or "-")
-                    schema_exec = str(run.get("schema_exec_name") or "-")
-                    snapshot = cast(dict[str, Any], run.get("snapshot") or {})
-                    variant_text = _truncate(
-                        variant_label(model, bool(run.get("include_reasoning"))),
-                        variant_col,
-                    )
-                    schema_text = _truncate(schema_exec, schema_col)
-                    status_text = _status_badge(snapshot)
-                    ok_text = f"{int(snapshot.get('ok', 0))}/{int(snapshot.get('total', 0))}"
-                    pending_text = str(int(snapshot.get("pending", 0)))
-
-                    print(
-                        f" {variant_text:<{variant_col}} "
-                        f"{schema_text:<{schema_col}} "
-                        f"{status_text:<{status_col}} "
-                        f"{ok_text:>{ok_col}} "
-                        f"{pending_text:>{pending_col}}"
-                    )
-            else:
-                print(f" {style.DIM}(modo compacto por ancho de terminal){style.ENDC}")
-                print(f" {style.DIM}{'-' * max(40, ui_width)}{style.ENDC}")
-                for run in runs:
-                    model = str(run.get("model") or "-")
-                    schema_exec = str(run.get("schema_exec_name") or "-")
-                    snapshot = cast(dict[str, Any], run.get("snapshot") or {})
-
-                    variant_text = _truncate(
-                        variant_label(model, bool(run.get("include_reasoning"))),
-                        max(24, ui_width - 4),
-                    )
-                    schema_text = _truncate(schema_exec, max(24, ui_width - 4))
-                    ok_text = f"{int(snapshot.get('ok', 0))}/{int(snapshot.get('total', 0))}"
-                    pending_text = str(int(snapshot.get("pending", 0)))
-
-                    print(f" {style.BOLD}• {variant_text}{style.ENDC}")
-                    print(
-                        f"   schema={schema_text} | status={_status_badge(snapshot)} | "
-                        f"ok={ok_text} | pending={pending_text}"
-                    )
-                    print(f" {style.DIM}{'-' * max(24, ui_width - 2)}{style.ENDC}")
+            for line in _table_lines(
+                ["Variante", "Schema", "Estado", "OK/TOTAL", "Pend", "Err", "%"],
+                variant_rows,
+                width=ui_width,
+                status_col=2,
+            ):
+                print(line)
 
             print(divider)
         else:

@@ -592,13 +592,20 @@ def main(model_path: str | None = None) -> int:
         return 1
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Smoke Test VLM LM Studio (4 imágenes + validación automática)")
+def build_parser() -> argparse.ArgumentParser:
+    """Construye el parser CLI del smoke test."""
+    parser = argparse.ArgumentParser(
+        description="Smoke Test VLM LM Studio (4 imágenes + validación automática)"
+    )
     parser.add_argument(
         "--model_path",
         type=str,
         default=None,
         help="ID/tag del modelo disponible en LM Studio (compatibilidad con scripts existentes)",
     )
-    arguments = parser.parse_args()
+    return parser
+
+
+if __name__ == "__main__":
+    arguments = build_parser().parse_args()
     sys.exit(main(model_path=arguments.model_path))

@@ -46,8 +46,8 @@ def _build_partial_metrics_line(summary: dict[str, object]) -> str:
     duration = cast(dict[str, object], summary.get("total_duration") or {})
     return (
         "Promedios parciales: "
-        f"TTFT={_format_metric_value(ttft.get('avg'), suffix=' s')} | "
-        f"TPS={_format_metric_value(tps.get('avg'))} | "
+        f"TTFT={_format_metric_value(ttft.get('avg'), suffix=' s')} │ "
+        f"TPS={_format_metric_value(tps.get('avg'))} │ "
         f"latencia={_format_metric_value(duration.get('avg'), suffix=' s')}"
     )
 
@@ -529,12 +529,450 @@ def _build_recent_record_lines(
     """
     if not records:
         return [empty_message]
-    lines: list[str] =[]
-    for record in records:
-        # Aquí se formatean usando el ancho exacto que tenga la terminal ahora mismo
-        lines.extend(_format_recent_status_lines(kit, record, truncate=truncate))
-        lines.append(_recent_record_separator(kit, ui_width=ui_width))
-    return lines
+
+    width = kit.width() if ui_width is None else int(ui_width)
+    table_menu_fn = getattr(kit, "table_menu", None)
+    table_column_cls = getattr(kit, "TableColumn", None)
+    table_row_cls = getattr(kit, "TableRow", None)
+    table_cell_cls = getattr(kit, "TableCell", None)
+
+    def _clip_inline(text: str, max_len: int) -> str:
+        value = str(text or "").replace("\n", " ").strip()
+        if max_len <= 0 or len(value) <= max_len:
+            return value
+        if max_len <= 1:
+            return value[:max_len]
+        return value[: max_len - 1] + "…"
+
+    def _status_cell(status_value: str) -> tuple[str, str]:
+        if status_value == "ok":
+            return "✓ OK", "OKGREEN"
+        if status_value == "invalid":
+            return "⚠ WARN", "WARNING"
+        return "✗ FAIL", "FAIL"
+
+    def _ordered_payload_items(payload: dict[str, object]) -> list[str]:
+        ordered_keys = [
+            "polyp_detected",
+            "prediction",
+            "label",
+            "class",
+            "confidence_score",
+            "score",
+            "reasoning",
+            "justification",
+            "analysis",
+            "response_preview",
+            "message",
+        ]
+        lines: list[str] = []
+        seen: set[str] = set()
+        for key in ordered_keys:
+            value = payload.get(key)
+            if value in (None, ""):
+                continue
+            seen.add(key)
+            if key == "polyp_detected":
+                lines.append(f"{key}={'Sí' if bool(value) else 'No'}")
+            else:
+                lines.append(f"{key}={_stringify_payload_value(value)}")
+
+        for key, value in payload.items():
+            if key in seen or value in (None, ""):
+                continue
+            lines.append(f"{key}={_stringify_payload_value(value)}")
+        return lines
+
+    metric_keys = {
+        "ttft_seconds",
+        "tokens_per_second",
+        "total_duration_seconds",
+        "generation_duration_seconds",
+        "confidence_score",
+        "score",
+        "prompt_tokens",
+        "completion_tokens",
+        "reasoning_tokens",
+    }
+
+    def _is_metric_line(value: str) -> bool:
+        key = value.split("=", 1)[0].strip().lower()
+        return key in metric_keys
+
+    def _allocate_non_metric_line_budget(
+        values: list[str],
+        *,
+        max_total_lines: int,
+        max_lines_per_field: int,
+        wrap_width: int,
+    ) -> list[int]:
+        """Distribuye de forma justa un presupuesto global de líneas no métricas.
+
+        Estrategia:
+        1) Asigna 1 línea inicial por campo (si hay presupuesto).
+        2) Reparte el resto en rondas (round-robin) hasta cubrir necesidades
+           o agotar presupuesto.
+        """
+        if not values:
+            return []
+
+        needed = [min(max_lines_per_field, max(1, len(_wrap_text(kit, value, wrap_width)))) for value in values]
+        allocated = [0 for _ in values]
+        budget = max(0, max_total_lines)
+
+        for idx, need in enumerate(needed):
+            if budget <= 0:
+                break
+            if need > 0:
+                allocated[idx] = 1
+                budget -= 1
+
+        while budget > 0:
+            progressed = False
+            for idx, need in enumerate(needed):
+                if allocated[idx] < need and budget > 0:
+                    allocated[idx] += 1
+                    budget -= 1
+                    progressed = True
+                if budget <= 0:
+                    break
+            if not progressed:
+                break
+
+        return allocated
+
+    def _clip_to_lines(value: str, *, max_width: int, max_lines: int) -> str:
+        """Recorta texto a un número máximo de líneas envueltas."""
+        wrapped = _wrap_text(kit, value, max_width)
+        if len(wrapped) <= max_lines:
+            return "\n".join(wrapped)
+        kept = wrapped[:max_lines]
+        if kept:
+            last = kept[-1]
+            if len(last) >= max_width:
+                kept[-1] = (last[: max(1, max_width - 1)] + "…")[:max_width]
+            else:
+                kept[-1] = last + "…"
+        return "\n".join(kept)
+
+    merged_rows: list[tuple[str, str, str, str]] = []
+    detailed_rows: list[tuple[str, list[tuple[str, bool, int | None, str | None]], str]] = []
+
+    def _recent_payload_summary(payload: dict[str, object], *, limit: int = 4) -> str:
+        summary_order = [
+            "polyp_detected",
+            "prediction",
+            "label",
+            "class",
+            "confidence_score",
+            "score",
+            "ttft_seconds",
+            "tokens_per_second",
+            "generation_duration_seconds",
+            "total_duration_seconds",
+        ]
+        summary_parts: list[str] = []
+        used_keys: set[str] = set()
+        for key in summary_order:
+            value = payload.get(key)
+            if value in (None, ""):
+                continue
+            used_keys.add(key)
+            if key == "polyp_detected":
+                value_text = "Sí" if bool(value) else "No"
+            elif key in {"ttft_seconds", "tokens_per_second", "generation_duration_seconds", "total_duration_seconds"}:
+                suffix = " s" if key != "tokens_per_second" else ""
+                value_text = _format_metric_value(value, suffix=suffix)
+            else:
+                value_text = _stringify_payload_value(value)
+            summary_parts.append(f"{key}={value_text}")
+            if len(summary_parts) >= limit:
+                break
+
+        if summary_parts:
+            return " · ".join(summary_parts)
+
+        for key, value in payload.items():
+            if value in (None, ""):
+                continue
+            if key in used_keys:
+                continue
+            return f"{key}={_stringify_payload_value(value)}"
+        return "Resultado válido"
+
+    def _recent_payload_detail(record: dict[str, object], payload: dict[str, object] | None, *, status: str) -> str:
+        if status == "invalid":
+            message = str(record.get("validation_error") or record.get("message") or "JSON inválido")
+            if payload:
+                return f"{message} · {_recent_payload_summary(payload, limit=2)}"
+            return message
+        if status != "ok":
+            return str(record.get("error") or "Error desconocido")
+
+        if payload:
+            verbose_parts: list[str] = []
+            for key in ("reasoning", "justification", "analysis", "response_preview", "message"):
+                value = payload.get(key)
+                if value in (None, ""):
+                    continue
+                verbose_parts.append(f"{key}={_stringify_payload_value(value)}")
+
+            extra_parts: list[str] = []
+            for key, value in payload.items():
+                if key in {"polyp_detected", "prediction", "label", "class", "confidence_score", "score", "ttft_seconds", "tokens_per_second", "generation_duration_seconds", "total_duration_seconds", "reasoning", "justification", "analysis", "response_preview", "message"}:
+                    continue
+                if value in (None, ""):
+                    continue
+                extra_parts.append(f"{key}={_stringify_payload_value(value)}")
+                if len(extra_parts) >= 2:
+                    break
+
+            if verbose_parts:
+                if extra_parts:
+                    verbose_parts.append(" · ".join(extra_parts))
+                return "\n".join(verbose_parts)
+
+            if extra_parts:
+                return " · ".join(extra_parts)
+
+        if record.get("response_preview") is not None:
+            return str(record.get("response_preview"))
+        return "Resultado válido"
+
+    for index, record in enumerate(records):
+        status = str(record.get("status") or "unknown")
+        status_cell, status_color = _status_cell(status)
+
+        image_name = str(record.get("image_name") or os.path.basename(str(record.get("image_path") or "N/D")))
+        payload = cast(dict[str, object] | None, record.get("payload"))
+
+        summary_text = _recent_payload_summary(payload or {}) if payload else "Resultado válido"
+        detail_text = _recent_payload_detail(record, payload, status=status)
+
+        if truncate:
+            summary_text = _clip_inline(summary_text, max(28, width // 4))
+            detail_text = _clip_inline(detail_text, max(48, width // 2))
+
+        merged_rows.append((f"{status_cell} {image_name}", summary_text, detail_text, status_color))
+
+        field_rows: list[str] = []
+        if status == "ok" and payload:
+            field_rows.extend(_ordered_payload_items(payload))
+            if record.get("ttft_seconds") is not None:
+                field_rows.append(f"ttft_seconds={_format_metric_value(record.get('ttft_seconds'), suffix=' s')}")
+            if record.get("tokens_per_second") is not None:
+                field_rows.append(f"tokens_per_second={_format_metric_value(record.get('tokens_per_second'))}")
+            if record.get("total_duration_seconds") is not None:
+                field_rows.append(
+                    f"total_duration_seconds={_format_metric_value(record.get('total_duration_seconds'), suffix=' s')}"
+                )
+        elif status == "invalid":
+            field_rows.append(f"error={str(record.get('validation_error') or record.get('message') or 'JSON inválido')}")
+            if payload:
+                field_rows.extend(_ordered_payload_items(payload))
+        else:
+            field_rows.append(f"error={str(record.get('error') or 'Error desconocido')}")
+
+        if truncate and len(field_rows) > 14:
+            field_rows = field_rows[:14]
+            field_rows.append("…=Se ocultaron campos adicionales")
+
+        response_wrap_width = max(28, int(width * 0.66))
+        non_metric_indices = [idx for idx, value in enumerate(field_rows) if not _is_metric_line(value)]
+        non_metric_values = [field_rows[idx] for idx in non_metric_indices]
+        non_metric_alloc = (
+            _allocate_non_metric_line_budget(
+                non_metric_values,
+                max_total_lines=15,
+                max_lines_per_field=5,
+                wrap_width=response_wrap_width,
+            )
+            if truncate
+            else [5 for _ in non_metric_values]
+        )
+        per_field_non_metric_budget = {
+            non_metric_indices[idx]: non_metric_alloc[idx]
+            for idx in range(len(non_metric_indices))
+        }
+
+        normalized_fields: list[tuple[str, bool, int | None, str | None]] = []
+        has_metric = False
+        has_non_metric = False
+        for idx, value in enumerate(field_rows):
+            is_metric = _is_metric_line(value)
+            if is_metric:
+                has_metric = True
+                if truncate:
+                    normalized_fields.append((_clip_inline(value, max(32, width - 48)), True, 1, None))
+                else:
+                    normalized_fields.append((value, True, None, None))
+                continue
+
+            has_non_metric = True
+            allowed_lines = per_field_non_metric_budget.get(idx, 0)
+            if truncate:
+                if allowed_lines <= 0:
+                    normalized_fields.append(("…", False, 1, "DIM"))
+                else:
+                    normalized_fields.append((value, False, min(5, allowed_lines), None))
+            else:
+                normalized_fields.append((value, False, None, None))
+
+        # Subfilas para separar claramente contenido y métricas en Respuesta.
+        non_metric_fields = [item for item in normalized_fields if not item[1]]
+        metric_fields = [item for item in normalized_fields if item[1]]
+        grouped_fields: list[tuple[str, bool, int | None, str | None]] = []
+        if non_metric_fields:
+            grouped_fields.append(("─── contenido ───", False, 1, "DIM"))
+            grouped_fields.extend(non_metric_fields)
+        if metric_fields:
+            grouped_fields.append(("─── métricas ───", False, 1, "DIM"))
+            grouped_fields.extend(metric_fields)
+        normalized_fields = grouped_fields
+
+        # Zebra striping blanco/gris para filas de respuesta (None/DIM)
+        zebra_idx = 0
+        zebra_fields: list[tuple[str, bool, int | None, str | None]] = []
+        for value, is_metric, max_lines, row_color in normalized_fields:
+            if value in ("─── contenido ───", "─── métricas ───"):
+                zebra_fields.append((value, is_metric, max_lines, "DIM"))
+                continue
+            color = None if (zebra_idx % 2 == 0) else "DIM"
+            zebra_fields.append((value, is_metric, max_lines, color))
+            zebra_idx += 1
+        normalized_fields = zebra_fields
+        detailed_rows.append((f"{status_cell} {image_name}", normalized_fields, status_color))
+
+    if callable(table_menu_fn) and table_column_cls is not None and table_row_cls is not None:
+        # Preferred view: one block per image using merged rows (rowspan)
+        columns = [
+            table_column_cls(label="Imagen", width_ratio=0.30, min_width=20),
+            table_column_cls(label="Respuesta", width_ratio=0.70, min_width=40),
+        ]
+
+        table_rows: list[Any] = []
+        if table_cell_cls is not None:
+            for image_cell_text, fields, image_color in detailed_rows:
+                row_span = max(1, len(fields))
+                first_value, _first_is_metric, first_max_lines, first_color = fields[0]
+                first_image_cell = table_cell_cls(text=image_cell_text, rowspan=row_span, color=image_color)
+                first_response_cell = table_cell_cls(
+                    text=first_value,
+                    max_lines=first_max_lines,
+                    color=first_color,
+                )
+                table_rows.append(table_row_cls(cells=[first_image_cell, first_response_cell]))
+                for value, _is_metric, max_lines, row_color in fields[1:]:
+                    response_cell = table_cell_cls(
+                        text=value,
+                        max_lines=max_lines,
+                        color=row_color,
+                    )
+                    table_rows.append(table_row_cls(cells=[response_cell]))
+                table_rows.append(table_row_cls(cells=["", ""]))
+            if table_rows:
+                table_rows.pop()
+        else:
+            for image_cell_text, fields, image_color in detailed_rows:
+                fallback_wrap_width = max(28, int(width * 0.66))
+                for idx, (value, is_metric, max_lines, row_color) in enumerate(fields):
+                    if truncate and max_lines is not None:
+                        rendered_value = _clip_to_lines(value, max_width=fallback_wrap_width, max_lines=max(1, max_lines))
+                    elif truncate and is_metric:
+                        rendered_value = _clip_inline(value, max(32, width - 48))
+                    else:
+                        rendered_value = value
+                    table_rows.append(
+                        table_row_cls(
+                            cells=[image_cell_text if idx == 0 else "", rendered_value],
+                            cell_colors=[image_color if idx == 0 else None, row_color],
+                        )
+                    )
+                table_rows.append(table_row_cls(cells=["", ""]))
+            if table_rows:
+                table_rows.pop()
+
+        rendered = table_menu_fn(
+            columns,
+            table_rows,
+            interactive=False,
+            return_lines=True,
+            width=width,
+            max_cell_lines=(5 if truncate else False),
+        )
+        if isinstance(rendered, list):
+            return [str(line) for line in rendered]
+
+    fallback_lines: list[str] = []
+    for left, summary, detail, _color in merged_rows:
+        fallback_lines.append(f"  {left} │ {summary} │ {detail}")
+    return fallback_lines
+
+
+def _render_table_lines(
+    kit: "UIKit",
+    headers: list[str],
+    rows: list[list[str]],
+    *,
+    ui_width: int | None = None,
+    status_column_index: int | None = None,
+) -> list[str]:
+    """Renderiza tablas no interactivas reutilizando el motor de menu_kit."""
+    if not rows:
+        return ["  Sin datos."]
+
+    width = kit.width() if ui_width is None else int(ui_width)
+    table_menu_fn = getattr(kit, "table_menu", None)
+    table_column_cls = getattr(kit, "TableColumn", None)
+    table_row_cls = getattr(kit, "TableRow", None)
+
+    if not (callable(table_menu_fn) and table_column_cls is not None and table_row_cls is not None):
+        label_width = max(12, min(30, max(len(h) for h in headers)))
+        value_width = max(20, width - label_width - 10)
+        fallback_lines: list[str] = []
+        for row in rows:
+            left = str(row[0]) if row else ""
+            right = " │ ".join(str(cell) for cell in row[1:])
+            wrapped = _wrap_text(kit, right, value_width)
+            fallback_lines.append(f"  {left:<{label_width}} : {wrapped[0] if wrapped else ''}")
+            for extra in wrapped[1:]:
+                fallback_lines.append(f"  {'':<{label_width}}   {extra}")
+        return fallback_lines
+
+    ratio = 1.0 / max(1, len(headers))
+    columns = [
+        table_column_cls(label=header, width_ratio=ratio, min_width=10)
+        for header in headers
+    ]
+
+    table_rows: list = []
+    for row in rows:
+        normalized = [str(cell) for cell in row]
+        colors: list[str | None] | None = None
+        if status_column_index is not None and 0 <= status_column_index < len(normalized):
+            status_token = normalized[status_column_index].upper()
+            if "OK" in status_token:
+                color_name = "OKGREEN"
+            elif "WARN" in status_token:
+                color_name = "WARNING"
+            else:
+                color_name = "FAIL"
+            typed_colors: list[str | None] = [None for _ in normalized]
+            typed_colors[status_column_index] = color_name
+            colors = typed_colors
+        table_rows.append(table_row_cls(cells=normalized, cell_colors=colors))
+
+    rendered = table_menu_fn(
+        columns,
+        table_rows,
+        interactive=False,
+        return_lines=True,
+        width=width,
+        max_cell_lines=False,
+    )
+    if isinstance(rendered, list):
+        return [str(line) for line in rendered]
+    return ["  Sin datos."]
 
 
 def _make_live_panel(
@@ -671,33 +1109,16 @@ def _build_summary_lines(
     Returns:
         Lista de líneas compactas.
     """
-    if not rows:
-        return ["  Sin datos."]
-    label_width = min(28, max(len(str(name)) for name, _, _ in rows))
-    width = kit.width() if ui_width is None else int(ui_width)
-    value_width = max(20, min(width - label_width - 16, 60))
-    lines: list[str] =[]
-    dim = _style_token(kit, "DIM")
-    endc = _style_token(kit, "ENDC")
+    table_rows = []
     for name, value, status in rows:
-        name_lines = _wrap_text(kit, str(name), label_width)
-        value_lines = _wrap_text(kit, str(value), value_width)
-        row_count = max(len(name_lines), len(value_lines))
-        icon = _status_icon(status)
-        status_text = (
-            f"{_status_color(kit, status)}{_style_token(kit, 'BOLD')}{icon}{endc}"
-            f" {_status_color(kit, status)}{status:<4}{endc}"
-        )
-        for index in range(row_count):
-            left = name_lines[index] if index < len(name_lines) else ""
-            right = value_lines[index] if index < len(value_lines) else ""
-            suffix = status_text if index == 0 else "      "
-            lines.append(
-                f"  {dim}{left:<{label_width}}{endc}"
-                f"  {dim}:{endc}  "
-                f"{right:<{value_width}}  {suffix}"
-            )
-    return lines
+        table_rows.append([str(name), str(value), f"{_status_icon(status)} {status}"])
+    return _render_table_lines(
+        kit,
+        ["Campo", "Valor", "Estado"],
+        table_rows,
+        ui_width=ui_width,
+        status_column_index=2,
+    )
 
 
 def _build_named_value_lines(
@@ -717,24 +1138,13 @@ def _build_named_value_lines(
     Returns:
         Lista de líneas compactas.
     """
-    visible_rows =[(str(name), str(value)) for name, value in rows if value not in (None, "")]
-    if not visible_rows:
-        return ["  Sin datos."]
-    label_width = min(28, max(len(name) for name, _ in visible_rows))
-    width = kit.width() if ui_width is None else int(ui_width)
-    value_width = max(20, min(width - label_width - 8, 70))
-    lines: list[str] =[]
-    dim = _style_token(kit, "DIM")
-    endc = _style_token(kit, "ENDC")
-    for name, value in visible_rows:
-        value_lines = _wrap_text(kit, value, value_width)
-        for index, chunk in enumerate(value_lines):
-            if index == 0:
-                prefix = f"  {dim}{name:<{label_width}}{endc}  {dim}:{endc}  "
-            else:
-                prefix = f"  {'':<{label_width}}     "
-            lines.append(prefix + chunk)
-    return lines
+    visible_rows = [[str(name), str(value)] for name, value in rows if value not in (None, "")]
+    return _render_table_lines(
+        kit,
+        ["Campo", "Valor"],
+        visible_rows,
+        ui_width=ui_width,
+    )
 
 
 def _normalize_final_section_title(title: str) -> str:

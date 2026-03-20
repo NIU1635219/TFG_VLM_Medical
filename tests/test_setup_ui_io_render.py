@@ -184,14 +184,36 @@ def test_wait_for_any_key_discards_residual_enter_before_return(monkeypatch, cap
     assert fake_clock["value"] >= 0.16
 
 
-def test_recent_record_separator_uses_frame_width():
+def test_recent_record_lines_use_table_renderer_with_frame_width():
     class _Kit:
         class style:
             DIM = ""
             ENDC = ""
+            OKGREEN = ""
+            WARNING = ""
+            FAIL = ""
+            BOLD = ""
+
+        class TableColumn:
+            def __init__(self, label: str, width_ratio: float = 0.5, min_width: int = 8):
+                self.label = label
+                self.width_ratio = width_ratio
+                self.min_width = min_width
+
+        class TableRow:
+            def __init__(self, cells, cell_colors=None):
+                self.cells = cells
+                self.cell_colors = cell_colors
 
         def width(self) -> int:
             return 120
+
+        def table_menu(self, _columns, rows, **kwargs):
+            width = int(kwargs.get("width") or self.width())
+            return [
+                f"W={width}",
+                *[" | ".join(str(cell) for cell in row.cells) for row in rows],
+            ]
 
     lines = _build_recent_record_lines(
         _Kit(),
@@ -200,4 +222,5 @@ def test_recent_record_separator_uses_frame_width():
         ui_width=40,
     )
 
-    assert any(line == "  " + "─" * 36 for line in lines)
+    assert lines[0] == "W=40"
+    assert any("✓ OK a.tif" in line for line in lines)

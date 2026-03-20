@@ -30,6 +30,7 @@ from .test_dashboards_ui import (
     _rel_probe_path,
     _render_final_sections_screen,
     _render_live_dashboard,
+    _render_table_lines,
     _should_show_progress_bar,
     _standard_final_intro,
 )
@@ -190,8 +191,59 @@ def _select_models_to_execute(
         Returns:
             str: Texto informativo para la reejecución.
         """
-        lines: list[str] = []
-        lines.append("Resumen actual por modelo:")
+        table_menu_fn = getattr(kit, "table_menu", None)
+        table_column_cls = getattr(kit, "TableColumn", None)
+        table_row_cls = getattr(kit, "TableRow", None)
+
+        if callable(table_menu_fn) and table_column_cls is not None and table_row_cls is not None:
+            rows: list[Any] = []
+            for model in queued_models:
+                snapshot = snapshot_for(model)
+                status = snapshot_status_text(snapshot)
+                ok = int(snapshot.get("ok", 0))
+                total = int(snapshot.get("total", 0))
+                pending = int(snapshot.get("pending", 0))
+                rows.append(
+                    table_row_cls(
+                        cells=[
+                            display_label_for(model),
+                            status,
+                            f"{ok}/{total}",
+                            str(pending),
+                        ],
+                        cell_colors=[
+                            None,
+                            "OKGREEN" if status == "COMPLETO" else ("WARNING" if status == "PARCIAL" else "FAIL"),
+                            None,
+                            None,
+                        ],
+                    )
+                )
+
+            rendered = table_menu_fn(
+                [
+                    table_column_cls(label="Modelo", width_ratio=0.50, min_width=24),
+                    table_column_cls(label="Estado", width_ratio=0.20, min_width=10),
+                    table_column_cls(label="OK/TOTAL", width_ratio=0.15, min_width=10),
+                    table_column_cls(label="Pend", width_ratio=0.15, min_width=8),
+                ],
+                rows,
+                interactive=False,
+                return_lines=True,
+                width=kit.width(),
+                max_cell_lines=False,
+            )
+            if isinstance(rendered, list):
+                return "\n".join(
+                    [
+                        "Resumen actual por modelo:",
+                        *[str(line) for line in rendered],
+                        "",
+                        "Regla por defecto: se ejecutan los pendientes/parciales; los completos solo si los incluyes.",
+                    ]
+                )
+
+        lines: list[str] = ["Resumen actual por modelo:"]
         lines.extend(
             [
                 "  - " + snapshot_summary_line(
@@ -673,21 +725,22 @@ def _render_batch_final_summary(
     Returns:
         Callable[[int], None]: Callback de re-render para cambios de ancho.
     """
-    def _format_metric_triplet(stats: dict[str, Any], *, suffix: str = "") -> str:
-        """
-        Formatea min/media/max para una métrica agregada.
-        
-        Args:
-            stats (dict[str, Any]): Estadísticas de la métrica.
-            suffix (str): Sufijo a añadir al valor.
-            
-        Returns:
-            str: Texto formateado con min/media/max.
-        """
-        return (
-            f"min={_format_metric_value(stats.get('min'), suffix=suffix)} | "
-            f"media={_format_metric_value(stats.get('avg'), suffix=suffix)} | "
-            f"max={_format_metric_value(stats.get('max'), suffix=suffix)}"
+    def _append_metric_subcolumns(
+        rows: list[tuple[str, str, str, str, str]],
+        *,
+        label: str,
+        stats: dict[str, Any],
+        suffix: str = "",
+    ) -> None:
+        """Añade métricas en subcolumnas Min/Media/Max."""
+        rows.append(
+            (
+                label,
+                _format_metric_value(stats.get("min"), suffix=suffix),
+                _format_metric_value(stats.get("avg"), suffix=suffix),
+                _format_metric_value(stats.get("max"), suffix=suffix),
+                "OK",
+            )
         )
 
     queue_results = context.queue_results
@@ -732,6 +785,7 @@ def _render_batch_final_summary(
         ("Cobertura global", f"{total_ok}/{total_items} imágenes exportadas", global_warn),
         ("Pendientes globales", str(total_pending), global_warn),
     ]
+    execution_metric_rows: list[tuple[str, str, str, str, str]] = []
     if primary_output:
         execution_rows.append(("Salida JSONL", rel_path(primary_output), "OK"))
         summary_payload = cast(dict[str, Any], aggregate_summaries.get(primary_output) or {})
@@ -751,53 +805,131 @@ def _render_batch_final_summary(
             ttft_stats = cast(dict[str, Any], global_metrics.get("ttft_seconds") or {})
             tps_stats = cast(dict[str, Any], global_metrics.get("tokens_per_second") or {})
             execution_rows.append(("Acierto global", global_accuracy, "OK"))
-            execution_rows.append(("Duración global", _format_metric_triplet(duration_stats, suffix=" s"), "OK"))
-            execution_rows.append(("TTFT global", _format_metric_triplet(ttft_stats, suffix=" s"), "OK"))
-            execution_rows.append(("TPS global", _format_metric_triplet(tps_stats), "OK"))
+            _append_metric_subcolumns(execution_metric_rows, label="Duración global", stats=duration_stats, suffix=" s")
+            _append_metric_subcolumns(execution_metric_rows, label="TTFT global", stats=ttft_stats, suffix=" s")
+            _append_metric_subcolumns(execution_metric_rows, label="TPS global", stats=tps_stats)
 
-    execution_lines = [f"  {name:<18} : {value}" for name, value, _status in execution_rows]
+    def _table_lines(
+        headers: list[str],
+        rows: list[list[str]],
+        *,
+        width: int,
+        status_col: int | None = None,
+        max_cell_lines: int | bool | None = 1,
+    ) -> list[str]:
+        """Renderiza tabla estática con fallback seguro cuando faltan primitivas en tests."""
+        if not rows:
+            return ["  Sin datos."]
 
-    colored_state_lines: list[str] = []
-    for model_name, _model_id, _include_reasoning, final_snapshot, _resolved_output in queue_rows:
-        status_plain = snapshot_status_text(final_snapshot)
-        colored_model_name = colorize_model(kit.style, model_name, final_snapshot)
-        colored_state_lines.append(f"  - {colored_model_name} · {status_plain}")
+        # Leave horizontal breathing room inside final screens to avoid hard wraps.
+        table_width = max(36, int(width) - 6)
+
+        table_menu_fn = getattr(kit, "table_menu", None)
+        table_column_cls = getattr(kit, "TableColumn", None)
+        table_row_cls = getattr(kit, "TableRow", None)
+        if not (callable(table_menu_fn) and table_column_cls is not None and table_row_cls is not None):
+            lines: list[str] = []
+            for row in rows:
+                lines.append("  " + " │ ".join(str(cell) for cell in row))
+            return lines
+
+        # Heurística simple: columnas de valor largo se llevan más ancho.
+        weight_map: dict[str, int] = {
+            "Modelo": 3,
+            "Variante": 2,
+            "Valor": 4,
+            "Campo": 2,
+            "Métrica": 3,
+            "Min": 1,
+            "Media": 1,
+            "Max": 1,
+            "Estado": 1,
+            "OK/TOT": 1,
+            "ACC": 1,
+            "Pend": 1,
+        }
+        weights = [weight_map.get(h, 1) for h in headers]
+        total = max(1, sum(weights))
+
+        min_width_map: dict[str, int] = {
+            "Modelo": 14,
+            "Variante": 12,
+            "Estado": 9,
+            "OK/TOT": 7,
+            "ACC": 7,
+            "Pend": 5,
+            "Campo": 10,
+            "Valor": 18,
+            "Métrica": 12,
+            "Min": 8,
+            "Media": 8,
+            "Max": 8,
+        }
+
+        columns = [
+            table_column_cls(
+                label=header,
+                width_ratio=(weight / total),
+                min_width=min_width_map.get(header, 8),
+            )
+            for header, weight in zip(headers, weights)
+        ]
+
+        table_rows: list[Any] = []
+        for row in rows:
+            normalized = [str(cell) for cell in row]
+            colors: list[str | None] | None = None
+            if status_col is not None and 0 <= status_col < len(normalized):
+                token = normalized[status_col].upper()
+                color_name = "OKGREEN" if "COMPLETO" in token or "OK" in token else "WARNING" if "PARCIAL" in token or "WARN" in token else "FAIL"
+                typed_colors: list[str | None] = [None for _ in normalized]
+                typed_colors[status_col] = color_name
+                colors = typed_colors
+            table_rows.append(table_row_cls(cells=normalized, cell_colors=colors))
+
+        rendered = table_menu_fn(
+            columns,
+            table_rows,
+            interactive=False,
+            return_lines=True,
+            width=table_width,
+            max_cell_lines=max_cell_lines,
+        )
+        if isinstance(rendered, list):
+            return [str(line) for line in rendered]
+        return ["  Sin datos."]
 
     def _redraw_final_batch_screen(ui_width: int) -> None:
         """Re-renderiza la pantalla final del batch runner para el ancho indicado."""
-        safe_width = max(80, int(ui_width))
-        model_w = max(14, min(24, int(safe_width * 0.24)))
-        variant_w = 16
-        state_w = 10
-        progress_w = 8
-        acc_w = 15
-        pending_w = 6
-        table_padding = 28
-        jsonl_w = max(
-            14,
-            safe_width - (model_w + variant_w + state_w + progress_w + acc_w + pending_w + table_padding),
+        safe_width = int(ui_width)
+        execution_lines = _table_lines(
+            ["Campo", "Valor", "Estado"],
+            [[name, value, status] for name, value, status in execution_rows],
+            width=safe_width,
+            status_col=2,
+            max_cell_lines=True,
         )
 
-        header = (
-            f"  {'Modelo':<{model_w}} │ "
-            f"{'Variante':<{variant_w}} │ "
-            f"{'Estado':<{state_w}} │ "
-            f"{'OK/TOT':>{progress_w}} │ "
-            f"{'ACC':>{acc_w}} │ "
-            f"{'Pend':>{pending_w}} │ "
-            f"{'JSONL':<{jsonl_w}}"
-        )
-        divider = (
-            f"  {'─' * model_w}─┼─"
-            f"{'─' * variant_w}─┼─"
-            f"{'─' * state_w}─┼─"
-            f"{'─' * progress_w}─┼─"
-            f"{'─' * acc_w}─┼─"
-            f"{'─' * pending_w}─┼─"
-            f"{'─' * jsonl_w}"
+        metric_lines = _table_lines(
+            ["Métrica", "Min", "Media", "Max", "Estado"],
+            [[name, mn, avg, mx, status] for name, mn, avg, mx, status in execution_metric_rows],
+            width=safe_width,
+            status_col=4,
+            max_cell_lines=1,
         )
 
-        model_table_lines: list[str] = [header, divider]
+        state_rows: list[list[str]] = []
+        for model_name, _model_id, _include_reasoning, final_snapshot, _resolved_output in queue_rows:
+            state_rows.append([model_name, snapshot_status_text(final_snapshot)])
+        colored_state_lines = _table_lines(
+            ["Variante", "Estado"],
+            state_rows,
+            width=safe_width,
+            status_col=1,
+            max_cell_lines=1,
+        )
+
+        model_rows: list[list[str]] = []
         for model_name, model_id, include_reasoning, final_snapshot, resolved_output in queue_rows:
             status_plain = snapshot_status_text(final_snapshot)
             ok_value = int(final_snapshot.get("ok", 0) or 0)
@@ -806,16 +938,24 @@ def _render_batch_final_summary(
             variant_name = variant_label(model_id, include_reasoning)
             variant_mode = "con razonamiento" if include_reasoning else "sin razonamiento"
             accuracy_text = aggregate_models_accuracy.get(variant_name, "N/D")
-            jsonl_text = rel_path(resolved_output)
-            model_table_lines.append(
-                f"  {truncate_middle(model_id, model_w):<{model_w}} │ "
-                f"{truncate_middle(variant_mode, variant_w):<{variant_w}} │ "
-                f"{status_plain:<{state_w}} │ "
-                f"{f'{ok_value}/{total_value}':>{progress_w}} │ "
-                f"{truncate_middle(accuracy_text, acc_w):>{acc_w}} │ "
-                f"{str(pending_value):>{pending_w}} │ "
-                f"{truncate_middle(jsonl_text, jsonl_w):<{jsonl_w}}"
+            model_rows.append(
+                [
+                    model_id,
+                    variant_mode,
+                    status_plain,
+                    f"{ok_value}/{total_value}",
+                    accuracy_text,
+                    str(pending_value),
+                ]
             )
+
+        model_table_lines = _table_lines(
+            ["Modelo", "Variante", "Estado", "OK/TOT", "ACC", "Pend"],
+            model_rows,
+            width=safe_width,
+            status_col=2,
+            max_cell_lines=1,
+        )
 
         if len(unique_outputs) > 1:
             model_table_lines.append("")
@@ -828,9 +968,10 @@ def _render_batch_final_summary(
             app,
             subtitle=f"BATCH RUNNER · {schema_exec_name}",
             intro=_standard_final_intro(),
-            ui_width=kit.width(),
+            ui_width=safe_width,
             sections=[
                 ("Resumen de ejecución", execution_lines),
+                ("Estadísticas globales", metric_lines),
                 ("Estado por modelo (colores)", colored_state_lines),
                 ("Resultados por modelo", model_table_lines),
             ],
@@ -1245,9 +1386,19 @@ def run_batch_runner_wrapper(
         kit.clear()
         app.print_banner()
         kit.subtitle(f"BATCH RUNNER · {queue_schema_name}")
-        kit.log(f"Manifiesto seleccionado: {selected_manifest}", "step")
-        kit.log(cast(str, manifest_overview.get("description") or "Sin descripción disponible."), "info")
-        kit.log("Ejecuciones en cola: " + " | ".join(_label_for(item) for item in queued_models), "info")
+
+        manifest_context_rows = [
+            ["Manifiesto", selected_manifest],
+            ["Descripción", cast(str, manifest_overview.get("description") or "Sin descripción disponible.")],
+            ["Ejecuciones en cola", " │ ".join(_label_for(item) for item in queued_models)],
+        ]
+        for line in _render_table_lines(
+            kit,
+            ["Campo", "Valor"],
+            manifest_context_rows,
+            ui_width=kit.width(),
+        ):
+            print(line)
 
         output_to_models: dict[str, set[str]] = {}
         output_to_schemas: dict[str, set[str]] = {}
@@ -1293,7 +1444,7 @@ def run_batch_runner_wrapper(
             colorize_model(kit.style, _label_for(model), _snapshot_for(model))
             for model in queued_models
         ]
-        kit.log("Modelos por estado: " + " | ".join(colored_queue_models), "info")
+        kit.log("Modelos por estado: " + " │ ".join(colored_queue_models), "info")
         completed_models = [
             model for model in queued_models if is_model_snapshot_complete(_snapshot_for(model))
         ]

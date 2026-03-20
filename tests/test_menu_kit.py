@@ -139,102 +139,14 @@ class TestUIKitDivider:
 
 
 # ---------------------------------------------------------------------------
-# UIKit.table — lógica de tabla integrada en el método
+# UIKit.table legacy eliminado
 # ---------------------------------------------------------------------------
 
 
-class TestUIKitTable:
-    def test_produces_box_drawing_chars(self, capsys):
+class TestUIKitTableLegacyRemoved:
+    def test_table_method_no_longer_exists(self):
         kit = _make_kit()
-        kit.table([("Python", "3.13", "OK")], width=80)
-        out = capsys.readouterr().out
-        assert "┌" in out
-        assert "│" in out
-        assert "└" in out
-
-    def test_ok_status_appears(self, capsys):
-        kit = _make_kit()
-        kit.table([("comp", "value", "OK")], width=80)
-        assert "OK" in capsys.readouterr().out
-
-    def test_warn_status_appears(self, capsys):
-        kit = _make_kit()
-        kit.table([("comp", "degraded", "WARN")], width=80)
-        assert "WARN" in capsys.readouterr().out
-
-    def test_fail_status_appears(self, capsys):
-        kit = _make_kit()
-        kit.table([("comp", "missing", "FAIL")], width=80)
-        assert "FAIL" in capsys.readouterr().out
-
-    def test_all_statuses_in_one_table(self, capsys):
-        kit = _make_kit()
-        rows = [("A", "v", "OK"), ("B", "v", "WARN"), ("C", "v", "FAIL")]
-        kit.table(rows, width=80)
-        out = capsys.readouterr().out
-        assert all(s in out for s in ["OK", "WARN", "FAIL"])
-
-    def test_cv2_aliased_to_opencv(self, capsys):
-        kit = _make_kit()
-        kit.table([("cv2", "0.4.8", "OK")], width=80)
-        assert "OpenCV" in capsys.readouterr().out
-
-    def test_llama_cpp_aliased(self, capsys):
-        kit = _make_kit()
-        kit.table([("llama_cpp", "0.2.0", "OK")], width=80)
-        assert "LlamaCPP" in capsys.readouterr().out
-
-    def test_multiple_rows_all_printed(self, capsys):
-        kit = _make_kit()
-        rows = [("A", "1", "OK"), ("B", "2", "WARN"), ("C", "3", "FAIL")]
-        kit.table(rows, width=80)
-        out = capsys.readouterr().out
-        assert all(c in out for c in ["A", "B", "C"])
-
-    def test_empty_rows_no_crash(self, capsys):
-        """tabla vacía: sólo cabecera, sin excepción."""
-        kit = _make_kit()
-        kit.table([], width=80)
-        out = capsys.readouterr().out
-        assert "┌" in out
-
-    def test_narrow_width_does_not_crash(self, capsys):
-        """Ancho mínimo (frontera): no debe lanzar error."""
-        kit = _make_kit()
-        kit.table([("comp", "val", "OK")], width=10)
-        assert capsys.readouterr().out
-
-    def test_width_32_boundary(self, capsys):
-        """Presupuesto de contenido con width=32 (mínimo de max(32, ...))."""
-        kit = _make_kit()
-        kit.table([("comp", "val", "OK")], width=32)
-        assert "OK" in capsys.readouterr().out
-
-    def test_header_columns_present(self, capsys):
-        kit = _make_kit()
-        kit.table([("comp", "val", "OK")], width=80)
-        out = capsys.readouterr().out
-        assert "Component" in out
-        assert "Status/Value" in out
-        assert "Res" in out
-
-    def test_long_component_name_no_crash(self, capsys):
-        """Nombres muy largos no deben lanzar excepción."""
-        kit = _make_kit()
-        kit.table([("A" * 200, "v", "OK")], width=80)
-        assert "OK" in capsys.readouterr().out
-
-    def test_unknown_status_no_crash(self, capsys):
-        """Estado desconocido cae en rama FAIL sin excepción."""
-        kit = _make_kit()
-        kit.table([("comp", "val", "UNKNOWN")], width=80)
-        assert "UNKNOWN" in capsys.readouterr().out
-
-    def test_width_none_uses_terminal_width(self, capsys):
-        """Sin width explícito usa self.width() sin crash."""
-        kit = _make_kit()
-        kit.table([("comp", "val", "OK")])
-        assert "OK" in capsys.readouterr().out
+        assert not hasattr(kit, "table")
 
 
 # ---------------------------------------------------------------------------

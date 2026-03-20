@@ -29,6 +29,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
     """
     from . import setup_models_ui
     from .tests_ui.batch import run_batch_runner_wrapper as run_batch_runner_screen
+    from .tests_ui.ab_experiment import run_ab_experiment_wrapper as run_ab_experiment_screen
     from .tests_ui.manifest import (
         execution_schema_name as execution_schema_name_screen,
         linked_batch_output_path as linked_batch_output_path_screen,
@@ -147,6 +148,13 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             select_model=select_model_fn,
         )
 
+    def run_ab_experiment_wrapper() -> None:
+        """Lanza el experimento A/B de prompting con autodetección desde JSONL."""
+        run_ab_experiment_screen(
+            kit,
+            app,
+        )
+
     # ------------------------------------------------------------------
     # Menú principal de tests
     # ------------------------------------------------------------------
@@ -178,6 +186,14 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             description=(
                 "Selecciona modelo y esquema Pydantic, ejecuta inferencia sobre 5 imágenes "
                 "aleatorias y valida automáticamente que las respuestas cumplan el esquema."
+            ),
+        ),
+        kit.MenuItem(
+            " Run A/B Prompting Experiment (AD)",
+            run_ab_experiment_wrapper,
+            description=(
+                "Ejecuta comparación zero-shot vs prompt asistido con Ground Truth AD "
+                "sobre 5 aciertos y 5 fallos previos, y exporta reporte Markdown."
             ),
         ),
         kit.MenuItem(

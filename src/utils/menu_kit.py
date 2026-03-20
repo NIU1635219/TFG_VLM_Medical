@@ -66,6 +66,29 @@ class TableColumn:
     fixed_width: int | None = None
     width_ratio: float | None = None
     min_width: int = 8
+    max_lines: int | bool | None = None
+
+
+@dataclass
+class TableCell:
+    """Celda avanzada con soporte de merge y truncado por líneas.
+
+    Attributes:
+        text: Contenido textual de la celda.
+        colspan: Número de columnas que abarca.
+        rowspan: Número de filas que abarca.
+        max_lines: Límite de líneas para la celda. ``True``/``None``
+            delega al nivel superior; ``0``/``False`` desactiva truncado.
+        color: Nombre de color ANSI para la celda.
+        selected_color: Color ANSI alternativo para modo seleccionado.
+    """
+
+    text: str
+    colspan: int = 1
+    rowspan: int = 1
+    max_lines: int | bool | None = None
+    color: str | None = None
+    selected_color: str | None = None
 
 
 @dataclass
@@ -85,12 +108,13 @@ class TableRow:
             está resaltada.
     """
 
-    cells: list[str]
+    cells: list[str | TableCell]
     action: Callable | None = None
     description: str = ""
-    selected_cells: list[str] | None = None
+    selected_cells: list[str | TableCell] | None = None
     cell_colors: list[str | None] | None = None
     selected_cell_colors: list[str | None] | None = None
+    max_lines: int | bool | None = None
 
 
 def _compute_col_widths(columns: list[TableColumn], total_width: int) -> list[int]:
@@ -137,12 +161,199 @@ def _compute_col_widths(columns: list[TableColumn], total_width: int) -> list[in
     return widths
 
 
+@dataclass
+class _PlacedCell:
+    """Celda colocada en la grilla interna de render."""
+
+    anchor_row: int
+    anchor_col: int
+    colspan: int
+    rowspan: int
+    text: str
+    color: str | None
+    selected_color: str | None
+    max_lines: int | None
+
+
+def _normalize_max_lines(value: int | bool | None) -> int | None:
+    """Normaliza configuración de truncado por líneas.
+
+    Returns:
+        int | None: ``None`` = sin truncado, ``n`` = máximo de líneas,
+        ``-1`` = no especificado.
+    """
+    if value is None:
+        return -1
+    if value is False or value == 0:
+        return None
+    if value is True:
+        return 1
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 1
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _resolve_max_lines(
+    *,
+    cell_value: int | bool | None,
+    row_value: int | bool | None,
+    column_value: int | bool | None,
+    table_value: int | bool | None,
+) -> int | None:
+    """Resuelve prioridad de truncado: celda > fila > columna > tabla."""
+    for value in (cell_value, row_value, column_value, table_value):
+        normalized = _normalize_max_lines(value)
+        if normalized != -1:
+            return normalized
+    return 1
+
+
+def _coerce_row_cells(
+    row: TableRow,
+    *,
+    columns: list[TableColumn],
+    is_selected: bool,
+    table_max_lines: int | bool | None,
+) -> list[_PlacedCell]:
+    """Convierte celdas de entrada en celdas normalizadas para la grilla."""
+    src_cells = row.selected_cells if (is_selected and row.selected_cells is not None) else row.cells
+    src_colors = row.selected_cell_colors if is_selected else row.cell_colors
+
+    normalized: list[_PlacedCell] = []
+    for idx, raw in enumerate(src_cells):
+        if isinstance(raw, TableCell):
+            cell_text = str(raw.text)
+            colspan = max(1, int(raw.colspan or 1))
+            rowspan = max(1, int(raw.rowspan or 1))
+            base_color = raw.selected_color if is_selected and raw.selected_color else raw.color
+            cell_max = raw.max_lines
+        else:
+            cell_text = str(raw)
+            colspan = 1
+            rowspan = 1
+            base_color = None
+            cell_max = None
+
+        color = base_color
+        if color is None and src_colors and idx < len(src_colors):
+            color = src_colors[idx]
+
+        col_for_policy = columns[min(idx, len(columns) - 1)] if columns else TableColumn(label="")
+        max_lines = _resolve_max_lines(
+            cell_value=cell_max,
+            row_value=row.max_lines,
+            column_value=col_for_policy.max_lines,
+            table_value=table_max_lines,
+        )
+
+        normalized.append(
+            _PlacedCell(
+                anchor_row=-1,
+                anchor_col=-1,
+                colspan=colspan,
+                rowspan=rowspan,
+                text=cell_text,
+                color=color,
+                selected_color=color,
+                max_lines=max_lines,
+            )
+        )
+    return normalized
+
+
+def _build_cell_grid(
+    columns: list[TableColumn],
+    rows: list[TableRow],
+    *,
+    is_selected: bool,
+    table_max_lines: int | bool | None,
+) -> list[list[_PlacedCell | None]]:
+    """Construye una grilla con soporte de rowspan/colspan."""
+    row_count = len(rows)
+    col_count = len(columns)
+    grid: list[list[_PlacedCell | None]] = [[None for _ in range(col_count)] for _ in range(row_count)]
+
+    for row_idx, row in enumerate(rows):
+        col_idx = 0
+        for cell in _coerce_row_cells(
+            row,
+            columns=columns,
+            is_selected=is_selected,
+            table_max_lines=table_max_lines,
+        ):
+            while col_idx < col_count and grid[row_idx][col_idx] is not None:
+                col_idx += 1
+            if col_idx >= col_count:
+                break
+
+            max_colspan = max(1, min(cell.colspan, col_count - col_idx))
+            while max_colspan > 1 and any(grid[row_idx][col_idx + offset] is not None for offset in range(max_colspan)):
+                max_colspan -= 1
+
+            max_rowspan = max(1, min(cell.rowspan, row_count - row_idx))
+            while max_rowspan > 1:
+                has_conflict = False
+                for test_row in range(row_idx, row_idx + max_rowspan):
+                    for test_col in range(col_idx, col_idx + max_colspan):
+                        if grid[test_row][test_col] is not None:
+                            has_conflict = True
+                            break
+                    if has_conflict:
+                        break
+                if not has_conflict:
+                    break
+                max_rowspan -= 1
+
+            placed = _PlacedCell(
+                anchor_row=row_idx,
+                anchor_col=col_idx,
+                colspan=max_colspan,
+                rowspan=max_rowspan,
+                text=cell.text,
+                color=cell.color,
+                selected_color=cell.selected_color,
+                max_lines=cell.max_lines,
+            )
+
+            for rr in range(row_idx, row_idx + max_rowspan):
+                for cc in range(col_idx, col_idx + max_colspan):
+                    if grid[rr][cc] is None:
+                        grid[rr][cc] = placed
+
+            col_idx += max_colspan
+
+    return grid
+
+
+def _wrap_with_max_lines(text: str, width: int, max_lines: int | None) -> list[str]:
+    """Envuelve texto aplicando política de truncado por líneas."""
+    wrapped = wrap_plain_text(str(text), max(1, int(width))) or [""]
+    if max_lines is None:
+        return wrapped
+    limit = max(1, int(max_lines))
+    if len(wrapped) <= limit:
+        return wrapped
+    trimmed = wrapped[:limit]
+    if trimmed:
+        last = trimmed[-1]
+        if len(last) >= width:
+            trimmed[-1] = (last[: max(1, width - 1)] + "…")[:width]
+        else:
+            trimmed[-1] = last + "…"
+    return trimmed
+
+
 def _build_table_menu_items(
     columns: list[TableColumn],
     rows: list[TableRow],
     *,
     style: Any,
     get_width_fn: Callable[[], int],
+    table_max_lines: int | bool | None = None,
 ) -> list:
     """Construye la lista de ítems de menú para una tabla interactiva.
 
@@ -169,16 +380,37 @@ def _build_table_menu_items(
     """
     pipe = " │ "
 
-    def _row_str(cells: list[str], widths: list[int], colors: Sequence[str | None] | None) -> str:
-        parts = []
-        for j, (cell, w) in enumerate(zip(cells, widths)):
-            text = str(cell)
-            if len(text) > w:
-                text = text[: w - 1] + "…"
-            color_name = (colors[j] if colors and j < len(colors) else None) or ""
+    def _format_row_line(grid: list[list[_PlacedCell | None]], row_idx: int, widths: list[int]) -> str:
+        parts: list[str] = []
+        col_idx = 0
+        col_count = len(columns)
+
+        while col_idx < col_count:
+            ref = grid[row_idx][col_idx]
+            if ref is None:
+                parts.append(f"{'':<{widths[col_idx]}}")
+                col_idx += 1
+                continue
+
+            if ref.anchor_col != col_idx:
+                col_idx += 1
+                continue
+
+            span = max(1, min(ref.colspan, col_count - col_idx))
+            segment_width = sum(widths[col_idx : col_idx + span]) + (3 * (span - 1))
+
+            if ref.anchor_row == row_idx:
+                lines = _wrap_with_max_lines(ref.text, segment_width, ref.max_lines)
+                text = lines[0] if lines else ""
+            else:
+                text = ""
+
+            color_name = ref.color or ""
             color_code = getattr(style, color_name, "") if color_name else ""
             endc = style.ENDC if color_code else ""
-            parts.append(f"{color_code}{text:<{w}}{endc}")
+            parts.append(f"{color_code}{text:<{segment_width}}{endc}")
+            col_idx += span
+
         return pipe.join(parts)
 
     # ── encabezado ──────────────────────────────────────────────────────
@@ -186,7 +418,8 @@ def _build_table_menu_items(
 
     def _header_lbl(_sel: bool) -> str:
         widths = _compute_col_widths(columns, get_width_fn())
-        return f"{style.DIM}{_row_str([c.label for c in columns], widths, ['DIM'] * len(columns))}{style.ENDC}"
+        header_parts = [f"{str(col.label):<{w}}" for col, w in zip(columns, widths)]
+        return f"{style.DIM}{pipe.join(header_parts)}{style.ENDC}"
 
     header_item.dynamic_label = _header_lbl
 
@@ -212,9 +445,13 @@ def _build_table_menu_items(
 
         def _row_lbl(is_sel: bool, _r: TableRow = _row) -> str:
             widths = _compute_col_widths(columns, get_width_fn())
-            cells = _r.selected_cells if (is_sel and _r.selected_cells is not None) else _r.cells
-            colors = _r.selected_cell_colors if is_sel else _r.cell_colors
-            return _row_str(cells, widths, colors)
+            row_grid = _build_cell_grid(
+                columns,
+                [_r],
+                is_selected=is_sel,
+                table_max_lines=table_max_lines,
+            )
+            return _format_row_line(row_grid, 0, widths)
 
         item.dynamic_label = _row_lbl
         item._table_row = row  # type: ignore[attr-defined]
@@ -230,6 +467,116 @@ def _build_table_menu_items(
     items.append(bot_sep)
 
     return items
+
+
+def _render_table_lines(
+    columns: list[TableColumn],
+    rows: list[TableRow],
+    *,
+    style: Any,
+    width: int,
+    table_max_lines: int | bool | None = None,
+) -> list[str]:
+    """Renderiza una tabla estática basada en primitivas TableColumn/TableRow.
+
+    Este helper permite reutilizar el mismo motor de tablas tanto para vistas
+    interactivas (menu) como para pantallas finales no interactivas.
+    """
+    if not columns:
+        return []
+
+    pipe = " │ "
+    widths = _compute_col_widths(columns, width)
+
+    # Ancho real de la tabla: suma de celdas + separadores verticales + márgenes internos.
+    # Formato de fila: "│ " + col + " │ " + col + " │"
+    table_inner_width = sum(widths) + (3 * (len(columns) - 1))
+    horizontal = "─" * (table_inner_width + 2)
+
+    def _row_cells(cells: Sequence[str], colors: Sequence[str | None] | None = None) -> str:
+        parts: list[str] = []
+        for idx, (cell, cell_width) in enumerate(zip(cells, widths)):
+            text = str(cell)
+            if len(text) > cell_width:
+                text = text[: cell_width - 1] + "…"
+            color_name = (colors[idx] if colors and idx < len(colors) else None) or ""
+            color_code = getattr(style, color_name, "") if color_name else ""
+            endc = style.ENDC if color_code else ""
+            parts.append(f"{color_code}{text:<{cell_width}}{endc}")
+        return pipe.join(parts)
+
+    lines: list[str] = []
+    dim = getattr(style, "DIM", "")
+    bold = getattr(style, "BOLD", "")
+    endc = getattr(style, "ENDC", "")
+
+    lines.append(f"{dim}┌{horizontal}┐{endc}")
+    header_text = _row_cells([col.label for col in columns], ["DIM"] * len(columns))
+    lines.append(f"{dim}│{endc} {bold}{header_text}{endc} {dim}│{endc}")
+    lines.append(f"{dim}├{horizontal}┤{endc}")
+
+    grid = _build_cell_grid(columns, rows, is_selected=False, table_max_lines=table_max_lines)
+    for row_idx, _row in enumerate(rows):
+        row_refs = grid[row_idx]
+
+        row_segments: list[tuple[int, _PlacedCell | None]] = []
+        col_idx = 0
+        while col_idx < len(columns):
+            ref = row_refs[col_idx]
+            if ref is None:
+                row_segments.append((1, None))
+                col_idx += 1
+                continue
+            if ref.anchor_col != col_idx:
+                col_idx += 1
+                continue
+            span = max(1, min(ref.colspan, len(columns) - col_idx))
+            row_segments.append((span, ref))
+            col_idx += span
+
+        wrapped_per_segment: list[list[str]] = []
+        for span, ref in row_segments:
+            segment_start = 0
+            for previous_span, _previous_ref in row_segments[: len(wrapped_per_segment)]:
+                segment_start += previous_span
+            segment_width = sum(widths[segment_start : segment_start + span]) + (3 * (span - 1))
+
+            if ref is None:
+                wrapped_per_segment.append([""])
+                continue
+
+            if ref.anchor_row != row_idx:
+                wrapped_per_segment.append([""])
+                continue
+
+            wrapped_per_segment.append(
+                _wrap_with_max_lines(ref.text, segment_width, ref.max_lines)
+            )
+
+        row_height = max((len(lines_part) for lines_part in wrapped_per_segment), default=1)
+
+        for line_idx in range(row_height):
+            rendered_segments: list[str] = []
+            segment_col_start = 0
+            for seg_idx, (span, ref) in enumerate(row_segments):
+                segment_width = sum(widths[segment_col_start : segment_col_start + span]) + (3 * (span - 1))
+                text_line = (
+                    wrapped_per_segment[seg_idx][line_idx]
+                    if line_idx < len(wrapped_per_segment[seg_idx])
+                    else ""
+                )
+                color_name = (ref.color if ref is not None else None) or ""
+                color_code = getattr(style, color_name, "") if color_name else ""
+                color_end = endc if color_code else ""
+                rendered_segments.append(f"{color_code}{text_line:<{segment_width}}{color_end}")
+                segment_col_start += span
+
+            row_text = pipe.join(rendered_segments)
+            lines.append(f"{dim}│{endc} {row_text} {dim}│{endc}")
+
+    lines.append(f"{dim}└{horizontal}┘{endc}")
+
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +609,7 @@ class UIKit:
     # ── Primitivas de tabla re-exportadas ──────────────────────────────
     TableColumn = TableColumn  # type: ignore[assignment]  # re-export para callers que usen kit.TableColumn
     TableRow = TableRow        # type: ignore[assignment]
+    TableCell = TableCell      # type: ignore[assignment]
 
     # ── Helpers de bajo nivel re-exportados para módulos que los usen ──
     paint_dynamic_lines = staticmethod(paint_dynamic_lines)
@@ -387,69 +735,13 @@ class UIKit:
         """
         print(f"{self.style.BOLD} {text} {self.style.ENDC}")
 
-    def table(
-        self,
-        rows: list[tuple[str, str, str]],
-        *,
-        width: int | None = None,
-    ) -> None:
-        """Imprime una tabla formateada ``┌┬┐├┼┤└┴┘``.
-
-        Punto de entrada único para generar tablas desde cualquier módulo de
-        menús: ``kit.table(rows)``.
-
-        Cada fila es una tupla ``(nombre, valor, estado)`` donde ``estado``
-        es ``'OK'``, ``'WARN'`` o ``'FAIL'``.
-
-        Args:
-            rows: Lista de tuplas ``(componente, valor, estado)``.
-            width (int | None): Ancho de UI para calcular columnas.
-        """
-        ui_width = width if (width is not None and width > 0) else self.width()
-        style = self.style
-        _wrap = wrap_plain_text
-
-        result_col = 6
-        content_budget = max(32, ui_width - result_col - 6)
-        component_col = max(16, int(content_budget * 0.45))
-        value_col = max(16, content_budget - component_col)
-
-        top    = "┌" + "─" * (component_col + 2) + "┬" + "─" * (value_col + 2) + "┬" + "─" * result_col + "┐"
-        mid    = "├" + "─" * (component_col + 2) + "┼" + "─" * (value_col + 2) + "┼" + "─" * result_col + "┤"
-        bottom = "└" + "─" * (component_col + 2) + "┴" + "─" * (value_col + 2) + "┴" + "─" * result_col + "┘"
-
-        print(f"\n{style.HEADER}{top}{style.ENDC}")
-        print(
-            f"{style.HEADER}│ {'Component':<{component_col}} │ {'Status/Value':<{value_col}} │ {'Res':<{result_col - 2}} │{style.ENDC}"
-        )
-        print(f"{style.HEADER}{mid}{style.ENDC}")
-
-        for name, value, status in rows:
-            color = style.OKGREEN if status == "OK" else (style.WARNING if status == "WARN" else style.FAIL)
-            display_name = str(name).replace("cv2", "OpenCV").replace("llama_cpp", "LlamaCPP")
-            value_text = str(value)
-
-            name_lines  = _wrap(display_name, component_col)
-            value_lines = _wrap(value_text, value_col)
-            row_count   = max(len(name_lines), len(value_lines))
-
-            for row_idx in range(row_count):
-                left  = name_lines[row_idx]  if row_idx < len(name_lines)  else ""
-                right = value_lines[row_idx] if row_idx < len(value_lines) else ""
-                if row_idx == 0:
-                    res_text = f"{color}{status:<{result_col - 2}}{style.ENDC}"
-                else:
-                    res_text = " " * (result_col - 2)
-                print(f"│ {left:<{component_col}} │ {right:<{value_col}} │ {res_text} │")
-
-        print(f"{style.HEADER}{bottom}{style.ENDC}")
-
     def build_table_items(
         self,
         columns: list[TableColumn],
         rows: list[TableRow],
         *,
         width: int | None = None,
+        max_cell_lines: int | bool | None = None,
     ) -> list:
         """Construye ítems de menú para una tabla sin invocar el motor de menús.
 
@@ -475,7 +767,13 @@ class UIKit:
         def _get_w() -> int:
             return width if (width is not None and width > 0) else self.width()
 
-        return _build_table_menu_items(columns, rows, style=self.style, get_width_fn=_get_w)
+        return _build_table_menu_items(
+            columns,
+            rows,
+            style=self.style,
+            get_width_fn=_get_w,
+            table_max_lines=max_cell_lines,
+        )
 
     def table_menu(
         self,
@@ -489,7 +787,10 @@ class UIKit:
         nav_hint_text: str | None = None,
         info_text: str | Callable[[], str] = "",
         dynamic_info_top: bool = False,
-    ) -> "TableRow | list[TableRow] | None":
+        interactive: bool = True,
+        return_lines: bool = False,
+        max_cell_lines: int | bool | None = None,
+    ) -> "TableRow | list[TableRow] | list[str] | None":
         """Tabla navegable controlada por teclado.
 
         Combina :meth:`build_table_items` con :meth:`menu` para mostrar una
@@ -517,7 +818,28 @@ class UIKit:
             ``TableRow`` seleccionada, lista de ``TableRow``s (multi-select)
             o ``None`` si el usuario canceló con ESC.
         """
-        items = self.build_table_items(columns, rows, width=width)
+        resolved_width = width if (width is not None and width > 0) else self.width()
+
+        if not interactive:
+            lines = _render_table_lines(
+                columns,
+                rows,
+                style=self.style,
+                width=resolved_width,
+                table_max_lines=max_cell_lines,
+            )
+            if return_lines:
+                return lines
+            for line in lines:
+                print(line)
+            return None
+
+        items = self.build_table_items(
+            columns,
+            rows,
+            width=width,
+            max_cell_lines=max_cell_lines,
+        )
         result = self.menu(
             items,
             header_func=header_func,

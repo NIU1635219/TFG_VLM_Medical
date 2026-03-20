@@ -704,7 +704,7 @@ def ask_choice(
     style: Any,
     read_key_fn: Callable[[], str | None],
     clear_screen_fn: Callable[[], None],
-    info_text: str | Callable[[], str] = "",
+    info_text: str | Callable[..., str] = "",
     nav_hint_text: str = "Acciones: ←/→ (o ↑/↓) cambiar opción · ENTER confirmar · ESC cancelar.",
 ) -> int | None:
     """
@@ -759,7 +759,12 @@ def ask_choice(
         resolved_info_text = ""
         if callable(info_text):
             try:
-                resolved_info_text = str(info_text() or "")
+                resolved_info_text = str(info_text(content_width) or "")
+            except TypeError:
+                try:
+                    resolved_info_text = str(info_text() or "")
+                except Exception:
+                    resolved_info_text = ""
             except Exception:
                 resolved_info_text = ""
         else:
@@ -807,7 +812,7 @@ def ask_user(
     style: Any,
     read_key_fn: Callable[[], str | None],
     clear_screen_fn: Callable[[], None],
-    info_text: str | Callable[[], str] = "",
+    info_text: str | Callable[..., str] = "",
 ) -> bool:
     """
     Solicita confirmación al usuario mediante una interfaz interactiva de selección.

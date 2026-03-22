@@ -274,6 +274,48 @@ class PolypClassification(BaseModel):
     )
 
 
+class PolypVisualAnalysis(BaseModel):
+    """
+    Esquema agnóstico para análisis visual estructurado de pólipos.
+
+    Obliga al modelo a describir primero rasgos puramente observacionales,
+    después conectar dichos hallazgos con el razonamiento clínico diferencial
+    y, finalmente, cerrar en un diagnóstico estricto AD/HP/ASS.
+    """
+
+    morphology_and_borders: str = Field(
+        ...,
+        description=(
+            "Describe la morfología general de la lesión (ej. plana, elevada, "
+            "pediculada, sésil) y cómo se definen sus bordes respecto a la "
+            "mucosa sana."
+        ),
+    )
+    surface_and_vascular_pattern: str = Field(
+        ...,
+        description=(
+            "Describe en detalle el color, la textura de la superficie (lisa, "
+            "nodular, granular) y cualquier patrón vascular o glandular visible."
+        ),
+    )
+    clinical_justification: str = Field(
+        ...,
+        description=(
+            "Argumenta detalladamente por qué las características visuales "
+            "observadas apuntan a un tipo específico de pólipo (Adenoma - AD, "
+            "Pólipo Hiperplásico - HP, o Adenoma Serrado Sésil - ASS). Descarta "
+            "explícitamente patologías fuera de estas tres."
+        ),
+    )
+    final_diagnosis: Literal["AD", "HP", "ASS"] = Field(
+        ...,
+        description=(
+            "Diagnóstico final más probable basado exclusivamente en la "
+            "justificación anterior."
+        ),
+    )
+
+
 class ClassEvidence(BaseModel):
     """
     Evidencia clínica detallada para una clase diagnóstica concreta.
@@ -422,6 +464,7 @@ SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "GenericObjectDetection": GenericObjectDetection,
     "PolypDetection": PolypDetection,
     "PolypClassification": PolypClassification,
+    "PolypVisualAnalysis": PolypVisualAnalysis,
     "AdvancedPolypClassification": AdvancedPolypClassification,
     "SycophancyTest": SycophancyTest,
     "ImageQualityAssessment": ImageQualityAssessment,
@@ -463,6 +506,19 @@ PolypClassificationWithReasoning = _create_reasoning_schema(
         "Variante con razonamiento explícito previo a la clasificación histológica.\n\n"
         "El campo ``reasoning`` aparece primero para forzar el análisis visual\n"
         "antes de elegir entre AD, HP, ASS o UNKNOWN."
+    ),
+)
+
+PolypVisualAnalysisWithReasoning = _create_reasoning_schema(
+    PolypVisualAnalysis,
+    reasoning_description=(
+        "Proceso de observación visual paso a paso antes de cerrar diagnóstico: "
+        "inspección de morfología, bordes, superficie, color y patrón vascular."
+    ),
+    docstring=(
+        "Variante con razonamiento explícito previo al diagnóstico visual.\n\n"
+        "El campo ``reasoning`` aparece primero para forzar la descripción\n"
+        "observacional antes de la justificación clínica y el diagnóstico final."
     ),
 )
 
@@ -511,6 +567,7 @@ REASONING_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "GenericObjectDetection": GenericObjectDetectionWithReasoning,
     "PolypDetection": PolypDetectionWithReasoning,
     "PolypClassification": PolypClassificationWithReasoning,
+    "PolypVisualAnalysis": PolypVisualAnalysisWithReasoning,
     "AdvancedPolypClassification": AdvancedPolypClassificationWithReasoning,
     "SycophancyTest": SycophancyTestWithReasoning,
     "ImageQualityAssessment": ImageQualityAssessmentWithReasoning,

@@ -11,7 +11,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Literal, TypeVar, get_args, get_origin
 
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _PROJECT_ROOT not in sys.path:
@@ -1147,6 +1147,67 @@ def _normalize_label_for_accuracy(value: Any) -> str:
     return str(value).strip().lower()
 
 
+def _schema_accuracy_field_candidates(schema_name: str) -> list[str]:
+    """
+    Obtiene candidatos de campo de predicción para accuracy según el schema.
+
+    Prioriza campos Literal con clases diagnósticas cerradas (AD/HP/ASS[/UNKNOWN])
+    y añade claves legacy de respaldo para compatibilidad.
+
+    Args:
+        schema_name (str): Nombre de esquema efectivo (base o WithReasoning).
+
+    Returns:
+        list[str]: Lista ordenada de claves candidatas dentro de ``payload``.
+    """
+    base_schema_name = _base_schema_name(schema_name)
+    schema_cls = SCHEMA_REGISTRY.get(base_schema_name)
+
+    preferred: list[str] = []
+    allowed_labels = {"ad", "hp", "ass", "unknown"}
+    required_labels = {"ad", "hp", "ass"}
+
+    if schema_cls is not None:
+        for field_name, field_info in schema_cls.model_fields.items():
+            annotation = field_info.annotation
+            if get_origin(annotation) is not Literal:
+                continue
+            args = get_args(annotation)
+            if not args or not all(isinstance(item, str) for item in args):
+                continue
+            normalized_args = {str(item).strip().lower() for item in args}
+            if required_labels.issubset(normalized_args) and normalized_args.issubset(allowed_labels):
+                preferred.append(field_name)
+
+    fallback = ["final_diagnosis", "predicted_class", "diagnosis", "class", "label"]
+    ordered: list[str] = []
+    for key in preferred + fallback:
+        if key and key not in ordered:
+            ordered.append(key)
+    return ordered
+
+
+def _extract_predicted_label_for_accuracy(payload_obj: dict[str, Any], *, schema_name: str) -> str:
+    """
+    Extrae la etiqueta predicha para accuracy usando claves compatibles por schema.
+
+    Args:
+        payload_obj (dict[str, Any]): Payload de respuesta del modelo.
+        schema_name (str): Nombre del esquema efectivo del registro.
+
+    Returns:
+        str: Etiqueta normalizada o cadena vacía si no se puede extraer.
+    """
+    if not isinstance(payload_obj, dict):
+        return ""
+    for key in _schema_accuracy_field_candidates(schema_name):
+        value = payload_obj.get(key)
+        normalized = _normalize_label_for_accuracy(value)
+        if normalized:
+            return normalized
+    return ""
+
+
 def _base_schema_name(schema_name: str) -> str:
     """
     Devuelve el nombre base de schema removiendo sufijo WithReasoning.
@@ -1369,7 +1430,10 @@ def _aggregate_models_from_jsonl_lines(
         payload_obj = payload.get("payload")
         predicted_label = ""
         if isinstance(payload_obj, dict):
-            predicted_label = _normalize_label_for_accuracy(payload_obj.get("predicted_class"))
+            predicted_label = _extract_predicted_label_for_accuracy(
+                payload_obj,
+                schema_name=schema_value,
+            )
         ground_truth_label = _normalize_label_for_accuracy(payload.get("ground_truth_cls"))
         if predicted_label and ground_truth_label:
             model_entry["eval_total"] = int(model_entry["eval_total"]) + 1

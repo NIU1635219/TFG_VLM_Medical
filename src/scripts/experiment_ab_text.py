@@ -1,4 +1,4 @@
-"""Experimento A/B para comparar descripcion zero-shot vs asistida con Ground Truth AD."""
+"""Experimento A/B para comparar descripcion zero-shot vs asistida con Ground Truth."""
 
 from __future__ import annotations
 
@@ -11,33 +11,45 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
-
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
+from src.inference.schemas import PolypVisualAnalysis
 from src.inference.vlm_runner import VLMLoader
 
 
-PROMPT_A = (
-    "Eres un medico. Describe detalladamente la textura, el color y la morfologia "
-    "de la lesion en esta imagen."
-)
-
-PROMPT_B = (
-    "Eres un medico. Sabemos que la lesion en esta imagen es un Adenoma (AD). "
-    "Describe detalladamente la textura, color y morfologia que justifican este diagnostico."
-)
+VALID_CLASSES: tuple[str, ...] = ("AD", "HP", "ASS")
 
 
-class PolypDescription(BaseModel):
-    """Esquema estructurado para descripcion cualitativa de polipo."""
+def _diagnosis_label_text(cls_label: str) -> str:
+    """Devuelve etiqueta expandida de clase para prompts asistidos."""
+    normalized = str(cls_label or "").strip().upper()
+    names = {
+        "AD": "Adenoma (AD)",
+        "HP": "Polipo Hiperplasico (HP)",
+        "ASS": "Adenoma Serrado Sesil (ASS)",
+    }
+    return names.get(normalized, f"{normalized} ({normalized})")
 
-    texture: str = Field(..., description="Descripcion de la textura observada")
-    color: str = Field(..., description="Descripcion de la coloracion observada")
-    morphology: str = Field(..., description="Descripcion de la morfologia observada")
-    conclusion: str = Field(..., description="Conclusion clinica breve")
+
+def build_prompt_a() -> str:
+    """Prompt zero-shot neutral (sin inyeccion diagnostica)."""
+    return (
+        "Analiza esta imagen endoscopica y clasifica la lesion. "
+        "Primero describe la morfologia y bordes; despues describe superficie, color y patron vascular; "
+        "finalmente justifica clinicamente y cierra en AD, HP o ASS."
+    )
+
+
+def build_prompt_b(confirmed_cls: str) -> str:
+    """Prompt asistido por diagnostico confirmado en biopsia."""
+    diagnosis = _diagnosis_label_text(confirmed_cls)
+    return (
+        "El sistema de biopsia ha confirmado que la lesion en esta imagen es un "
+        f"{diagnosis}. Sabiendo esto como un hecho irrefutable, completa el analisis visual "
+        "y justifica por que las caracteristicas de la imagen coinciden con este diagnostico."
+    )
 
 
 @dataclass(frozen=True)
@@ -184,14 +196,6 @@ def _reasoning_label(value: bool | None) -> str:
 
 def _autodetect_results_file(results_dir: Path) -> Path:
     """Detecta el JSONL de batch mas reciente para PolypClassification."""
-    preferred = sorted(
-        results_dir.glob("batch_*PolypClassification*.jsonl"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    if preferred:
-        return preferred[0]
-
     fallback = sorted(
         results_dir.glob("batch_*.jsonl"),
         key=lambda path: path.stat().st_mtime,
@@ -201,7 +205,33 @@ def _autodetect_results_file(results_dir: Path) -> Path:
         raise FileNotFoundError(
             f"No se encontraron archivos batch JSONL en: {results_dir}"
         )
-    return fallback[0]
+
+    def _is_manifest_like(path: Path) -> bool:
+        name = path.name.lower()
+        return name.startswith("batch_manifest") or "_manifest_" in name
+
+    preferred = [
+        path
+        for path in fallback
+        if "polypclassification" in path.name.lower() and not _is_manifest_like(path)
+    ]
+    if not preferred:
+        preferred = [path for path in fallback if not _is_manifest_like(path)]
+    if not preferred:
+        preferred = list(fallback)
+
+    # Elige el archivo más reciente que contenga candidatos válidos AD/HP/ASS para A/B.
+    for candidate in preferred:
+        try:
+            records = _iter_data_records(candidate)
+            grouped = _build_variant_candidates(records, override_model=None)
+            if grouped:
+                return candidate
+        except Exception:
+            continue
+
+    # Si ninguno contiene candidatos válidos, conserva el comportamiento estable.
+    return preferred[0]
 
 
 def detect_results_file(results_file: Path | None, results_dir: Path) -> Path:
@@ -259,7 +289,7 @@ def _build_variant_candidates(
     *,
     override_model: str | None,
 ) -> dict[ModelVariant, list[ABInputSample]]:
-    """Agrupa candidatos AD por variante detectada."""
+    """Agrupa candidatos AD/HP/ASS por variante detectada."""
     grouped: dict[ModelVariant, list[ABInputSample]] = {}
 
     for record in records:
@@ -275,7 +305,7 @@ def _build_variant_candidates(
             continue
 
         ground_truth = _extract_ground_truth_class(record)
-        if ground_truth != "AD":
+        if ground_truth not in VALID_CLASSES:
             continue
 
         predicted = _extract_predicted_class(record)
@@ -290,7 +320,7 @@ def _build_variant_candidates(
         if not image_path.exists():
             continue
 
-        previous_status = "Acierto" if predicted == "AD" else "Fallo"
+        previous_status = "Acierto" if predicted == ground_truth else "Fallo"
         sample = ABInputSample(
             image_path=image_path,
             image_name=image_path.name,
@@ -310,33 +340,42 @@ def _select_samples(
     n_incorrect: int,
     seed: int,
 ) -> list[ABInputSample]:
-    """Selecciona 5 AD aciertos y 5 AD fallos de forma reproducible."""
+    """Selecciona aciertos/fallos balanceados por clase usando el mínimo disponible."""
     unique_by_path: dict[str, ABInputSample] = {}
     for item in candidates:
         unique_by_path[str(item.image_path)] = item
     deduped = list(unique_by_path.values())
 
-    correct = sorted(
-        [item for item in deduped if item.previous_status == "Acierto"],
-        key=lambda item: str(item.image_path).lower(),
-    )
-    incorrect = sorted(
-        [item for item in deduped if item.previous_status == "Fallo"],
-        key=lambda item: str(item.image_path).lower(),
-    )
+    grouped: dict[str, dict[str, list[ABInputSample]]] = {
+        cls: {"Acierto": [], "Fallo": []} for cls in VALID_CLASSES
+    }
+    for item in deduped:
+        if item.ground_truth_cls not in grouped:
+            continue
+        if item.previous_status not in ("Acierto", "Fallo"):
+            continue
+        grouped[item.ground_truth_cls][item.previous_status].append(item)
 
-    if len(correct) < n_correct or len(incorrect) < n_incorrect:
-        raise RuntimeError(
-            "No hay suficientes casos AD para el experimento. "
-            f"Disponibles -> Aciertos: {len(correct)}, Fallos: {len(incorrect)}. "
-            f"Requeridos -> Aciertos: {n_correct}, Fallos: {n_incorrect}."
-        )
+    for cls in VALID_CLASSES:
+        grouped[cls]["Acierto"].sort(key=lambda item: str(item.image_path).lower())
+        grouped[cls]["Fallo"].sort(key=lambda item: str(item.image_path).lower())
 
     rng = random.Random(seed)
-    selected_correct = rng.sample(correct, n_correct)
-    selected_incorrect = rng.sample(incorrect, n_incorrect)
+    selected: list[ABInputSample] = []
+    for cls in VALID_CLASSES:
+        available_correct = len(grouped[cls]["Acierto"])
+        available_incorrect = len(grouped[cls]["Fallo"])
+        per_class_quota = min(available_correct, available_incorrect, n_correct, n_incorrect)
+        if per_class_quota <= 0:
+            continue
+        selected.extend(rng.sample(grouped[cls]["Acierto"], per_class_quota))
+        selected.extend(rng.sample(grouped[cls]["Fallo"], per_class_quota))
 
-    selected = selected_correct + selected_incorrect
+    if not selected:
+        raise RuntimeError(
+            "No hay suficientes pares balanceados (acierto/fallo) en AD/HP/ASS para el experimento A/B."
+        )
+
     rng.shuffle(selected)
     return selected
 
@@ -349,7 +388,7 @@ def build_execution_plans(
     seed: int,
     override_model: str | None = None,
 ) -> list[ABVariantPlan]:
-    """Construye planes por variante detectada en JSONL."""
+    """Construye planes por variante detectada en JSONL (balanceado por clase)."""
     records = _iter_data_records(results_file)
     grouped = _build_variant_candidates(
         records,
@@ -359,7 +398,7 @@ def build_execution_plans(
     if not grouped:
         model_hint = f" para el modelo '{override_model}'" if override_model else ""
         raise RuntimeError(
-            "No se detectaron candidatos AD validos"
+            "No se detectaron candidatos validos (AD/HP/ASS)"
             f"{model_hint} en {results_file}."
         )
 
@@ -436,7 +475,7 @@ def _sample_checkpoint_key(sample: ABInputSample) -> str:
 def _empty_checkpoint_payload() -> dict[str, Any]:
     """Estructura base de checkpoint."""
     return {
-        "version": 1,
+        "version": 2,
         "variants": {},
     }
 
@@ -454,10 +493,13 @@ def _load_checkpoint(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return _empty_checkpoint_payload()
 
+    if int(payload.get("version") or 0) != 2:
+        return _empty_checkpoint_payload()
+
     variants = payload.get("variants")
     if not isinstance(variants, dict):
         payload["variants"] = {}
-    payload.setdefault("version", 1)
+    payload.setdefault("version", 2)
     return payload
 
 
@@ -471,7 +513,12 @@ def _is_description_complete(description: dict[str, str] | Any) -> bool:
     """Valida que una descripcion no este vacia ni en estado de error."""
     if not isinstance(description, dict):
         return False
-    required = ("texture", "color", "morphology", "conclusion")
+    required = (
+        "morphology_and_borders",
+        "surface_and_vascular_pattern",
+        "clinical_justification",
+        "final_diagnosis",
+    )
     for field in required:
         value = str(description.get(field) or "").strip()
         if not value:
@@ -539,16 +586,16 @@ def _deserialize_result(payload: dict[str, Any], expected_sample: ABInputSample)
     return ABResult(
         sample=expected_sample,
         description_a={
-            "texture": str(description_a.get("texture") or ""),
-            "color": str(description_a.get("color") or ""),
-            "morphology": str(description_a.get("morphology") or ""),
-            "conclusion": str(description_a.get("conclusion") or ""),
+            "morphology_and_borders": str(description_a.get("morphology_and_borders") or ""),
+            "surface_and_vascular_pattern": str(description_a.get("surface_and_vascular_pattern") or ""),
+            "clinical_justification": str(description_a.get("clinical_justification") or ""),
+            "final_diagnosis": str(description_a.get("final_diagnosis") or ""),
         },
         description_b={
-            "texture": str(description_b.get("texture") or ""),
-            "color": str(description_b.get("color") or ""),
-            "morphology": str(description_b.get("morphology") or ""),
-            "conclusion": str(description_b.get("conclusion") or ""),
+            "morphology_and_borders": str(description_b.get("morphology_and_borders") or ""),
+            "surface_and_vascular_pattern": str(description_b.get("surface_and_vascular_pattern") or ""),
+            "clinical_justification": str(description_b.get("clinical_justification") or ""),
+            "final_diagnosis": str(description_b.get("final_diagnosis") or ""),
         },
     )
 
@@ -654,16 +701,16 @@ def _run_single_inference(
     result = loader.inference(
         image_path=image_path,
         prompt=prompt,
-        schema=PolypDescription,
+        schema=PolypVisualAnalysis,
         temperature=temperature,
         seed=seed,
     )
     payload = result.model_dump()
     return {
-        "texture": str(payload.get("texture") or ""),
-        "color": str(payload.get("color") or ""),
-        "morphology": str(payload.get("morphology") or ""),
-        "conclusion": str(payload.get("conclusion") or ""),
+        "morphology_and_borders": str(payload.get("morphology_and_borders") or ""),
+        "surface_and_vascular_pattern": str(payload.get("surface_and_vascular_pattern") or ""),
+        "clinical_justification": str(payload.get("clinical_justification") or ""),
+        "final_diagnosis": str(payload.get("final_diagnosis") or ""),
     }
 
 
@@ -744,32 +791,32 @@ def _run_ab_inference(
                 description_a = _run_single_inference(
                     loader=loader,
                     image_path=sample.image_path,
-                    prompt=PROMPT_A,
+                    prompt=build_prompt_a(),
                     temperature=temperature,
                     seed=seed,
                 )
             except Exception as error:
                 description_a = {
-                    "texture": "",
-                    "color": "",
-                    "morphology": "",
-                    "conclusion": f"ERROR: {error}",
+                    "morphology_and_borders": "",
+                    "surface_and_vascular_pattern": "",
+                    "clinical_justification": f"ERROR: {error}",
+                    "final_diagnosis": "",
                 }
 
             try:
                 description_b = _run_single_inference(
                     loader=loader,
                     image_path=sample.image_path,
-                    prompt=PROMPT_B,
+                    prompt=build_prompt_b(sample.ground_truth_cls),
                     temperature=temperature,
                     seed=seed,
                 )
             except Exception as error:
                 description_b = {
-                    "texture": "",
-                    "color": "",
-                    "morphology": "",
-                    "conclusion": f"ERROR: {error}",
+                    "morphology_and_borders": "",
+                    "surface_and_vascular_pattern": "",
+                    "clinical_justification": f"ERROR: {error}",
+                    "final_diagnosis": "",
                 }
 
             result_item = ABResult(
@@ -824,8 +871,8 @@ def _render_markdown(
     lines.append("## Hipotesis")
     lines.append("")
     lines.append(
-        "Comparar si la inyeccion del Ground Truth (Prompt B) cambia cualitativamente la "
-        "descripcion visual frente al enfoque zero-shot (Prompt A)."
+        "Comparar si la inyeccion del Ground Truth confirmado (Prompt B) cambia cualitativamente "
+        "el analisis visual frente al enfoque zero-shot (Prompt A)."
     )
     lines.append("")
 
@@ -848,23 +895,23 @@ def _render_markdown(
             lines.append(f"- Prediccion previa: **{sample.predicted_cls}**")
             lines.append(f"- Imagen: `{sample.image_path}`")
             lines.append("")
-            lines.append("| Campo | Descripcion A (Zero-Shot) | Descripcion B (Asistido AD) |")
+            lines.append("| Campo | Descripcion A (Zero-Shot) | Descripcion B (Asistido GT) |")
             lines.append("|---|---|---|")
             lines.append(
-                f"| Textura | {_safe_text(item.description_a.get('texture'))} | "
-                f"{_safe_text(item.description_b.get('texture'))} |"
+                f"| Morfologia y bordes | {_safe_text(item.description_a.get('morphology_and_borders'))} | "
+                f"{_safe_text(item.description_b.get('morphology_and_borders'))} |"
             )
             lines.append(
-                f"| Color | {_safe_text(item.description_a.get('color'))} | "
-                f"{_safe_text(item.description_b.get('color'))} |"
+                f"| Superficie y patron vascular | {_safe_text(item.description_a.get('surface_and_vascular_pattern'))} | "
+                f"{_safe_text(item.description_b.get('surface_and_vascular_pattern'))} |"
             )
             lines.append(
-                f"| Morfologia | {_safe_text(item.description_a.get('morphology'))} | "
-                f"{_safe_text(item.description_b.get('morphology'))} |"
+                f"| Justificacion clinica | {_safe_text(item.description_a.get('clinical_justification'))} | "
+                f"{_safe_text(item.description_b.get('clinical_justification'))} |"
             )
             lines.append(
-                f"| Conclusion | {_safe_text(item.description_a.get('conclusion'))} | "
-                f"{_safe_text(item.description_b.get('conclusion'))} |"
+                f"| Diagnostico final | {_safe_text(item.description_a.get('final_diagnosis'))} | "
+                f"{_safe_text(item.description_b.get('final_diagnosis'))} |"
             )
             lines.append("")
 
@@ -874,7 +921,7 @@ def _render_markdown(
 def build_parser() -> argparse.ArgumentParser:
     """Crea parser de argumentos CLI para experimento A/B."""
     parser = argparse.ArgumentParser(
-        description="Ejecuta experimento A/B: zero-shot vs prompt asistido con AD."
+        description="Ejecuta experimento A/B: zero-shot vs prompt asistido por Ground Truth."
     )
     parser.add_argument(
         "--model",
@@ -911,13 +958,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--n-correct",
         type=int,
         default=5,
-        help="Numero de AD acertados a seleccionar",
+        help="Maximo de aciertos por clase; se ajusta automaticamente al minimo disponible",
     )
     parser.add_argument(
         "--n-incorrect",
         type=int,
         default=5,
-        help="Numero de AD fallados a seleccionar",
+        help="Maximo de fallos por clase; se ajusta automaticamente al minimo disponible",
     )
     parser.add_argument(
         "--server-api-host",

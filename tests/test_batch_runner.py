@@ -964,6 +964,55 @@ def test_upsert_batch_execution_summary_accepts_base_schema_filter(tmp_path):
     assert len(summary_rows) == 1
 
 
+def test_upsert_batch_execution_summary_uses_final_diagnosis_for_visual_analysis(tmp_path):
+    output_path = tmp_path / "visual_analysis_accuracy_results.jsonl"
+    rows = [
+        {
+            "__batch_meta__": {
+                "version": 2,
+                "created_at_utc": "2026-03-21T10:00:00+00:00",
+                "updated_at_utc": "2026-03-21T10:00:00+00:00",
+                "output_mode": "shared_jsonl",
+                "model_ids": ["model-a"],
+                "schema_names": ["PolypVisualAnalysis"],
+                "input_sources": ["manifest"],
+            }
+        },
+        {
+            "model_id": "model-a",
+            "schema_name": "PolypVisualAnalysis",
+            "status": "ok",
+            "ground_truth_cls": "AD",
+            "payload": {"final_diagnosis": "AD"},
+            "duration_seconds": 1.0,
+        },
+        {
+            "model_id": "model-a",
+            "schema_name": "PolypVisualAnalysis",
+            "status": "ok",
+            "ground_truth_cls": "HP",
+            "payload": {"final_diagnosis": "ASS"},
+            "duration_seconds": 1.1,
+        },
+    ]
+    output_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+
+    summary = upsert_batch_execution_summary(
+        output_path=output_path,
+        schema_name="PolypVisualAnalysis",
+        model_ids=["model-a"],
+    )
+
+    assert summary is not None
+    model_block = summary["models"]["model-a [sin razonamiento]"]
+    assert model_block["accuracy"]["evaluated"] == 2
+    assert model_block["accuracy"]["correct"] == 1
+    assert model_block["accuracy"]["value"] == pytest.approx(0.5)
+    assert summary["global"]["accuracy"]["evaluated"] == 2
+    assert summary["global"]["accuracy"]["correct"] == 1
+    assert summary["global"]["accuracy"]["value"] == pytest.approx(0.5)
+
+
 def test_run_batch_job_filters_pending_entries_by_iteration(monkeypatch, tmp_path):
     image_dir = tmp_path / "images"
     image_dir.mkdir()

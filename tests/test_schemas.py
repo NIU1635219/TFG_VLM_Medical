@@ -13,6 +13,8 @@ from src.inference.schemas import (
     PolypClassificationWithReasoning,
     PolypDetection,
     PolypDetectionWithReasoning,
+    PolypVisualAnalysis,
+    PolypVisualAnalysisWithReasoning,
     SycophancyTest,
     SycophancyTestWithReasoning,
     ImageQualityAssessment,
@@ -118,6 +120,29 @@ class TestPolypClassification:
             )
 
 
+class TestPolypVisualAnalysis:
+    def test_valid_visual_analysis(self):
+        obj = PolypVisualAnalysis(
+            morphology_and_borders="Lesion sesil con borde discretamente elevado.",
+            surface_and_vascular_pattern="Superficie granular con patron vascular irregular.",
+            clinical_justification=(
+                "La combinacion de superficie irregular y patron vascular favorece AD; "
+                "menos compatible con HP y ASS."
+            ),
+            final_diagnosis="AD",
+        )
+        assert obj.final_diagnosis == "AD"
+
+    def test_rejects_unknown_final_diagnosis(self):
+        with pytest.raises(ValidationError):
+            PolypVisualAnalysis(
+                morphology_and_borders="x",
+                surface_and_vascular_pattern="y",
+                clinical_justification="z",
+                final_diagnosis="UNKNOWN",
+            )
+
+
 class TestAdvancedPolypClassification:
     def test_class_evidence_requires_both_fields(self):
         with pytest.raises(ValidationError):
@@ -178,6 +203,7 @@ class TestReasoningSchemaVariants:
             "GenericObjectDetection",
             "PolypDetection",
             "PolypClassification",
+            "PolypVisualAnalysis",
             "AdvancedPolypClassification",
             "SycophancyTest",
             "ImageQualityAssessment",
@@ -251,6 +277,7 @@ class TestReasoningSchemaVariants:
             GenericObjectDetectionWithReasoning,
             PolypDetectionWithReasoning,
             PolypClassificationWithReasoning,
+            PolypVisualAnalysisWithReasoning,
             AdvancedPolypClassificationWithReasoning,
             SycophancyTestWithReasoning,
             ImageQualityAssessmentWithReasoning,
@@ -369,6 +396,7 @@ class TestSchemaRegistry:
             "GenericObjectDetection",
             "PolypDetection",
             "PolypClassification",
+            "PolypVisualAnalysis",
             "AdvancedPolypClassification",
             "SycophancyTest",
             "ImageQualityAssessment",
@@ -384,6 +412,7 @@ class TestSchemaRegistry:
         assert SCHEMA_REGISTRY["GenericObjectDetection"] is GenericObjectDetection
         assert SCHEMA_REGISTRY["PolypDetection"] is PolypDetection
         assert SCHEMA_REGISTRY["PolypClassification"] is PolypClassification
+        assert SCHEMA_REGISTRY["PolypVisualAnalysis"] is PolypVisualAnalysis
         assert SCHEMA_REGISTRY["AdvancedPolypClassification"] is AdvancedPolypClassification
         assert SCHEMA_REGISTRY["SycophancyTest"] is SycophancyTest
         assert SCHEMA_REGISTRY["ImageQualityAssessment"] is ImageQualityAssessment

@@ -62,7 +62,7 @@ class _DummyApp:
         return None
 
 
-def test_ab_ui_preview_shows_all_samples(monkeypatch) -> None:
+def test_ab_ui_preview_applies_limiter(monkeypatch) -> None:
     samples = [
         ABInputSample(
             image_path=Path(f"/tmp/image_{idx}.tif"),
@@ -112,8 +112,7 @@ def test_ab_ui_preview_shows_all_samples(monkeypatch) -> None:
     assert "Imagen" in info_text
     assert "image_0.tif" in info_text
     assert "image_7.tif" in info_text
-    assert "image_8.tif" in info_text
-    assert "image_9.tif" in info_text
+    assert "image_8.tif" not in info_text
 
 
 def test_ab_ui_when_partial_progress_asks_resume_then_confirm(monkeypatch) -> None:

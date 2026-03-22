@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from ..menu_kit import AppContext, UIKit
 
 
-_MAX_PREVIEW_IMAGES_PER_VARIANT: int | None = None
+_MAX_PREVIEW_IMAGES_PER_VARIANT = 8
 
 
 def run_ab_experiment_wrapper(
@@ -122,10 +122,7 @@ def run_ab_experiment_wrapper(
                     ["JSONL origen", str(results_file)],
                     ["Checkpoint incremental", str(checkpoint_file)],
                     ["Variantes detectadas", str(len(plans))],
-                    [
-                        "Max preview por variante",
-                        "Sin limite" if _MAX_PREVIEW_IMAGES_PER_VARIANT is None else str(_MAX_PREVIEW_IMAGES_PER_VARIANT),
-                    ],
+                    ["Max preview por variante", str(_MAX_PREVIEW_IMAGES_PER_VARIANT)],
                 ],
                 width=width,
             )
@@ -169,11 +166,7 @@ def run_ab_experiment_wrapper(
                     width=width,
                 )
             )
-            visible_samples = (
-                list(plan.samples)
-                if _MAX_PREVIEW_IMAGES_PER_VARIANT is None
-                else plan.samples[:_MAX_PREVIEW_IMAGES_PER_VARIANT]
-            )
+            visible_samples = plan.samples[:_MAX_PREVIEW_IMAGES_PER_VARIANT]
 
             sample_rows = [
                 [

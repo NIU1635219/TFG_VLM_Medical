@@ -856,6 +856,14 @@ def _build_recent_record_lines(
             zebra_fields.append((value, is_metric, max_lines, color))
             zebra_idx += 1
         normalized_fields = zebra_fields
+
+        # Si no hay payload ni métricas, conserva una fila mínima visible.
+        if not normalized_fields:
+            fallback_value = detail_text if str(detail_text or "").strip() else summary_text
+            if not str(fallback_value or "").strip():
+                fallback_value = "Resultado válido"
+            normalized_fields = [(str(fallback_value), False, 1 if truncate else None, None)]
+
         detailed_rows.append((f"{status_cell} {image_name}", normalized_fields, status_color))
 
     if callable(table_menu_fn) and table_column_cls is not None and table_row_cls is not None:

@@ -125,6 +125,7 @@ Dependencias declaradas en `pyproject.toml`.
 │   ├── scripts/
 │   │   ├── batch_runner.py             # Orquestador masivo con exportado incremental en JSONL compartido.
 │   │   ├── experiment_ab_text.py       # Experimento A/B zero-shot vs asistido con Ground Truth AD y reporte Markdown.
+│   │   ├── poc_bbox.py                 # PoC de visual grounding con soporte multi-bbox y reporter para UI reactiva.
 │   │   ├── test_inference.py           # Smoke test CLI con descarga automática de imágenes de muestra.
 │   │   ├── test_response_inspector.py  # Inspector CLI de respuestas reales del SDK LM Studio.
 │   │   ├── test_schema.py              # Lógica batch reutilizable para el Schema Tester interactivo.
@@ -152,6 +153,7 @@ Dependencias declaradas en `pyproject.toml`.
 │           ├── cli_reporters.py        # Reportes CLI y helpers de render para dashboards y tests
 │           ├── manifest.py             # Gestión completa de manifests (crear/derivar/usar/eliminar) y limpieza de outputs.
 │           ├── manifest_generation.py  # Generación estratificada de manifests para muestreo reproducible.
+│           ├── poc_bbox.py             # Flujo UI reactivo de la PoC BBox (dashboard vivo + resumen responsive).
 │           ├── response_inspector.py   # Pantalla UI para inspección de respuestas reales del SDK.
 │           ├── run_pytest.py           # Ejecución de pytest desde TUI con resumen y navegación.
 │           ├── schema.py               # Pantallas del Schema Tester (modelo, esquema y variante reasoning).
@@ -170,6 +172,7 @@ Dependencias declaradas en `pyproject.toml`.
     ├── test_lms_menu_helpers.py        # Helpers de menús LM Studio.
     ├── test_lms_models.py              # Wrappers del SDK/CLI y utilidades de modelos.
     ├── test_menu_kit.py                # Tablas, AppContext y primitives de UI.
+    ├── test_poc_bbox.py                # Tests unitarios de descarga, reporter y flujo principal de la PoC BBox.
     ├── test_preprocess.py              # Preprocesado de imágenes endoscópicas.
     ├── test_schemas.py                 # Esquemas Pydantic, reasoning y registro público.
     ├── test_setup_diagnostics.py       # Diagnóstico y smart-fix del entorno.

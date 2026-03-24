@@ -551,7 +551,46 @@ def _build_recent_record_lines(
             return "⚠ WARN", "WARNING"
         return "✗ FAIL", "FAIL"
 
+    def _is_bbox_payload(payload: dict[str, object]) -> bool:
+        return (
+            "detected_subjects_count" in payload
+            or "object_count_reasoning" in payload
+            or any(str(key).startswith("bbox_") for key in payload.keys())
+        )
+
     def _ordered_payload_items(payload: dict[str, object]) -> list[str]:
+        if _is_bbox_payload(payload):
+            lines: list[str] = []
+            count = payload.get("detected_subjects_count")
+            reasoning = payload.get("object_count_reasoning")
+            if count not in (None, ""):
+                lines.append(f"Subjects detectados: {count}")
+            if reasoning not in (None, ""):
+                lines.append(f"Resumen: {_stringify_payload_value(reasoning)}")
+
+            bbox_entries: list[tuple[int, str]] = []
+            for key, value in payload.items():
+                key_str = str(key)
+                if not key_str.startswith("bbox_"):
+                    continue
+                if key_str == "bbox_more":
+                    continue
+                index_text = key_str.replace("bbox_", "")
+                try:
+                    index = int(index_text)
+                except ValueError:
+                    continue
+                bbox_entries.append((index, _stringify_payload_value(value)))
+            bbox_entries.sort(key=lambda item: item[0])
+            for index, value_text in bbox_entries:
+                lines.append(f"Detección {index}: {value_text}")
+
+            bbox_more = payload.get("bbox_more")
+            if bbox_more not in (None, ""):
+                lines.append(f"Más detecciones: {_stringify_payload_value(bbox_more)}")
+
+            return lines
+
         ordered_keys = [
             "polyp_detected",
             "prediction",
@@ -659,6 +698,19 @@ def _build_recent_record_lines(
     detailed_rows: list[tuple[str, list[tuple[str, bool, int | None, str | None]], str]] = []
 
     def _recent_payload_summary(payload: dict[str, object], *, limit: int = 4) -> str:
+        if _is_bbox_payload(payload):
+            count = payload.get("detected_subjects_count")
+            reasoning = payload.get("object_count_reasoning")
+            first_box = payload.get("bbox_1")
+            parts: list[str] = []
+            if count not in (None, ""):
+                parts.append(f"subjects={count}")
+            if reasoning not in (None, ""):
+                parts.append(f"resumen={_stringify_payload_value(reasoning)}")
+            if first_box not in (None, ""):
+                parts.append(f"detección_1={_stringify_payload_value(first_box)}")
+            return " · ".join(parts[:limit]) if parts else "Resultado válido"
+
         summary_order = [
             "polyp_detected",
             "prediction",
@@ -710,6 +762,22 @@ def _build_recent_record_lines(
             return str(record.get("error") or "Error desconocido")
 
         if payload:
+            if _is_bbox_payload(payload):
+                detail_parts: list[str] = []
+                reasoning = payload.get("object_count_reasoning")
+                if reasoning not in (None, ""):
+                    detail_parts.append(f"resumen={_stringify_payload_value(reasoning)}")
+                for key in ("bbox_1", "bbox_2"):
+                    value = payload.get(key)
+                    if value in (None, ""):
+                        continue
+                    detail_parts.append(f"{key}={_stringify_payload_value(value)}")
+                bbox_more = payload.get("bbox_more")
+                if bbox_more not in (None, ""):
+                    detail_parts.append(f"bbox_more={_stringify_payload_value(bbox_more)}")
+                if detail_parts:
+                    return " · ".join(detail_parts)
+
             verbose_parts: list[str] = []
             for key in ("reasoning", "justification", "analysis", "response_preview", "message"):
                 value = payload.get(key)
@@ -833,16 +901,22 @@ def _build_recent_record_lines(
             else:
                 normalized_fields.append((value, False, None, None))
 
+        has_bbox_payload = bool(payload) and _is_bbox_payload(cast(dict[str, object], payload))
+
         # Subfilas para separar claramente contenido y métricas en Respuesta.
         non_metric_fields = [item for item in normalized_fields if not item[1]]
         metric_fields = [item for item in normalized_fields if item[1]]
         grouped_fields: list[tuple[str, bool, int | None, str | None]] = []
-        if non_metric_fields:
-            grouped_fields.append(("─── contenido ───", False, 1, "DIM"))
+        if has_bbox_payload:
             grouped_fields.extend(non_metric_fields)
-        if metric_fields:
-            grouped_fields.append(("─── métricas ───", False, 1, "DIM"))
             grouped_fields.extend(metric_fields)
+        else:
+            if non_metric_fields:
+                grouped_fields.append(("─── contenido ───", False, 1, "DIM"))
+                grouped_fields.extend(non_metric_fields)
+            if metric_fields:
+                grouped_fields.append(("─── métricas ───", False, 1, "DIM"))
+                grouped_fields.extend(metric_fields)
         normalized_fields = grouped_fields
 
         # Zebra striping blanco/gris para filas de respuesta (None/DIM)

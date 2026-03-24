@@ -7,7 +7,7 @@ Se inyectan dinámicamente en VLMLoader.inference() para forzar el response_form
 
 from typing import Any, ClassVar, Literal, cast
 
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, Field, create_model, model_validator
 
 
 def _create_reasoning_schema(
@@ -456,6 +456,85 @@ class ImageQualityAssessment(BaseModel):
     )
 
 
+class BoundingBoxDetection(BaseModel):
+    """Detección individual para visual grounding con caja normalizada 0-1000."""
+
+    detected_subject: str = Field(
+        ...,
+        min_length=12,
+        description=(
+            "Descripción textual del sujeto detectado con rasgos visuales y/o "
+            "posición aproximada (ej: 'gato naranja tumbado en la zona superior izquierda'). "
+            "No debe ser una sola palabra como 'cat' o 'dog'."
+        ),
+    )
+    ymin: int = Field(
+        ...,
+        ge=0,
+        le=1000,
+        description="Coordenada Y mínima normalizada en escala 0-1000.",
+    )
+    xmin: int = Field(
+        ...,
+        ge=0,
+        le=1000,
+        description="Coordenada X mínima normalizada en escala 0-1000.",
+    )
+    ymax: int = Field(
+        ...,
+        ge=0,
+        le=1000,
+        description="Coordenada Y máxima normalizada en escala 0-1000.",
+    )
+    xmax: int = Field(
+        ...,
+        ge=0,
+        le=1000,
+        description="Coordenada X máxima normalizada en escala 0-1000.",
+    )
+
+
+class BoundingBox(BaseModel):
+    """
+    Esquema multi-objeto para visual grounding.
+
+    Permite cero, una o múltiples detecciones en una imagen. El modelo debe
+    explicitar el razonamiento sobre cuántos objetos hay, reportar cuántos sujetos
+    detecta y detallar una caja por cada sujeto detectado.
+    """
+
+    object_count_reasoning: str = Field(
+        ...,
+        description=(
+            "Razonamiento breve sobre el número de objetos/sujetos visibles en la "
+            "imagen antes de listar detecciones."
+        ),
+    )
+    detected_subjects_count: int = Field(
+        ...,
+        ge=0,
+        description="Número total de sujetos detectados para la consulta actual.",
+    )
+    detections: list[BoundingBoxDetection] = Field(
+        default_factory=list,
+        description=(
+            "Lista de detecciones. Puede estar vacía si no se detecta ningún sujeto; "
+            "debe contener una entrada por cada sujeto detectado."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_count_matches_detections(self) -> "BoundingBox":
+        """Garantiza consistencia entre el contador y la lista de detecciones."""
+        detections_count = len(self.detections)
+        if self.detected_subjects_count != detections_count:
+            raise ValueError(
+                "`detected_subjects_count` debe coincidir exactamente con el número "
+                f"de elementos en `detections` ({detections_count})."
+            )
+        return self
+
+
 # ---------------------------------------------------------------------------
 # Registro público de esquemas disponibles (utilizado por el CLI interactivo)
 # ---------------------------------------------------------------------------
@@ -468,6 +547,7 @@ SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "AdvancedPolypClassification": AdvancedPolypClassification,
     "SycophancyTest": SycophancyTest,
     "ImageQualityAssessment": ImageQualityAssessment,
+    "BoundingBox": BoundingBox,
 }
 
 GenericObjectDetectionWithReasoning = _create_reasoning_schema(

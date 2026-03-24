@@ -40,6 +40,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
     from .tests_ui.response_inspector import (
         run_response_inspector_wrapper as run_response_inspector_screen,
     )
+    from .tests_ui.poc_bbox import run_poc_bbox_wrapper as run_poc_bbox_screen
     from .tests_ui.run_pytest import (
         run_all_unit_tests as run_all_unit_tests_screen,
         run_specific_test as run_specific_test_screen,
@@ -155,6 +156,14 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             app,
         )
 
+    def run_poc_bbox_wrapper() -> None:
+        """Lanza la PoC de visual grounding con bounding boxes estructuradas."""
+        run_poc_bbox_screen(
+            kit,
+            app,
+            select_model=select_model_fn,
+        )
+
     # ------------------------------------------------------------------
     # Menú principal de tests
     # ------------------------------------------------------------------
@@ -202,6 +211,14 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             description=(
                 "Mide métricas del SDK response.stats y recursos de /v1/models "
                 "sobre una muestra de imágenes del proyecto."
+            ),
+        ),
+        kit.MenuItem(
+            " Run BBox PoC (Visual Grounding)",
+            run_poc_bbox_wrapper,
+            description=(
+                "Ejecuta prueba de concepto de visual grounding y valida si el modelo "
+                "devuelve coordenadas [ymin,xmin,ymax,xmax] en rango 0-1000."
             ),
         ),
         kit.MenuItem(

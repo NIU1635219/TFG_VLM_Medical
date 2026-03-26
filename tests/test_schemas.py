@@ -19,6 +19,8 @@ from src.inference.schemas import (
     SycophancyTestWithReasoning,
     ImageQualityAssessment,
     ImageQualityAssessmentWithReasoning,
+    BoundingBox,
+    BoundingBoxWithReasoning,
     REASONING_SCHEMA_REGISTRY,
     SCHEMA_REGISTRY,
     _create_reasoning_schema,
@@ -207,6 +209,7 @@ class TestReasoningSchemaVariants:
             "AdvancedPolypClassification",
             "SycophancyTest",
             "ImageQualityAssessment",
+            "BoundingBox",
         }
         assert expected == set(REASONING_SCHEMA_REGISTRY.keys())
 
@@ -400,6 +403,7 @@ class TestSchemaRegistry:
             "AdvancedPolypClassification",
             "SycophancyTest",
             "ImageQualityAssessment",
+            "BoundingBox",
         }
         assert expected == set(SCHEMA_REGISTRY.keys())
 
@@ -416,3 +420,4 @@ class TestSchemaRegistry:
         assert SCHEMA_REGISTRY["AdvancedPolypClassification"] is AdvancedPolypClassification
         assert SCHEMA_REGISTRY["SycophancyTest"] is SycophancyTest
         assert SCHEMA_REGISTRY["ImageQualityAssessment"] is ImageQualityAssessment
+        assert SCHEMA_REGISTRY["BoundingBox"] is BoundingBox

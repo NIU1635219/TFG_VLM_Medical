@@ -22,6 +22,8 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - `UIKit` añade `render_and_wait_responsive(...)` como helper común de espera reactiva, con repintado automático al redimensionar el terminal.
 - Schema Tester integrado en el manager: selección interactiva de modelo + esquema + inferencia por lotes.
 - Batch Runner CLI con exportado incremental en JSONL compartido por manifiesto+schema.
+- Batch Runner: enriquecimiento espacial opcional en JSONL para detecciones con `iou_score` (por bbox),
+  `order_index` y `bbox_ordering` (izquierda->derecha, arriba->abajo).
 - Experimento A/B de prompting integrado: comparación zero-shot vs prompt asistido con Ground Truth AD desde CLI y desde Setup Tests UI.
 - Telemetry Probe integrado en el manager con progreso en vivo, cobertura de métricas y resumen final legible.
 - Response Inspector integrado en el manager para inspeccionar campos reales del SDK con modo crudo o estructurado.
@@ -82,6 +84,8 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Nuevo script `src/scripts/experiment_ab_text.py` para detección automática de variantes desde JSONL (`__batch_meta__`) y comparación cualitativa A/B sobre muestras AD estratificadas.
 - Motor visual/TUI: tablas estáticas y dashboards migrados al render unificado de `table_menu(..., interactive=False, return_lines=True)` con mejor reparto de columnas y truncado controlado.
 - Cobertura de pruebas ampliada para flujo A/B y renderizado reactivo de tablas en pantallas finales.
+- Nuevo script `src/preprocessing/extract_gt_bboxes.py` para extraer bounding boxes Ground Truth desde máscaras binarias (`.tif/.tiff`) y normalizarlas a escala 0-1000 (`[ymin, xmin, ymax, xmax]`).
+- Nuevo notebook `notebooks/03_ground_truth_bboxes.ipynb` para orquestar la ejecución del extractor y validar visualmente los BBoxes.
 
 ## Stack técnico
 
@@ -115,13 +119,15 @@ Dependencias declaradas en `pyproject.toml`.
 │   └── smoke_test/                     # Imágenes pequeñas de validación end-to-end.
 ├── notebooks/
 │   ├── 01_eda_polypsegm.ipynb          # EDA, extracción y comparativas visuales del dataset.
-│   └── 02_zeroshot_analysis.ipynb      # Análisis de batch_results zero-shot, métricas y export bundle JSONL/ZIP.
+│   ├── 02_zeroshot_analysis.ipynb      # Análisis de batch_results zero-shot, métricas y export bundle JSONL/ZIP.
+│   └── 03_ground_truth_bboxes.ipynb    # Orquestación del extractor de BBoxes GT y sanity check visual sobre máscaras.
 ├── src/
 │   ├── inference/
 │   │   ├── schemas.py                  # Esquemas Pydantic base y variantes WithReasoning.
 │   │   └── vlm_runner.py               # Carga VLM, inferencia multimodal, compatibilidad SDK y telemetría.
 │   ├── preprocessing/
-│   │   └── preprocess.py               # CLI de recorte de bordes negros y copia de CSV.
+│   │   ├── preprocess.py               # CLI de recorte de bordes negros y copia de CSV.
+│   │   └── extract_gt_bboxes.py        # CLI para extraer BBoxes GT desde máscaras y exportar CSV normalizado (escala 1000).
 │   ├── scripts/
 │   │   ├── batch_runner.py             # Orquestador masivo con exportado incremental en JSONL compartido.
 │   │   ├── experiment_ab_text.py       # Experimento A/B zero-shot vs asistido con Ground Truth AD y reporte Markdown.
@@ -190,6 +196,7 @@ Dependencias declaradas en `pyproject.toml`.
 
 - `notebooks/01_eda_polypsegm.ipynb`: libreta principal de EDA y preparación de datos.
 - `notebooks/02_zeroshot_analysis.ipynb`: análisis de resultados zero-shot desde `batch_results` JSONL.
+- `notebooks/03_ground_truth_bboxes.ipynb`: ejecución del extractor de Ground Truth espacial y sanity check visual de BBoxes.
 
 Incluye:
 
@@ -230,6 +237,33 @@ Opciones útiles:
 - `--max-images N`: limita el número de imágenes (smoke rápido).
 - `--min-area-ratio 0.1`: umbral mínimo de área del contorno.
 - `--dry-run`: calcula recortes sin escribir archivos.
+
+## Extracción de Ground Truth BBoxes (`src/preprocessing/extract_gt_bboxes.py`)
+
+Script CLI para extraer coordenadas espaciales desde máscaras binarias (`.tif/.tiff`) y exportarlas a CSV en escala normalizada 0-1000.
+
+### Qué hace
+
+- Busca máscaras recursivamente dentro de carpetas `masks`.
+- Calcula el contorno principal y su `boundingRect` con OpenCV.
+- Normaliza coordenadas al formato `[ymin, xmin, ymax, xmax]` en escala 0-1000.
+- Genera `data/processed/ground_truth_bboxes.csv` con columnas `image_id`, `ymin`, `xmin`, `ymax`, `xmax`, `mask_path`.
+- Incluye protección contra sobreescritura (requiere `--force` si el CSV ya existe).
+
+### Ejecución
+
+```bash
+uv run python src/preprocessing/extract_gt_bboxes.py \
+    --input-dir data/raw \
+    --output-csv data/processed/ground_truth_bboxes.csv \
+    --force
+```
+
+Opciones útiles:
+
+- `--input-dir`: raíz del dataset (por defecto `data/raw`).
+- `--output-csv`: ruta de salida (por defecto `data/processed/ground_truth_bboxes.csv`).
+- `--force`: sobrescribe el CSV si ya existe.
 
 ## Prerrequisitos
 
@@ -544,6 +578,10 @@ resultado en caliente para no perder trabajo si se interrumpe el proceso.
 - Exporta incrementalmente en `JSONL`.
 - Incluye telemetría por imagen junto al payload estructurado.
 - Marca explícitamente `include_reasoning` por registro para diferenciar variantes.
+- Si el payload contiene `detections`, cada bbox incluye `iou_score` (si hay GT disponible) y `order_index`.
+- El registro añade `bbox_ordering = left-to-right, top-to-bottom (xmin, ymin)` para documentar el criterio.
+- Permite generar reporte Markdown al finalizar con `--report` (`report.md` junto al JSONL).
+- Opción `--report-details` para incluir tabla detallada por imagen dentro del Markdown.
 - Añade cabecera `__batch_meta__` canónica para trazabilidad del archivo compartido.
 - Añade línea final `__batch_summary__` con:
     - min/max/media de métricas por variante y global,
@@ -580,7 +618,19 @@ Ejemplo con reasoning y JSONL:
 uv run python src/scripts/batch_runner.py --model opengvlab_internvl3_5-14b --image-dir data --schema PolypClassification --with-reasoning --shuffle --max-images 25
 ```
 
+Ejemplo con reporte Markdown:
+
+```bash
+uv run python src/scripts/batch_runner.py --model opengvlab_internvl3_5-14b --image-dir data/processed/m_test/images --schema PolypDetection --report --report-details
+```
+
 Nota: en el flujo TUI no se mezclan resultados de variantes; cada variante se agrega y resume de forma independiente dentro del JSONL compartido.
+
+Nota de reporte PoC BBox (`src/scripts/poc_bbox.py`):
+
+- La cabecera del `results.md` incluye `Global IoU (avg)`.
+- Cada bloque `Resumen` incluye `IoU medio` por imagen.
+- En `Detecciones` se muestra `IoU` por bbox (sin listar `norm`/`px`, priorizando la visualización en imágenes).
 
 ## A/B Prompting Experiment (`src/scripts/experiment_ab_text.py`)
 

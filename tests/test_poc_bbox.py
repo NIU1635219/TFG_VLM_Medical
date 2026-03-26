@@ -91,7 +91,11 @@ def test_main_success_emits_expected_events(monkeypatch: pytest.MonkeyPatch, tmp
 
     monkeypatch.setattr(poc_bbox, "TEST_IMAGE_DIR", image_dir)
     monkeypatch.setattr(poc_bbox, "ensure_assets", lambda *, reporter=None: None)
-    monkeypatch.setattr(poc_bbox, "_save_run_results", lambda *_args, **_kwargs: out_jsonl)
+    monkeypatch.setattr(
+        poc_bbox,
+        "_save_run_results",
+        lambda *_args, **_kwargs: (out_jsonl, out_jsonl.with_suffix(".md")),
+    )
 
     captured_init: dict[str, object] = {}
 
@@ -160,7 +164,11 @@ def test_main_emits_image_error_when_inference_fails(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(poc_bbox, "TEST_IMAGE_DIR", image_dir)
     monkeypatch.setattr(poc_bbox, "ensure_assets", lambda *, reporter=None: None)
-    monkeypatch.setattr(poc_bbox, "_save_run_results", lambda *_args, **_kwargs: out_jsonl)
+    monkeypatch.setattr(
+        poc_bbox,
+        "_save_run_results",
+        lambda *_args, **_kwargs: (out_jsonl, out_jsonl.with_suffix(".md")),
+    )
 
     class FailingLoader:
         def __init__(self, model_path: str, verbose: bool = False, server_api_host=None, api_token=None):  # noqa: ANN001
@@ -196,7 +204,11 @@ def test_main_rejects_inconsistent_bbox_count(monkeypatch: pytest.MonkeyPatch, t
 
     monkeypatch.setattr(poc_bbox, "TEST_IMAGE_DIR", image_dir)
     monkeypatch.setattr(poc_bbox, "ensure_assets", lambda *, reporter=None: None)
-    monkeypatch.setattr(poc_bbox, "_save_run_results", lambda *_args, **_kwargs: out_jsonl)
+    monkeypatch.setattr(
+        poc_bbox,
+        "_save_run_results",
+        lambda *_args, **_kwargs: (out_jsonl, out_jsonl.with_suffix(".md")),
+    )
 
     class _RawBBoxResult:
         def __init__(self):

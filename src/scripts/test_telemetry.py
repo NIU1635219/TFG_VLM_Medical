@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import os
 import random
-import statistics
 import sys
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -19,6 +18,7 @@ from pydantic import BaseModel
 from src.inference.schemas import SCHEMA_REGISTRY, get_schema_variant
 from src.inference.vlm_runner import VLMLoader
 from src.scripts.test_schema import build_prompt_for_schema, find_images
+from src.utils.tests_ui.metrics import summarize_numeric as summarize_numeric_values
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,13 +93,7 @@ def summarize_numeric(values: list[float]) -> dict[str, float | None]:
     Returns:
         Diccionario con la media, mínimo y máximo.
     """
-    if not values:
-        return {"avg": None, "min": None, "max": None}
-    return {
-        "avg": statistics.mean(values),
-        "min": min(values),
-        "max": max(values),
-    }
+    return summarize_numeric_values(values)
 
 
 def first_available_value(records: list[dict[str, Any]], field_name: str) -> Any:
@@ -387,4 +381,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

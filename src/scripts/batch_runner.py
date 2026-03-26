@@ -22,6 +22,9 @@ from pydantic import BaseModel
 from src.inference.schemas import SCHEMA_REGISTRY, get_schema_variant
 from src.inference.vlm_runner import VLMLoader
 from src.scripts.test_schema import build_prompt_for_schema
+from src.utils.tests_ui.metrics import calculate_iou, mean_or_none, to_float_or_none
+from src.utils.tests_ui.markdown_report import ListSection, SectionGroup, TableSection, write_markdown_report
+from src.utils.tests_ui.visualizer import draw_multi_comparison_bboxes
 
 try:
     from tqdm import tqdm
@@ -59,6 +62,156 @@ _MANIFEST_BASE_KEYS.update(_TELEMETRY_RECORD_FIELDS.keys())
 _BATCH_META_KEY = "__batch_meta__"
 _BATCH_SUMMARY_KEY = "__batch_summary__"
 _MANIFEST_META_KEY = "__manifest_meta__"
+
+
+def _truncate_text(value: Any, *, max_len: int = 120) -> str:
+    """Convierte a texto y trunca para evitar tablas Markdown excesivamente anchas."""
+    text = str(value) if value is not None else ""
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
+def _load_execution_records_for_report(output_path: Path) -> list[dict[str, Any]]:
+    """Carga registros de ejecución ignorando líneas de metadatos y summary."""
+    records: list[dict[str, Any]] = []
+    for line in _read_jsonl_lines(output_path):
+        payload = _parse_jsonl_dict(line.strip())
+        if not isinstance(payload, dict):
+            continue
+        if isinstance(payload.get(_BATCH_META_KEY), dict):
+            continue
+        if isinstance(payload.get(_BATCH_SUMMARY_KEY), dict):
+            continue
+        records.append(payload)
+    return records
+
+
+def _build_batch_report_sections(
+    *,
+    records: list[dict[str, Any]],
+    summary: dict[str, Any],
+    include_details: bool,
+    max_detail_rows: int | None = None,
+    output_jsonl_name: str | None = None,
+) -> list[SectionGroup]:
+    """Construye secciones del reporte Markdown de batch."""
+    summary_items = [
+        f"Model: {summary.get('model_id', '-')}",
+        f"Schema: {summary.get('schema_name', '-')}",
+        f"Input source: {summary.get('input_source', '-')}",
+        f"Processed: {summary.get('processed', 0)}",
+        f"OK: {summary.get('ok', 0)}",
+        f"Invalid: {summary.get('invalid', 0)}",
+        f"Fail: {summary.get('fail', 0)}",
+    ]
+
+    ttft_avg = (((summary.get("ttft") or {}).get("avg")) if isinstance(summary.get("ttft"), dict) else None)
+    tps_avg = (((summary.get("tps") or {}).get("avg")) if isinstance(summary.get("tps"), dict) else None)
+    duration_avg = (
+        ((summary.get("total_duration") or {}).get("avg"))
+        if isinstance(summary.get("total_duration"), dict)
+        else None
+    )
+    summary_items.append(f"TTFT avg: {ttft_avg:.4f}s" if isinstance(ttft_avg, (int, float)) else "TTFT avg: N/A")
+    summary_items.append(f"TPS avg: {tps_avg:.4f}" if isinstance(tps_avg, (int, float)) else "TPS avg: N/A")
+    summary_items.append(
+        f"Total duration avg: {duration_avg:.4f}s"
+        if isinstance(duration_avg, (int, float))
+        else "Total duration avg: N/A"
+    )
+
+    sections: list[SectionGroup] = [
+        SectionGroup(
+            heading="Resumen",
+            heading_level=2,
+            sections=[ListSection(items=summary_items, ordered=False, heading_level=3)],
+        )
+    ]
+
+    if include_details and records:
+        detail_rows: list[list[str]] = []
+        total_records = len(records)
+        displayed_records = records if max_detail_rows is None else records[:max_detail_rows]
+        for record in displayed_records:
+            payload = record.get("payload") if isinstance(record.get("payload"), dict) else None
+            payload_preview = "-"
+            if payload:
+                preview_pairs = [f"{key}={payload[key]}" for key in list(payload.keys())[:2]]
+                payload_preview = _truncate_text("; ".join(preview_pairs), max_len=90)
+
+            iou_score = to_float_or_none(record.get("iou_score"))
+            iou_text = f"{iou_score:.4f}" if iou_score is not None else "N/A"
+
+            detail_rows.append(
+                [
+                    _truncate_text(record.get("image_name") or Path(str(record.get("image_path", "-"))).name, max_len=36),
+                    _truncate_text(record.get("status", "-"), max_len=12),
+                    (
+                        f"{record.get('duration_seconds'):.4f}"
+                        if isinstance(record.get("duration_seconds"), (int, float))
+                        else "-"
+                    ),
+                    iou_text,
+                    payload_preview,
+                    _truncate_text(record.get("error_message", "-"), max_len=70),
+                ]
+            )
+
+        info_sections: list[Any] = []
+        # Si hemos truncado, añadimos una nota al reporte y enlace al JSONL completo
+        if max_detail_rows is not None and total_records > max_detail_rows:
+            note = f"Mostrando {len(displayed_records)} de {total_records} registros. Consulte el JSONL completo: {output_jsonl_name or 'results.jsonl'}"
+            info_sections.append(ListSection(items=[note], heading=None, heading_level=3))
+
+        info_sections.append(
+            TableSection(
+                headers=["Image", "Status", "Duration(s)", "IoU avg", "Payload preview", "Error"],
+                rows=detail_rows,
+                heading_level=3,
+            )
+        )
+
+        sections.append(
+            SectionGroup(
+                heading="Detalle Por Imagen",
+                heading_level=2,
+                sections=info_sections,
+            )
+        )
+
+    return sections
+
+
+def generate_batch_markdown_report(
+    *,
+    output_path: Path,
+    summary: dict[str, Any],
+    include_details: bool = False,
+    max_detail_rows: int | None = None,
+) -> Path:
+    """Genera `report.md` a partir del JSONL y del summary actual de ejecución."""
+    report_path = output_path.with_name("report.md")
+    records = _load_execution_records_for_report(output_path)
+    sections = _build_batch_report_sections(
+        records=records,
+        summary=summary,
+        include_details=include_details,
+        max_detail_rows=max_detail_rows,
+        output_jsonl_name=output_path.name,
+    )
+    write_markdown_report(
+        report_path=report_path,
+        title="Batch Runner Report",
+        metadata={
+            "Model": str(summary.get("model_id", "-")),
+            "Schema": str(summary.get("schema_name", "-")),
+            "Processed": str(summary.get("processed", 0)),
+            "Output JSONL": output_path.name,
+        },
+        sections=sections,
+    )
+    return report_path
 
 
 @dataclasses.dataclass(frozen=True)
@@ -330,6 +483,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--server-api-host", help="Host del servidor LM Studio si no es el local por defecto.")
     parser.add_argument("--api-token", help="Token de API para LM Studio si aplica.")
     parser.add_argument("--verbose", action="store_true", help="Activa logs verbosos del loader.")
+    parser.add_argument(
+        "--save-comparisons",
+        action="store_true",
+        help="Guardar imágenes de comparación GT/pred por imagen si hay Ground Truth disponible.",
+    )
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="Genera un reporte Markdown (`report.md`) al finalizar el batch.",
+    )
+    parser.add_argument(
+        "--report-details",
+        action="store_true",
+        help="Incluye detalle por imagen en el reporte Markdown (tabla extensa).",
+    )
+    parser.add_argument(
+        "--report-max-rows",
+        type=int,
+        default=None,
+        help="Número máximo de filas de detalle en el reporte Markdown. Si se omite, incluye todas.",
+    )
     return parser
 
 
@@ -891,32 +1065,6 @@ def _parse_jsonl_dict(line: str) -> dict[str, Any] | None:
         return None
     return payload
 
-
-def _as_float(value: Any) -> float | None:
-    """
-    Convierte un valor escalar a float cuando es posible.
-    
-    Args:
-        value (Any): Valor a convertir.
-        
-    Returns:
-        float | None: Valor float si la conversión es exitosa, None en caso contrario.
-    """
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        try:
-            return float(text)
-        except ValueError:
-            return None
-    return None
-
-
 def _empty_metric_agg() -> dict[str, float | int | None]:
     """
     Inicializa un acumulador para min/max/media.
@@ -1422,7 +1570,7 @@ def _aggregate_models_from_jsonl_lines(
         metric_bucket = model_entry["metrics"]
         variant_metric_bucket = variant_entry["metrics"]
         for metric_key in metric_keys:
-            value = _as_float(payload.get(metric_key))
+            value = to_float_or_none(payload.get(metric_key))
             _update_metric_agg(metric_bucket[metric_key], value)
             _update_metric_agg(variant_metric_bucket[metric_key], value)
             _update_metric_agg(global_metric_acc[metric_key], value)
@@ -1894,6 +2042,10 @@ def run_batch_job(
     server_api_host: str | None = None,
     api_token: str | None = None,
     verbose: bool = False,
+    save_comparisons: bool = False,
+    generate_report: bool = False,
+    report_details: bool = False,
+    report_max_rows: int | None = None,
     pending_image_paths: list[str] | None = None,
     pending_entries: list[dict[str, Any]] | None = None,
     on_progress: Callable[[dict[str, Any]], None] | None = None,
@@ -2123,6 +2275,182 @@ def run_batch_job(
                     status=status,
                 )
 
+            # Si el payload contiene detecciones, intentamos enriquecer el registro
+            # con IoU por detección y añadir información de ordenamiento.
+            try:
+                payload = record.get("payload") if isinstance(record, dict) else None
+                if isinstance(payload, dict):
+                    detections = payload.get("detections")
+                    if isinstance(detections, list) and detections:
+                        # Extraer bboxes predichas como listas [ymin, xmin, ymax, xmax]
+                        preds: list[list[int] | None] = []
+                        for det in detections:
+                            try:
+                                ymin = int(det.get("ymin"))
+                                xmin = int(det.get("xmin"))
+                                ymax = int(det.get("ymax"))
+                                xmax = int(det.get("xmax"))
+                                preds.append([ymin, xmin, ymax, xmax])
+                            except Exception:
+                                preds.append(None)
+
+                        # Calcular orden según izquierda->derecha, arriba->abajo (xmin, ymin)
+                        order_keys: list[tuple[tuple[float, float], int]] = []
+                        for i, p in enumerate(preds):
+                            if p is None:
+                                key = (float("inf"), float("inf"))
+                            else:
+                                key = (float(p[1]), float(p[0]))
+                            order_keys.append((key, i))
+                        order_keys.sort()
+                        order_index = [0] * len(preds)
+                        for rank, (_k, idx0) in enumerate(order_keys, start=1):
+                            order_index[idx0] = rank
+
+                        # Anotar order_index en cada detección (no reordenamos la lista original)
+                        for i, det in enumerate(detections):
+                            try:
+                                det["order_index"] = order_index[i]
+                            except Exception:
+                                # Si por alguna razón la detección no es dict
+                                pass
+
+                        # Buscar Ground Truth en los metadatos de la entrada (si vienen en el manifest)
+                        raw_gt = None
+                        if isinstance(item.metadata, dict):
+                            for key in (
+                                "gt_bboxes",
+                                "ground_truth_bboxes",
+                                "gt_items",
+                                "gt",
+                                "ground_truth",
+                                "gt_bbox",
+                            ):
+                                if key in item.metadata:
+                                    raw_gt = item.metadata.get(key)
+                                    break
+
+                        gt_list: list[list[int]] = []
+                        gt_subjects: list[str | None] = []
+                        if isinstance(raw_gt, list):
+                            for g in raw_gt:
+                                if isinstance(g, dict):
+                                    b = g.get("bbox") or g.get("gt_bbox")
+                                    subj = (
+                                        g.get("detected_subject")
+                                        or g.get("subject")
+                                        or g.get("label")
+                                    )
+                                    if isinstance(b, (list, tuple)) and len(b) == 4:
+                                        try:
+                                            gt_list.append([int(x) for x in b])
+                                            gt_subjects.append(str(subj) if subj is not None else None)
+                                        except Exception:
+                                            continue
+                                elif isinstance(g, (list, tuple)) and len(g) == 4:
+                                    try:
+                                        gt_list.append([int(x) for x in g])
+                                        gt_subjects.append(None)
+                                    except Exception:
+                                        continue
+
+                        # Calcular IoU por predicción emparejando con el GT de mayor IoU (si existe GT)
+                        comparison_metrics: list[dict[str, Any]] = []
+                        matched_gt_bboxes: list[list[int] | None] = []
+                        iou_scores: list[float | None] = []
+                        if gt_list:
+                            for idx_pred, pred in enumerate(preds):
+                                if pred is None:
+                                    iou_scores.append(None)
+                                    matched_gt_bboxes.append(None)
+                                    comparison_metrics.append(
+                                        {
+                                            "detection_index": idx_pred + 1,
+                                            "order_index": order_index[idx_pred] if idx_pred < len(order_index) else None,
+                                            "pred_bbox": None,
+                                            "gt_bbox": None,
+                                            "gt_subject": None,
+                                            "iou": None,
+                                            "comparison_path": None,
+                                        }
+                                    )
+                                    continue
+
+                                best_score: float | None = None
+                                best_gt: list[int] | None = None
+                                best_j: int | None = None
+                                for j, gt in enumerate(gt_list):
+                                    try:
+                                        score = calculate_iou(pred, gt)
+                                    except Exception:
+                                        score = None
+                                    if score is None:
+                                        continue
+                                    if best_score is None or score > best_score:
+                                        best_score = float(score)
+                                        best_gt = gt
+                                        best_j = j
+
+                                iou_scores.append(best_score)
+                                matched_gt_bboxes.append(best_gt)
+                                comparison_metrics.append(
+                                    {
+                                        "detection_index": idx_pred + 1,
+                                        "order_index": order_index[idx_pred] if idx_pred < len(order_index) else None,
+                                        "pred_bbox": pred,
+                                        "gt_bbox": best_gt,
+                                        "gt_subject": (
+                                            gt_subjects[best_j] if best_j is not None and best_j < len(gt_subjects) else None
+                                        ),
+                                        "iou": best_score,
+                                        "comparison_path": None,
+                                    }
+                                )
+                        else:
+                            # No hay GT disponible: rellenamos con None
+                            iou_scores = [None] * len(preds)
+                            matched_gt_bboxes = [None] * len(preds)
+
+                        # Añadir campo iou_score a cada detección del payload
+                        for i, det in enumerate(detections):
+                            try:
+                                det["iou_score"] = iou_scores[i]
+                            except Exception:
+                                pass
+
+                        valid_iou_scores = [score for score in iou_scores if isinstance(score, (int, float))]
+                        record["iou_score"] = mean_or_none(valid_iou_scores)
+
+                        # Adjuntar métricas de comparación al registro
+                        if comparison_metrics:
+                            # Si se solicita, intentar guardar imagen de comparación
+                            if save_comparisons and gt_list:
+                                try:
+                                    comp_dir = resolved_output_path.parent / "comparison"
+                                    comp_dir.mkdir(parents=True, exist_ok=True)
+                                    comp_path = comp_dir / f"cmp_{Path(image_path).name}"
+                                    # Llamamos al visualizador para generar la imagen comparativa
+                                    draw_multi_comparison_bboxes(
+                                        image_path=str(image_path),
+                                        gt_bboxes=matched_gt_bboxes,
+                                        pred_bboxes=[p if p is not None else [0, 0, 0, 0] for p in preds],
+                                        model_name=str(model_id),
+                                        iou_scores=iou_scores,
+                                        output_path=str(comp_path),
+                                    )
+                                    for cm in comparison_metrics:
+                                        cm["comparison_path"] = str(comp_path)
+                                    record["comparison_path"] = str(comp_path)
+                                except Exception as _err:
+                                    record["comparison_error"] = str(_err)
+
+                            record["comparison_metrics"] = comparison_metrics
+                        # Indicamos cómo se determinó el orden de las cajas
+                        record["bbox_ordering"] = "left-to-right, top-to-bottom (xmin, ymin)"
+            except Exception:
+                # No queremos que la generación de IoU/visualización rompa el lote; seguimos con el record original
+                pass
+
             append_jsonl_record(resolved_output_path, record)
             processed += 1
             record_iteration_index, record_iteration_total = _extract_record_iteration_values(record)
@@ -2139,6 +2467,18 @@ def run_batch_job(
         loader.unload_model()
 
     summary = build_summary()
+    if generate_report:
+        try:
+            report_path = generate_batch_markdown_report(
+                output_path=resolved_output_path,
+                summary=summary,
+                include_details=report_details,
+                max_detail_rows=report_max_rows,
+            )
+            summary["report_path"] = str(report_path)
+        except Exception as report_error:
+            if verbose:
+                print(f"[batch_runner] No se pudo generar report.md: {report_error}")
     emit_progress("complete", index=processed, status="complete")
     return summary
 
@@ -2171,6 +2511,10 @@ def main(argv: list[str] | None = None) -> int:
         server_api_host=args.server_api_host,
         api_token=args.api_token,
         verbose=args.verbose,
+        save_comparisons=args.save_comparisons,
+        generate_report=args.report,
+        report_details=args.report_details,
+        report_max_rows=args.report_max_rows,
     )
 
     if args.verbose:
@@ -2181,4 +2525,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

@@ -643,6 +643,19 @@ ImageQualityAssessmentWithReasoning = _create_reasoning_schema(
     ),
 )
 
+BoundingBoxWithReasoning = _create_reasoning_schema(
+    BoundingBox,
+    reasoning_description=(
+        "Proceso lógico paso a paso justificando las detecciones y la correspondencia "
+        "entre 'detected_subjects_count' y la lista de 'detections'."
+    ),
+    docstring=(
+        "Variante con razonamiento explícito para detección con bounding boxes.\n\n"
+        "Obliga al modelo a exponer primero el razonamiento sobre cuántos sujetos "
+        "se detectan y cómo se asignan a las cajas listadas."
+    ),
+)
+
 REASONING_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "GenericObjectDetection": GenericObjectDetectionWithReasoning,
     "PolypDetection": PolypDetectionWithReasoning,
@@ -651,6 +664,7 @@ REASONING_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "AdvancedPolypClassification": AdvancedPolypClassificationWithReasoning,
     "SycophancyTest": SycophancyTestWithReasoning,
     "ImageQualityAssessment": ImageQualityAssessmentWithReasoning,
+    "BoundingBox": BoundingBoxWithReasoning,
 }
 
 

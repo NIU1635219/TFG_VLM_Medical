@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -103,6 +104,44 @@ def iter_images(root_dir: Path):
             yield path
 
 
+def find_associated_mask_path(image_path: Path) -> Path | None:
+    """
+    Resuelve la máscara asociada a una imagen cuando existe estructura images/masks.
+
+    Args:
+        image_path (Path): Ruta de la imagen en el split.
+
+    Returns:
+        Path | None: Ruta de la máscara asociada o None si no existe.
+    """
+    if image_path.parent.name.lower() != "images":
+        return None
+
+    mask_dir = image_path.parent.parent / "masks"
+    if not mask_dir.exists():
+        return None
+
+    candidates = sorted(mask_dir.glob(f"{image_path.stem}.*"))
+    for candidate in candidates:
+        if candidate.suffix.lower() in VALID_EXTENSIONS and candidate.is_file():
+            return candidate
+
+    return None
+
+
+def crop_with_bbox(image, bbox: tuple[int, int, int, int]):
+    """Recorta una imagen con un bbox, acotando límites para evitar out-of-bounds."""
+    height, width = image.shape[:2]
+    x, y, w, h = bbox
+
+    x0 = max(0, min(x, width))
+    y0 = max(0, min(y, height))
+    x1 = max(x0, min(x + w, width))
+    y1 = max(y0, min(y + h, height))
+
+    return image[y0:y1, x0:x1]
+
+
 def iter_csv_files(root_dir: Path):
     """
     Itera recursivamente sobre un directorio devolviendo rutas a archivos CSV.
@@ -169,7 +208,11 @@ def process_dataset(
     Returns:
         list[CropResult]: Lista de resultados con detalles de cada imagen procesada.
     """
-    image_paths = list(iter_images(input_dir))
+    image_paths = [
+        path
+        for path in iter_images(input_dir)
+        if "masks" not in {part.lower() for part in path.parts}
+    ]
     if max_images is not None:
         image_paths = image_paths[:max_images]
 
@@ -190,6 +233,20 @@ def process_dataset(
         if not dry_run:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(output_path), cropped)
+
+        # Si existe máscara emparejada, se recorta con el MISMO bbox que la imagen.
+        mask_path = find_associated_mask_path(image_path)
+        if mask_path is not None:
+            mask = cv2.imread(str(mask_path), cv2.IMREAD_UNCHANGED)
+            if mask is None:
+                print(f"[WARN] No se pudo leer máscara asociada: {mask_path}")
+            else:
+                cropped_mask = crop_with_bbox(mask, bbox)
+                if not dry_run:
+                    mask_relative = mask_path.relative_to(input_dir)
+                    mask_output = output_dir / mask_relative
+                    mask_output.parent.mkdir(parents=True, exist_ok=True)
+                    cv2.imwrite(str(mask_output), cropped_mask)
 
         results.append(
             CropResult(
@@ -284,4 +341,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())

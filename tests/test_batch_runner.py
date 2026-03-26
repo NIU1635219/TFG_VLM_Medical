@@ -210,6 +210,43 @@ def test_build_parser_accepts_required_batch_args():
     assert args.schema == "GenericObjectDetection"
 
 
+def test_build_parser_accepts_report_flags():
+    parser = build_parser()
+    args = parser.parse_args([
+        "--model",
+        "fake-model",
+        "--image-dir",
+        "data/raw/m_test/images",
+        "--schema",
+        "GenericObjectDetection",
+        "--report",
+        "--report-details",
+    ])
+
+    assert args.report is True
+    assert args.report_details is True
+
+
+def test_build_parser_accepts_report_max_rows():
+    parser = build_parser()
+    args = parser.parse_args([
+        "--model",
+        "fake-model",
+        "--image-dir",
+        "data/raw/m_test/images",
+        "--schema",
+        "GenericObjectDetection",
+        "--report",
+        "--report-details",
+        "--report-max-rows",
+        "10",
+    ])
+
+    assert args.report is True
+    assert args.report_details is True
+    assert args.report_max_rows == 10
+
+
 def test_build_parser_accepts_manifest_as_input_source(tmp_path):
     parser = build_parser()
     manifest_path = tmp_path / "manifest.jsonl"
@@ -378,6 +415,68 @@ def test_run_batch_job_writes_incremental_jsonl_and_unloads(monkeypatch, tmp_pat
     assert rows[0]["tokens_per_second"] == 22.5
     assert rows[0]["reasoning_tokens"] == 4
     assert rows[0]["architecture"] == "qwen3_vl"
+
+
+def test_run_batch_job_generates_markdown_report(monkeypatch, tmp_path):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    (image_dir / "sample_0.jpg").write_bytes(b"image")
+
+    output_path = tmp_path / "results.jsonl"
+
+    class FakeResult:
+        def model_dump(self):
+            return {
+                "object_detected": "sample_0.jpg",
+                "confidence_score": 90,
+                "justification": "ok",
+            }
+
+    class FakeTelemetry:
+        def __init__(self):
+            self.total_duration_seconds = 1.0
+            self.ttft_seconds = 0.2
+            self.generation_duration_seconds = 0.7
+            self.tokens_per_second = 20.0
+
+    class FakeInferenceResult:
+        def __init__(self):
+            self.data = FakeResult()
+            self.telemetry = FakeTelemetry()
+
+    class FakeLoader:
+        def __init__(self, model_path, verbose=False, server_api_host=None, api_token=None):
+            self.model_path = model_path
+
+        def load_model(self):
+            return None
+
+        def inference(self, image_path, prompt, schema, temperature, include_telemetry=False):
+            return FakeInferenceResult()
+
+        def unload_model(self):
+            return None
+
+    monkeypatch.setattr("src.scripts.batch_runner.VLMLoader", FakeLoader)
+
+    summary = run_batch_job(
+        model_id="fake-model",
+        image_dir=image_dir,
+        schema_name="GenericObjectDetection",
+        output_path=output_path,
+        generate_report=True,
+        report_details=True,
+    )
+
+    assert summary["processed"] == 1
+    assert "report_path" in summary
+
+    report_path = Path(summary["report_path"])
+    assert report_path.exists()
+    report_content = report_path.read_text(encoding="utf-8")
+    assert "# Batch Runner Report" in report_content
+    assert "## Resumen" in report_content
+    assert "## Detalle Por Imagen" in report_content
 
 
 def test_run_batch_job_with_manifest_propagates_metadata(monkeypatch, tmp_path):

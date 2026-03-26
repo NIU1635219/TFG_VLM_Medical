@@ -294,7 +294,14 @@ def _save_run_results(results_dir: Path, model_tag: str, records: list[dict[str,
                         labels=pred_labels,
                     )
                     out_name = f"res_{Path(rec['image_path']).name}"
-                    cv2.imwrite(str(annotated_dir / out_name), img_annotated)
+                    # draw_predicted_bboxes returns an RGB image for display. When
+                    # saving with OpenCV we must convert back to BGR to avoid
+                    # channel-swapping (red <-> blue) in the written file.
+                    try:
+                        img_to_save = cv2.cvtColor(img_annotated, cv2.COLOR_RGB2BGR)
+                    except Exception:
+                        img_to_save = img_annotated
+                    cv2.imwrite(str(annotated_dir / out_name), img_to_save)
                     rec["annotated_path"] = str(annotated_dir / out_name)
 
                 except Exception as error:

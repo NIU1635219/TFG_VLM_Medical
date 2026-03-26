@@ -387,6 +387,62 @@ class TestImageQualityAssessment:
 
 
 # ---------------------------------------------------------------------------
+# BoundingBox
+# ---------------------------------------------------------------------------
+
+class TestBoundingBox:
+    def test_accepts_valid_detection_geometry(self):
+        obj = BoundingBox(
+            object_count_reasoning="Se detecta un único objeto claramente delimitado.",
+            detected_subjects_count=1,
+            detections=[
+                {
+                    "detected_subject": "polipo ovalado en la zona central izquierda",
+                    "ymin": 120,
+                    "xmin": 200,
+                    "ymax": 620,
+                    "xmax": 780,
+                }
+            ],
+        )
+
+        assert obj.detected_subjects_count == 1
+        assert len(obj.detections) == 1
+
+    def test_rejects_detection_with_inverted_y(self):
+        with pytest.raises(ValidationError):
+            BoundingBox(
+                object_count_reasoning="Se detecta un objeto.",
+                detected_subjects_count=1,
+                detections=[
+                    {
+                        "detected_subject": "polipo sobreelevado con borde irregular",
+                        "ymin": 900,
+                        "xmin": 120,
+                        "ymax": 100,
+                        "xmax": 640,
+                    }
+                ],
+            )
+
+    def test_rejects_detection_with_inverted_x(self):
+        with pytest.raises(ValidationError):
+            BoundingBox(
+                object_count_reasoning="Se detecta un objeto.",
+                detected_subjects_count=1,
+                detections=[
+                    {
+                        "detected_subject": "lesion pequeña en cuadrante inferior derecho",
+                        "ymin": 150,
+                        "xmin": 850,
+                        "ymax": 500,
+                        "xmax": 320,
+                    }
+                ],
+            )
+
+
+# ---------------------------------------------------------------------------
 # SCHEMA_REGISTRY
 # ---------------------------------------------------------------------------
 

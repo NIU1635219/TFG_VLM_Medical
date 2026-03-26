@@ -493,6 +493,15 @@ class BoundingBoxDetection(BaseModel):
         description="Coordenada X máxima normalizada en escala 0-1000.",
     )
 
+    @model_validator(mode="after")
+    def validate_bbox_geometry(self) -> "BoundingBoxDetection":
+        """Garantiza geometría válida y área positiva de la bbox."""
+        if self.ymin >= self.ymax:
+            raise ValueError("BoundingBoxDetection inválida: `ymin` debe ser menor que `ymax`.")
+        if self.xmin >= self.xmax:
+            raise ValueError("BoundingBoxDetection inválida: `xmin` debe ser menor que `xmax`.")
+        return self
+
 
 class BoundingBox(BaseModel):
     """

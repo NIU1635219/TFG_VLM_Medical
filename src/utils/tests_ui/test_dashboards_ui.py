@@ -306,9 +306,10 @@ def _build_progress_bar(kit: "UIKit", current: int, total: int) -> str:
     """
     if total <= 0:
         return f"{_style_token(kit, 'DIM')}[sin muestra]{_style_token(kit, 'ENDC')}"
+    safe_current = max(0, min(int(current), int(total)))
     ui_width = max(60, kit.width())
     bar_width = max(20, min(40, ui_width - 44))
-    pct = max(0, min(100, int((current / total) * 100)))
+    pct = max(0, min(100, int((safe_current / total) * 100)))
     filled = int((pct / 100) * bar_width)
     pct_color = (
         _style_token(kit, "OKGREEN")
@@ -324,7 +325,7 @@ def _build_progress_bar(kit: "UIKit", current: int, total: int) -> str:
     return (
         f"[{bar}]  "
         f"{pct_color}{_style_token(kit, 'BOLD')}{pct:>3}%{_style_token(kit, 'ENDC')}"
-        f"  {_style_token(kit, 'DIM')}({current} / {total}){_style_token(kit, 'ENDC')}"
+        f"  {_style_token(kit, 'DIM')}({safe_current} / {total}){_style_token(kit, 'ENDC')}"
     )
 
 

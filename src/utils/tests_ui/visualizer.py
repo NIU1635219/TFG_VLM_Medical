@@ -67,6 +67,9 @@ def draw_comparison_bboxes(
     iou_score: float | None = None,
     gt_color: tuple[int, int, int] | None = None,
     pred_color: tuple[int, int, int] | None = None,
+    gt_label: str | None = None,
+    pred_label: str | None = None,
+    show_overlay_text: bool = True,
     output_path: str | None = None,
 ) -> np.ndarray:
     """
@@ -79,6 +82,9 @@ def draw_comparison_bboxes(
         pred_bbox: Bounding box predicho normalizado [ymin, xmin, ymax, xmax] en escala 0-1000.
         model_name: Nombre del modelo que generó la predicción.
         iou_score: Valor de IoU opcional para mostrar en el texto superpuesto.
+        gt_label: Texto opcional para la caja GT (p. ej. tipo de pólipo).
+        pred_label: Texto opcional para la caja predicha.
+        show_overlay_text: Si es False, no dibuja el texto superior del modelo/IoU.
         output_path: Ruta opcional de guardado; si no se proporciona, la imagen se muestra por pantalla.
 
     Returns:
@@ -113,34 +119,43 @@ def draw_comparison_bboxes(
     if gt_pixel_bbox is not None:
         gt_xmin, gt_ymin, gt_xmax, gt_ymax = gt_pixel_bbox
         cv2.rectangle(image_bgr, (gt_xmin, gt_ymin), (gt_xmax, gt_ymax), gt_col, 2)
+        if gt_label:
+            gt_label_pos = (max(0, gt_xmin), max(20, gt_ymin - 6))
+            cv2.putText(image_bgr, gt_label, gt_label_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(image_bgr, gt_label, gt_label_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
 
     cv2.rectangle(image_bgr, (pr_xmin, pr_ymin), (pr_xmax, pr_ymax), pred_col, 2)
+    if pred_label:
+        pr_label_pos = (max(0, pr_xmin), max(20, pr_ymin - 6))
+        cv2.putText(image_bgr, pred_label, pr_label_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.putText(image_bgr, pred_label, pr_label_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
 
-    overlay_text = model_name.strip() or "Model"
-    if iou_score is not None:
-        overlay_text = f"{overlay_text} | IoU: {iou_score:.2f}"
+    if show_overlay_text:
+        overlay_text = model_name.strip() or "Model"
+        if iou_score is not None:
+            overlay_text = f"{overlay_text} | IoU: {iou_score:.2f}"
 
-    text_org = (10, 30)
-    cv2.putText(
-        image_bgr,
-        overlay_text,
-        text_org,
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (0, 0, 0),
-        4,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        image_bgr,
-        overlay_text,
-        text_org,
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
-    )
+        text_org = (10, 30)
+        cv2.putText(
+            image_bgr,
+            overlay_text,
+            text_org,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 0, 0),
+            4,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image_bgr,
+            overlay_text,
+            text_org,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
 
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 

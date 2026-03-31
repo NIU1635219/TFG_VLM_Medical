@@ -6,6 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from src.inference.schemas import (
     AdvancedPolypClassification,
     AdvancedPolypClassificationWithReasoning,
+    PolypDiagnosisAndGrounding,
+    PolypDiagnosisAndGroundingWithReasoning,
     ClassEvidence,
     GenericObjectDetection,
     GenericObjectDetectionWithReasoning,
@@ -199,6 +201,69 @@ class TestAdvancedPolypClassification:
         assert "EXISTE una lesion" in prompt
 
 
+class TestPolypDiagnosisAndGrounding:
+    def test_accepts_valid_bbox_and_diagnosis(self):
+        obj = PolypDiagnosisAndGrounding(
+            detected_subject=(
+                "La lesión se observa en el centro-derecha, adherida a la pared del colon, "
+                "con elevación leve, contorno irregular y contraste moderado respecto a la "
+                "mucosa circundante; dentro del recuadro se aprecia tejido compatible con pólipo."
+            ),
+            ymin=120,
+            xmin=210,
+            ymax=640,
+            xmax=790,
+            morphology_and_borders=(
+                "La lesión presenta morfología sésil de base ancha, sin pedículo definido, con "
+                "borde periférico parcialmente lobulado y transición relativamente nítida en dos "
+                "tercios del contorno, mientras en el resto se aprecia un margen menos uniforme."
+            ),
+            surface_and_vascular_pattern=(
+                "La superficie muestra patrón granular fino con áreas de microrelieve irregular y "
+                "vascularización visible de calibre intermedio, distribuida de forma no homogénea; "
+                "se distinguen zonas con criptas alteradas y discretas diferencias de coloración."
+            ),
+            clinical_justification=(
+                "La combinación de arquitectura sésil, irregularidad de borde focal, patrón vascular "
+                "no uniforme y alteración superficial sugiere comportamiento adenomatoso. Se descarta "
+                "HP por ausencia de patrón homogéneo típico y ASS por no observar borde velado ni "
+                "rasgos mucosos dominantes compatibles con lesión serrada sésil."
+            ),
+            final_diagnosis_class="AD",
+        )
+
+        assert obj.final_diagnosis_class == "AD"
+        assert obj.morphology_and_borders
+
+    def test_rejects_invalid_bbox_geometry(self):
+        with pytest.raises(ValidationError):
+            PolypDiagnosisAndGrounding(
+                detected_subject="polipo sesil en cuadrante superior",
+                ymin=700,
+                xmin=210,
+                ymax=320,
+                xmax=790,
+                morphology_and_borders="Lesion plana con borde mal definido.",
+                surface_and_vascular_pattern="Textura homogenea y vascularizacion tenue.",
+                clinical_justification="Descripcion clinica breve.",
+                final_diagnosis_class="HP",
+            )
+
+    def test_rejects_invalid_diagnosis_label(self):
+        with pytest.raises(ValidationError):
+            PolypDiagnosisAndGrounding(
+                detected_subject="polipo sobreelevado en zona central izquierda",
+                ymin=80,
+                xmin=120,
+                ymax=500,
+                xmax=700,
+                morphology_and_borders="Lesion sobreelevada de borde irregular.",
+                surface_and_vascular_pattern="Superficie nodular con vasos tortuosos.",
+                clinical_justification="Descripcion clinica breve.",
+                final_diagnosis_class="INVALID",
+            )
+
+
 class TestReasoningSchemaVariants:
     def test_reasoning_registry_contains_all_base_schemas(self):
         expected = {
@@ -210,6 +275,7 @@ class TestReasoningSchemaVariants:
             "SycophancyTest",
             "ImageQualityAssessment",
             "BoundingBox",
+            "PolypDiagnosisAndGrounding",
         }
         assert expected == set(REASONING_SCHEMA_REGISTRY.keys())
 
@@ -284,6 +350,7 @@ class TestReasoningSchemaVariants:
             AdvancedPolypClassificationWithReasoning,
             SycophancyTestWithReasoning,
             ImageQualityAssessmentWithReasoning,
+            PolypDiagnosisAndGroundingWithReasoning,
         ):
             assert issubclass(cls, BaseModel)
 
@@ -460,6 +527,7 @@ class TestSchemaRegistry:
             "SycophancyTest",
             "ImageQualityAssessment",
             "BoundingBox",
+            "PolypDiagnosisAndGrounding",
         }
         assert expected == set(SCHEMA_REGISTRY.keys())
 
@@ -477,3 +545,4 @@ class TestSchemaRegistry:
         assert SCHEMA_REGISTRY["SycophancyTest"] is SycophancyTest
         assert SCHEMA_REGISTRY["ImageQualityAssessment"] is ImageQualityAssessment
         assert SCHEMA_REGISTRY["BoundingBox"] is BoundingBox
+        assert SCHEMA_REGISTRY["PolypDiagnosisAndGrounding"] is PolypDiagnosisAndGrounding

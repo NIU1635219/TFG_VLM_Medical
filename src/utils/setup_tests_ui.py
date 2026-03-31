@@ -45,6 +45,9 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
         run_all_unit_tests as run_all_unit_tests_screen,
         run_specific_test as run_specific_test_screen,
     )
+    from .tests_ui.grounding_scenarios import (
+        run_grounding_scenarios_selector_wrapper as run_grounding_scenarios_selector_screen,
+    )
     from .tests_ui.shared import (
         make_header,
         select_model,
@@ -164,6 +167,15 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             select_model=select_model_fn,
         )
 
+    def run_grounding_scenarios_selector_wrapper() -> None:
+        """Muestra selector stub de escenarios de grounding A/B/C/D."""
+        run_grounding_scenarios_selector_screen(
+            kit,
+            app,
+            make_header_fn=make_header_fn,
+            select_model=select_model_fn,
+        )
+
     # ------------------------------------------------------------------
     # Menú principal de tests
     # ------------------------------------------------------------------
@@ -219,6 +231,14 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             description=(
                 "Ejecuta prueba de concepto de visual grounding y valida si el modelo "
                 "devuelve coordenadas [ymin,xmin,ymax,xmax] en rango 0-1000."
+            ),
+        ),
+        kit.MenuItem(
+            " Select Grounding Scenario (A/B/C/D)",
+            run_grounding_scenarios_selector_wrapper,
+            description=(
+                "Abre selector inicial de escenarios de grounding (A, B, C, D). "
+                "Actualmente no ejecuta pipeline; solo prepara la navegación."
             ),
         ),
         kit.MenuItem(

@@ -144,7 +144,7 @@ def test_inference_uses_chat_history_with_images(loader, mock_lms_sdk):
     assert add_args.args[0]
     assert add_args.kwargs.get("images")
     assert first_call_kwargs.get("config") == {"temperature": 0.5}
-    assert first_call_kwargs.get("max_tokens") == 1000
+    assert first_call_kwargs.get("max_tokens") == 3000
     assert first_call_kwargs.get("response_format") is GenericObjectDetection
 
 
@@ -269,7 +269,7 @@ def test_preload_model_warms_up(loader, mock_lms_sdk):
     _mock_lms, mock_model = mock_lms_sdk
     mock_model.respond.return_value = "ok"
 
-    loader.preload_model(keep_alive="10m")
+    loader.preload_model()
 
     assert mock_model.respond.call_count >= 1
 

@@ -36,7 +36,7 @@ def _record(
         "image_path": str(image_path),
         "status": "ok",
         "ground_truth_cls": ground_truth,
-        "payload": {"predicted_class": predicted},
+        "payload": {"final_diagnosis_class": predicted},
     }
 
 

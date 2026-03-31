@@ -380,6 +380,13 @@ def _build_table_menu_items(
     """
     pipe = " │ "
 
+    def _resolve_color_code(color_name: str | None) -> str:
+        if not color_name:
+            return ""
+        if isinstance(color_name, str) and color_name.startswith("\033["):
+            return color_name
+        return str(getattr(style, color_name, ""))
+
     def _format_row_line(grid: list[list[_PlacedCell | None]], row_idx: int, widths: list[int]) -> str:
         parts: list[str] = []
         col_idx = 0
@@ -406,7 +413,7 @@ def _build_table_menu_items(
                 text = ""
 
             color_name = ref.color or ""
-            color_code = getattr(style, color_name, "") if color_name else ""
+            color_code = _resolve_color_code(color_name)
             endc = style.ENDC if color_code else ""
             parts.append(f"{color_code}{text:<{segment_width}}{endc}")
             col_idx += span
@@ -488,6 +495,13 @@ def _render_table_lines(
     pipe = " │ "
     widths = _compute_col_widths(columns, width)
 
+    def _resolve_color_code(color_name: str | None) -> str:
+        if not color_name:
+            return ""
+        if isinstance(color_name, str) and color_name.startswith("\033["):
+            return color_name
+        return str(getattr(style, color_name, ""))
+
     # Ancho real de la tabla: suma de celdas + separadores verticales + márgenes internos.
     # Formato de fila: "│ " + col + " │ " + col + " │"
     table_inner_width = sum(widths) + (3 * (len(columns) - 1))
@@ -500,7 +514,7 @@ def _render_table_lines(
             if len(text) > cell_width:
                 text = text[: cell_width - 1] + "…"
             color_name = (colors[idx] if colors and idx < len(colors) else None) or ""
-            color_code = getattr(style, color_name, "") if color_name else ""
+            color_code = _resolve_color_code(color_name)
             endc = style.ENDC if color_code else ""
             parts.append(f"{color_code}{text:<{cell_width}}{endc}")
         return pipe.join(parts)
@@ -566,7 +580,7 @@ def _render_table_lines(
                     else ""
                 )
                 color_name = (ref.color if ref is not None else None) or ""
-                color_code = getattr(style, color_name, "") if color_name else ""
+                color_code = _resolve_color_code(color_name)
                 color_end = endc if color_code else ""
                 rendered_segments.append(f"{color_code}{text_line:<{segment_width}}{color_end}")
                 segment_col_start += span

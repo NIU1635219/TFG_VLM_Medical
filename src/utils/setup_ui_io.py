@@ -42,6 +42,12 @@ class Style:
     DIM = "\033[2m"
     # Fondo invertido para ítems seleccionados en menús
     SELECTED = "\033[7m"
+    # Heatmap live: combinaciones alto contraste fg/bg para celdas
+    HM_CELL_LOW = "\033[97;44m"        # texto claro en fondo azul oscuro
+    HM_CELL_MID = "\033[30;103m"       # texto oscuro en fondo amarillo
+    HM_CELL_HIGH = "\033[30;101m"      # texto oscuro en fondo rojo claro
+    HM_CELL_DIAG = "\033[30;102m"      # texto oscuro en fondo verde claro (diagonal correcta)
+    HM_CELL_TOTAL = "\033[97;100m"     # texto claro en gris oscuro para totales
 
 
 # ---------------------------------------------------------------------------

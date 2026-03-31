@@ -1327,7 +1327,14 @@ def _schema_accuracy_field_candidates(schema_name: str) -> list[str]:
             if required_labels.issubset(normalized_args) and normalized_args.issubset(allowed_labels):
                 preferred.append(field_name)
 
-    fallback = ["final_diagnosis", "predicted_class", "diagnosis", "class", "label"]
+    fallback = [
+        "final_diagnosis_class",
+        "final_diagnosis",
+        "predicted_class",
+        "diagnosis",
+        "class",
+        "label",
+    ]
     ordered: list[str] = []
     for key in preferred + fallback:
         if key and key not in ordered:

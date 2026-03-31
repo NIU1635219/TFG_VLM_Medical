@@ -794,6 +794,179 @@ def test_setup_tests_ui_telemetry_probe_runs_with_selected_schema(monkeypatch):
     assert telemetry_calls[0]["schema_name"] == "PolypDetection"
     assert waits["count"] == 1
 
+def test_setup_tests_ui_grounding_scenario_selector_runs_scenario_a(monkeypatch):
+    """Valida que el selector de escenarios ejecute Scenario A tras elegir modelo."""
+    logs = []
+    menu_calls = {"tests": 0, "scenarios": 0, "scenario_a_model": 0}
+    scenario_calls = []
+
+    from src.utils.tests_ui import grounding_scenarios
+
+    def fake_select_sample_size(_kit):
+        return 10
+
+    def fake_select_seed(_kit, *, initial_value=42):
+        _ = initial_value
+        return 7
+
+    def fake_run_with_dashboards(
+        *,
+        kit,
+        app,
+        model_tag,
+        sample_size,
+        seed,
+        resume_mode=False,
+        resume_output_path=None,
+    ):
+        _ = (kit, app)
+        scenario_calls.append([model_tag, sample_size, seed, bool(resume_mode), resume_output_path])
+        return 0
+
+    monkeypatch.setattr(
+        grounding_scenarios,
+        "_select_grounding_sample_size",
+        fake_select_sample_size,
+    )
+    monkeypatch.setattr(
+        grounding_scenarios,
+        "_run_scenario_a_with_dashboards",
+        fake_run_with_dashboards,
+    )
+    monkeypatch.setattr(
+        grounding_scenarios,
+        "_select_grounding_seed",
+        fake_select_seed,
+    )
+
+    def interactive_menu(options, **kwargs):
+        menu_id = kwargs.get("menu_id")
+        if menu_id == "tests_manager_menu":
+            menu_calls["tests"] += 1
+            if menu_calls["tests"] == 1:
+                return next(
+                    item for item in options if item.label == " Select Grounding Scenario (A/B/C/D)"
+                )
+            return None
+        if menu_id == "grounding_scenarios_selector":
+            menu_calls["scenarios"] += 1
+            return next(item for item in options if item.label == " Scenario A (Zero-Shot BBox)")
+        if menu_id == "grounding_scenario_a_model_selector":
+            menu_calls["scenario_a_model"] += 1
+            return next(item for item in options if item.label == "model-a")
+        if menu_id == "grounding_scenario_a_run_mode_selector":
+            return next(item for item in options if item.label == " Nuevo run")
+        raise AssertionError(f"Unexpected menu_id: {menu_id}")
+
+    ctx = {
+        "Style": _DummyStyle,
+        "MenuItem": _MenuItem,
+        "print_banner": lambda: None,
+        "log": lambda msg, level="info": logs.append((msg, level)),
+        "run_cmd": lambda *_: None,
+        "wait_for_any_key": lambda *args, **kwargs: None,
+        "interactive_menu": interactive_menu,
+        "list_test_files": lambda: [],
+        "get_installed_lms_models": lambda: ["model-a"],
+        "clear_screen_ansi": lambda: None,
+        "manage_models_menu_ui": lambda: None,
+        "time": SimpleNamespace(sleep=lambda *_: None),
+    }
+
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
+
+    assert menu_calls["scenarios"] == 1
+    assert menu_calls["scenario_a_model"] == 1
+    assert scenario_calls == [["model-a", 10, 7, False, None]]
+    assert any(level == "success" for _, level in logs)
+
+
+def test_setup_tests_ui_grounding_scenario_selector_runs_scenario_b(monkeypatch):
+    """Valida que el selector de escenarios ejecute Scenario B tras elegir modelo."""
+    logs = []
+    menu_calls = {"tests": 0, "scenarios": 0, "scenario_b_model": 0}
+    scenario_calls = []
+
+    from src.utils.tests_ui import grounding_scenarios
+
+    def fake_select_sample_size(_kit):
+        return 8
+
+    def fake_select_seed(_kit, *, initial_value=42):
+        _ = initial_value
+        return 11
+
+    def fake_run_with_dashboards(
+        *,
+        kit,
+        app,
+        model_tag,
+        sample_size,
+        seed,
+        resume_mode=False,
+        resume_output_path=None,
+    ):
+        _ = (kit, app)
+        scenario_calls.append([model_tag, sample_size, seed, bool(resume_mode), resume_output_path])
+        return 0
+
+    monkeypatch.setattr(
+        grounding_scenarios,
+        "_select_grounding_sample_size",
+        fake_select_sample_size,
+    )
+    monkeypatch.setattr(
+        grounding_scenarios,
+        "_run_scenario_b_with_dashboards",
+        fake_run_with_dashboards,
+    )
+    monkeypatch.setattr(
+        grounding_scenarios,
+        "_select_grounding_seed",
+        fake_select_seed,
+    )
+
+    def interactive_menu(options, **kwargs):
+        menu_id = kwargs.get("menu_id")
+        if menu_id == "tests_manager_menu":
+            menu_calls["tests"] += 1
+            if menu_calls["tests"] == 1:
+                return next(
+                    item for item in options if item.label == " Select Grounding Scenario (A/B/C/D)"
+                )
+            return None
+        if menu_id == "grounding_scenarios_selector":
+            menu_calls["scenarios"] += 1
+            return next(item for item in options if item.label == " Scenario B (BBox Asistido)")
+        if menu_id == "grounding_scenario_b_model_selector":
+            menu_calls["scenario_b_model"] += 1
+            return next(item for item in options if item.label == "model-a")
+        if menu_id == "grounding_scenario_b_run_mode_selector":
+            return next(item for item in options if item.label == " Nuevo run")
+        raise AssertionError(f"Unexpected menu_id: {menu_id}")
+
+    ctx = {
+        "Style": _DummyStyle,
+        "MenuItem": _MenuItem,
+        "print_banner": lambda: None,
+        "log": lambda msg, level="info": logs.append((msg, level)),
+        "run_cmd": lambda *_: None,
+        "wait_for_any_key": lambda *args, **kwargs: None,
+        "interactive_menu": interactive_menu,
+        "list_test_files": lambda: [],
+        "get_installed_lms_models": lambda: ["model-a"],
+        "clear_screen_ansi": lambda: None,
+        "manage_models_menu_ui": lambda: None,
+        "time": SimpleNamespace(sleep=lambda *_: None),
+    }
+
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
+
+    assert menu_calls["scenarios"] == 1
+    assert menu_calls["scenario_b_model"] == 1
+    assert scenario_calls == [["model-a", 8, 11, False, None]]
+    assert any(level == "success" for _, level in logs)
+
 
 def test_setup_tests_ui_telemetry_probe_warns_when_tps_is_unavailable(monkeypatch):
     menu_calls = {"tests": 0, "model": 0, "schema": 0, "mode": 0}

@@ -501,9 +501,9 @@ def print_schema_progress(payload: dict[str, Any], *, stream: Any = None) -> Non
     if event == "image_start":
         import os
         try:
-            rel = os.path.relpath(image_path, os.getcwd())
+            rel = os.path.relpath(image_path, os.getcwd()) if image_path else "N/D"
         except ValueError:
-            rel = image_path
+            rel = str(image_path) if image_path else "N/D"
         print(f"\n  ▶ [{index}/{total}] {rel}", file=target)
         return
 

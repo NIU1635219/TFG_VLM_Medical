@@ -131,12 +131,12 @@ def _normalize_class_label(value: Any) -> str:
     return text
 
 
-def _extract_predicted_class(record: dict[str, Any]) -> str:
-    """Extrae clase predicha desde payload o campos planos de respaldo."""
+def _extract_final_diagnosis_class(record: dict[str, Any]) -> str:
+    """Extrae clase final desde payload o campos planos de respaldo."""
     payload = record.get("payload")
     if isinstance(payload, dict):
         candidate = (
-            payload.get("predicted_class")
+            payload.get("final_diagnosis_class")
             or payload.get("final_diagnosis")
             or payload.get("diagnosis")
             or payload.get("class")
@@ -146,7 +146,13 @@ def _extract_predicted_class(record: dict[str, Any]) -> str:
         if normalized:
             return normalized
 
-    for key in ("predicted_class", "final_diagnosis", "diagnosis", "class", "label"):
+    for key in (
+        "final_diagnosis_class",
+        "final_diagnosis",
+        "diagnosis",
+        "class",
+        "label",
+    ):
         normalized = _normalize_class_label(record.get(key))
         if normalized:
             return normalized
@@ -308,7 +314,7 @@ def _build_variant_candidates(
         if ground_truth not in VALID_CLASSES:
             continue
 
-        predicted = _extract_predicted_class(record)
+        predicted = _extract_final_diagnosis_class(record)
         if not predicted:
             continue
 

@@ -544,6 +544,117 @@ class BoundingBox(BaseModel):
         return self
 
 
+class PolypDiagnosisAndGrounding(BaseModel):
+    """
+    Esquema avanzado para visual grounding y diagnóstico diferencial de pólipos.
+    """
+
+    DEFAULT_SYSTEM_PROMPT: ClassVar[str] = (
+        "Eres un sistema de Inteligencia Artificial experto en endoscopia avanzada y visión computacional médica. "
+        "Tu misión es realizar un diagnóstico diferencial de lesiones colorrectales basándote en la evidencia visual.\n\n"
+
+        "REGLAS GEOMÉTRICAS CRÍTICAS PARA EL BOUNDING BOX:\n"
+        "Al determinar las coordenadas [ymin, xmin, ymax, xmax] en la escala 0-1000:\n"
+        "1. El valor 'xmin' debe ser estrictamente MENOR que 'xmax'.\n"
+        "2. El valor 'ymin' debe ser estrictamente MENOR que 'ymax'.\n"
+        "3. El punto (xmin, ymin) debe representar la esquina superior izquierda de la lesión y "
+        "(xmax, ymax) la esquina inferior derecha. No inviertas los ejes.\n\n"
+    )
+
+    # --- PASO 2: LOCALIZACIÓN (Visual Grounding) ---
+    detected_subject: str = Field(
+        ...,
+        min_length=100,
+        description=(
+            "Localización espacial directa de la lesión. "
+            "1. Indica la posición en la imagen usando términos simples o mezclas: arriba, abajo, izquierda, derecha o en el centro. "
+            "2. Describe su relación con la anatomía visible (ej: 'en la derecha, pegado a la pared del colon', 'abajo, sobre un pliegue'). "
+            "3. Si hay un recuadro rojo, confirma explícitamente qué ves dentro de él. "
+            "Indica si la lesión se ve clara o si cuesta verla por culpa de reflejos de luz o moco."
+        ),
+    )
+    
+    ymin: int = Field(
+        ..., 
+        ge=0, 
+        le=1000, 
+        description=(
+            "Coordenada vertical mínima (borde superior) del recuadro que encierra la lesión. "
+            "Calculada en una escala normalizada de 0 a 1000, donde 0 representa el límite superior absoluto de la imagen. "
+            "Debe marcar el punto más alto donde comienza el tejido anómalo."
+        )
+    )
+    xmin: int = Field(
+        ..., 
+        ge=0, 
+        le=1000, 
+        description=(
+            "Coordenada horizontal mínima (borde izquierdo) del recuadro que encierra la lesión. "
+            "En la escala normalizada 0-1000, el valor 0 indica el extremo izquierdo de la captura. "
+            "Debe situarse exactamente en el margen izquierdo donde se detecta el cambio de textura o relieve."
+        )
+    )
+    ymax: int = Field(
+        ..., 
+        ge=0, 
+        le=1000, 
+        description=(
+            "Coordenada vertical máxima (borde inferior) del recuadro que encierra la lesión. "
+            "En la escala normalizada 0-1000, el valor 1000 representa el fondo de la imagen. "
+            "Este valor debe ser estrictamente mayor que ymin y delimitar el final de la lesión hacia abajo."
+        )
+    )
+    xmax: int = Field(
+        ..., 
+        ge=0, 
+        le=1000, 
+        description=(
+            "Coordenada horizontal máxima (borde derecho) del recuadro que encierra la lesión. "
+            "En la escala normalizada 0-1000, el valor 1000 indica el extremo derecho de la captura. "
+            "Debe situarse en el punto más a la derecha donde el pólipo se une con la mucosa sana."
+        )
+    )
+
+    # --- PASO 3: ANÁLISIS CLÍNICO DETALLADO ---
+    morphology_and_borders: str = Field(
+        ...,
+        min_length=150,
+        description=(
+            "Análisis de forma y límites: ¿Es protrusiva, pediculada o plana? "
+            "Describe si los bordes son nítidos (típico AD) o si son difusos, velados "
+            "o irregulares (típico ASS según criterios WASP)."
+        ),
+    )
+    surface_and_vascular_pattern: str = Field(
+        ...,
+        min_length=150,
+        description=(
+            "Análisis micro-estructural: Describe el color (pálido vs eritematoso), "
+            "la presencia de vasos sanguíneos (NICE 1 vs 2) y el patrón de las criptas "
+            "(liso, puntos, aberturas dilatadas o aspecto de nube/moco)."
+        ),
+    )
+
+    clinical_justification: str = Field(
+        ...,
+        min_length=200,
+        description=(
+            "Razonamiento final: Conecta las evidencias de morfología y superficie "
+            "con una de las tres clases, descartando las otras dos basándote en la "
+            "ausencia de sus rasgos típicos."
+        ),
+    )
+    final_diagnosis_class: Literal["AD", "HP", "ASS"] = Field(
+        ...,
+        description="Veredicto histológico final: AD, HP o ASS."
+    )
+
+    @model_validator(mode="after")
+    def validate_bbox_geometry(self) -> "PolypDiagnosisAndGrounding":
+        if self.ymin >= self.ymax or self.xmin >= self.xmax:
+            raise ValueError("Geometría de Bounding Box inválida.")
+        return self
+
 # ---------------------------------------------------------------------------
 # Registro público de esquemas disponibles (utilizado por el CLI interactivo)
 # ---------------------------------------------------------------------------
@@ -557,6 +668,7 @@ SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "SycophancyTest": SycophancyTest,
     "ImageQualityAssessment": ImageQualityAssessment,
     "BoundingBox": BoundingBox,
+    "PolypDiagnosisAndGrounding": PolypDiagnosisAndGrounding,
 }
 
 GenericObjectDetectionWithReasoning = _create_reasoning_schema(
@@ -665,6 +777,19 @@ BoundingBoxWithReasoning = _create_reasoning_schema(
     ),
 )
 
+PolypDiagnosisAndGroundingWithReasoning = _create_reasoning_schema(
+    PolypDiagnosisAndGrounding,
+    reasoning_description=(
+        "Proceso lógico paso a paso que conecta la localización visual de la lesión "
+        "(bbox) con la clase histológica final y su nivel de confianza."
+    ),
+    docstring=(
+        "Variante con razonamiento explícito para grounding + diagnóstico.\n\n"
+        "El modelo debe exponer primero su razonamiento antes de emitir la "
+        "bounding box y la clase final."
+    ),
+)
+
 REASONING_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "GenericObjectDetection": GenericObjectDetectionWithReasoning,
     "PolypDetection": PolypDetectionWithReasoning,
@@ -674,6 +799,7 @@ REASONING_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "SycophancyTest": SycophancyTestWithReasoning,
     "ImageQualityAssessment": ImageQualityAssessmentWithReasoning,
     "BoundingBox": BoundingBoxWithReasoning,
+    "PolypDiagnosisAndGrounding": PolypDiagnosisAndGroundingWithReasoning,
 }
 
 

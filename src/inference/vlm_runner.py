@@ -867,7 +867,7 @@ class VLMLoader:
         kwargs: dict[str, Any] = {
             "response_format": target_schema,
             "config": base_config,
-            "max_tokens": 1000,
+            "max_tokens": 3000,
         }
 
         attempts = 0
@@ -999,7 +999,7 @@ class VLMLoader:
 
         self._loaded_model = cast(_LMSModelHandle, model)
 
-    def preload_model(self, keep_alive: str = "20m") -> None:
+    def preload_model(self, n_ctx: int | None = None, n_gpu_layers: int | None = None, **load_kwargs) -> None:
         """
         Precarga el modelo en memoria enviando una consulta mínima (warmup).
         
@@ -1007,14 +1007,26 @@ class VLMLoader:
         reduciendo la latencia de la primera petición.
         
         Args:
-            keep_alive (str, optional): Duración para mantener el modelo cargado.
-                Por defecto es "20m" (20 minutos), aunque actualmente no se usa explícitamente.
-                
+            n_ctx (int | None, optional): Ventana de contexto (en tokens) que se pasará
+                a `load_model`. Si es None, se usará el valor por defecto de `load_model`.
+            n_gpu_layers (int | None, optional): Número de capas en GPU que se pasará
+                a `load_model`. Si es None, se usará el valor por defecto de `load_model`.
+            **load_kwargs: Parámetros adicionales que se reenviarán a `load_model`.
+
         Raises:
             RuntimeError: Si falla la petición de calentamiento.
         """
-        _ = keep_alive
-        self.load_model()
+        # Si se proporcionan parámetros de carga, se reenvían a `load_model`.
+        if n_ctx is None and n_gpu_layers is None and not load_kwargs:
+            self.load_model()
+        else:
+            kwargs: dict[str, Any] = {}
+            if n_ctx is not None:
+                kwargs["n_ctx"] = int(n_ctx)
+            if n_gpu_layers is not None:
+                kwargs["n_gpu_layers"] = int(n_gpu_layers)
+            kwargs.update(load_kwargs)
+            self.load_model(**kwargs)
         try:
             model_handle = self._loaded_model
             assert model_handle is not None

@@ -20,7 +20,7 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - `UIKit` incluye API de tablas tipadas y reutilizables (`TableColumn`, `TableRow`, `TableCell`, `build_table_items`, `table_menu`) con anchos adaptativos al terminal.
 - Motor de tablas TUI ampliado con celdas avanzadas (`rowspan`/`colspan`) y control de truncado por líneas (`max_cell_lines`) para mejorar legibilidad en terminales estrechos.
 - `UIKit` añade `render_and_wait_responsive(...)` como helper común de espera reactiva, con repintado automático al redimensionar el terminal.
-- Dashboard de escenarios de grounding (A/B) en vivo desde Setup Tests UI:
+- Dashboard de escenarios de grounding (A/B/C/D/E) en vivo desde Setup Tests UI:
     - barra de progreso con clamp defensivo (`current` no excede `total`),
     - resumen de clase (match/mismatch + accuracy),
     - IoU medio en la misma línea de métricas de clasificación,
@@ -86,9 +86,9 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Batch Runner: borrado de manifiesto desde TUI con limpieza de outputs JSONL vinculados.
 - Convención UI: pantallas finales estructuradas migradas al helper común `render_and_wait_responsive(...)` para espera reactiva con repintado por redimensionado (manifest/schema/smoke/telemetry/response inspector/batch summary).
 - Setup Tests UI: nueva opción `Run A/B Prompting Experiment (AD)` con preview previo, confirmación y pantalla final reactiva.
-- Setup Tests UI: selector `Select Grounding Scenario (A/B/C/D)` integrado con ejecución real para escenarios A y B.
-- Grounding A/B: robustez de completitud/resume con skeleton JSONL (`pending`), upsert por `image_id` y detección de registros sin rellenar.
-- Grounding A/B: registros con `status=error/failed/fail` se consideran incompletos para `resume`.
+- Setup Tests UI: selector `Select Grounding Scenario (A/B/C/D/E)` integrado con ejecución real para escenarios A, B, C, D y E.
+- Grounding scenarios: robustez de completitud/resume con skeleton JSONL (`pending`), upsert por `image_id` y detección de registros sin rellenar.
+- Grounding scenarios: registros con `status=error/failed/fail` se consideran incompletos para `resume`.
 - Dashboard live de grounding: heatmap clínico GT→Pred con porcentaje global y porcentaje por fila GT en cada celda.
 - Dashboard live de grounding: leyenda compacta en una línea y panel reordenado (tabla heatmap arriba, ruta de salida JSONL debajo).
 - Nuevo script `src/scripts/experiment_ab_text.py` para detección automática de variantes desde JSONL (`__batch_meta__`) y comparación cualitativa A/B sobre muestras AD estratificadas.
@@ -141,9 +141,12 @@ Dependencias declaradas en `pyproject.toml`.
 │   ├── scripts/
 │   │   ├── batch_runner.py             # Orquestador masivo con exportado incremental en JSONL compartido.
 │   │   ├── experiment_ab_text.py       # Experimento A/B zero-shot vs asistido con Ground Truth AD y reporte Markdown.
-│   │   ├── grounding_experiments/      # Escenarios de grounding A/B y módulos de reporte/agregación.
+│   │   ├── grounding_experiments/      # Escenarios de grounding A/B/C/D/E y módulos de reporte/agregación.
 │   │   │   ├── run_scenario_A.py       # Scenario A: zero-shot (bbox + clase) con reporte Markdown.
 │   │   │   ├── run_scenario_B.py       # Scenario B: asistido por clase GT (lookup split) con reporte Markdown.
+│   │   │   ├── run_scenario_C.py       # Scenario C: bbox GT superpuesto sobre imagen completa para guiar la localización.
+│   │   │   ├── run_scenario_D.py       # Scenario D: inferencia dual (imagen completa + ROI) con bbox evaluado en imagen completa.
+│   │   │   ├── run_scenario_E.py       # Scenario E: techo de calidad (ROI + imagen con bbox GT + clase asistida).
 │   │   │   ├── runner_core.py          # Fachada pública compartida usada por escenarios y UI.
 │   │   │   ├── report_aggregation.py   # Persistencia y agregación JSONL (meta/summary/resume).
 │   │   │   ├── report_serialization.py # Serialización compacta de registros por imagen.
@@ -177,6 +180,9 @@ Dependencias declaradas en `pyproject.toml`.
 │           ├── ab_experiment.py        # Flujo UI del experimento A/B con preview de variantes y resumen final.
 │           ├── batch.py                # Flujo UI del Batch Runner y selección de parámetros de ejecución.
 │           ├── cli_reporters.py        # Reportes CLI y helpers de render para dashboards y tests
+│           ├── grounding_scenarios.py  # Selector y orquestación de escenarios A/B/C/D/E desde la TUI.
+│           ├── grounding_scenarios_helpers.py # Helpers de validación y preparación de inputs para grounding.
+│           ├── grounding_scenarios_live_runner.py # Ejecución live desacoplada para dashboards de grounding.
 │           ├── manifest.py             # Gestión completa de manifests (crear/derivar/usar/eliminar) y limpieza de outputs.
 │           ├── manifest_generation.py  # Generación estratificada de manifests para muestreo reproducible.
 │           ├── poc_bbox.py             # Flujo UI reactivo de la PoC BBox (dashboard vivo + resumen responsive).
@@ -709,15 +715,39 @@ uv run python -m src.scripts.grounding_experiments.run_scenario_B \
     --seed 42
 ```
 
+### Scenario C (`run_scenario_C.py`)
+
+Escenario con guía visual explícita por bbox GT:
+
+- Dibuja la bbox GT sobre la imagen completa y usa esa imagen anotada como entrada de inferencia.
+- Mantiene clasificación + localización en una única respuesta estructurada.
+- Persistencia incremental y reporte final alineados con el pipeline común.
+
+### Scenario D (`run_scenario_D.py`)
+
+Escenario de aislamiento visual con contexto dual:
+
+- Envía dos imágenes al VLM: imagen completa y recorte ROI derivado de la bbox GT.
+- El prompt fija que la bbox predicha debe corresponder a la imagen completa.
+- Permite evaluar cuánto ayuda el foco ROI sin perder referencia espacial global.
+
+### Scenario E (`run_scenario_E.py`)
+
+Escenario de techo de calidad con asistencia máxima:
+
+- Combina ROI + imagen completa con bbox GT superpuesta + clase GT asistida en prompt.
+- Busca un límite superior operativo para clasificación/localización bajo fuerte guía.
+- Conserva el mismo contrato de salida (JSONL incremental + summary + Markdown).
+
 ### Convenciones de datos para escenarios
 
 - CSV de ground truth por defecto: `data/processed/m_train/ground_truth_bboxes.csv`.
 - Exportación recomendada de BBoxes por split operativo: `m_train` y `m_valid`.
 - `m_test` puede existir como partición de evaluación, pero no se cuenta en el flujo operativo por defecto cuando no dispone de máscaras.
 
-### UI live y completitud en escenarios A/B
+### UI live y completitud en escenarios A/B/C/D/E
 
-- Desde Setup Tests UI se ejecutan A/B con dashboard en vivo y cierre en pantalla final reactiva.
+- Desde Setup Tests UI se ejecutan A/B/C/D/E con dashboard en vivo y cierre en pantalla final reactiva.
 - El archivo de resultados usa skeleton inicial (`pending`) y actualización incremental por `image_id`.
 - Un run se considera incompleto si queda cualquier registro `pending` o `error/failed/fail`, incluso con `__scenario_summary__` presente.
 - En modo `resume`, el runner solo salta registros realmente completados (`ok` o `skip`) y vuelve a intentar pendientes/errores.
@@ -796,7 +826,7 @@ Tests más relevantes:
 - `tests/test_telemetry.py`: extracción de TTFT/TPS y resumen de telemetría.
 - `tests/test_batch_runner.py`: exportado incremental y persistencia de resultados por imagen.
 - `tests/test_experiment_ab_text.py`: detección de variantes y balanceo estratificado de muestras A/B.
-- `tests/test_grounding_runner_core.py`: completitud/resume, agregación acumulada y reportes para escenarios A/B.
+- `tests/test_grounding_runner_core.py`: completitud/resume, agregación acumulada y reportes para escenarios A/B/C/D/E.
 - `tests/test_grounding_live_heatmap.py`: render del heatmap live (conteo + %global/%fila, gradiente y leyenda).
 - `tests/test_progress_bar.py`: clamp de barra de progreso y casos límite sin muestra.
 - `tests/test_schemas.py`: validación de esquemas Pydantic base y variantes `WithReasoning`.

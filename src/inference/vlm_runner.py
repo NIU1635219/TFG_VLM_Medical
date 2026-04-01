@@ -1,11 +1,9 @@
 """Módulo de carga e inferencia VLM sobre LM Studio usando lmstudio-python."""
 
-import base64
 import io
 import json
 import dataclasses
 import math
-import mimetypes
 import os
 import re
 import time
@@ -687,25 +685,6 @@ class VLMLoader:
             resources={},
         )
 
-    def _encode_image_data_url(self, image_path: str) -> str:
-        """
-        Codifica una imagen local en formato Data URL (base64).
-        
-        Args:
-            image_path (str): Ruta al archivo de imagen.
-            
-        Returns:
-            str: La cadena Data URL representando la imagen.
-        """
-        mime_type, _ = mimetypes.guess_type(image_path)
-        if not mime_type:
-            mime_type = "image/jpeg"
-
-        with open(image_path, "rb") as image_file:
-            encoded = base64.b64encode(image_file.read()).decode("utf-8")
-
-        return f"data:{mime_type};base64,{encoded}"
-
     def _prepare_image_source_for_lms(self, image_path: str) -> Any:
         """
         Prepara y optimiza una imagen para ser enviada a través de la API de LM Studio.
@@ -749,7 +728,7 @@ class VLMLoader:
     def _build_multimodal_history(
         self,
         structured_text: str,
-        image_path: str,
+        image_paths: list[str],
         system_prompt: str | None = None,
     ) -> Any:
         """
@@ -760,7 +739,7 @@ class VLMLoader:
         
         Args:
             structured_text (str): El texto del prompt estructurado.
-            image_path (str): Ruta a la imagen a analizar.
+            image_paths (list[str]): Rutas a las imágenes locales a analizar.
             system_prompt (str | None): Instrucción de sistema opcional para
                 guiar el comportamiento del modelo.
             
@@ -771,17 +750,21 @@ class VLMLoader:
             prepare_image_fn = getattr(getattr(self._client, "files", None), "prepare_image", None)
         else:
             prepare_image_fn = getattr(lms, "prepare_image", None) if lms is not None else None
-        image_source = self._prepare_image_source_for_lms(image_path)
-        if callable(prepare_image_fn):
-            try:
-                image_payload = prepare_image_fn(image_source)
-            except Exception:
+
+        image_payloads: list[Any] = []
+        for image_path in image_paths:
+            image_source = self._prepare_image_source_for_lms(image_path)
+            if callable(prepare_image_fn):
                 try:
-                    image_payload = prepare_image_fn(image_path)
+                    image_payload = prepare_image_fn(image_source)
                 except Exception:
-                    image_payload = self._encode_image_data_url(image_path)
-        else:
-            image_payload = self._encode_image_data_url(image_path)
+                    try:
+                        image_payload = prepare_image_fn(image_path)
+                    except Exception:
+                        image_payload = image_source
+            else:
+                image_payload = image_source
+            image_payloads.append(image_payload)
 
         chat_cls = getattr(lms, "Chat", None) if lms is not None else None
         if callable(chat_cls):
@@ -793,7 +776,7 @@ class VLMLoader:
                 else:
                     structured_text = f"{system_prompt}\n\n{structured_text}"
             try:
-                chat.add_user_message(structured_text, images=[image_payload])
+                chat.add_user_message(structured_text, images=image_payloads)
                 return chat
             except Exception:
                 chat = cast(_LMSChatHandle, chat_cls())
@@ -803,7 +786,7 @@ class VLMLoader:
                         add_system_message_fn(system_prompt)
                     else:
                         structured_text = f"{system_prompt}\n\n{structured_text}"
-                chat.add_user_message([structured_text, image_payload])
+                chat.add_user_message([structured_text, *image_payloads])
                 return chat
 
         messages: list[dict[str, Any]] = []
@@ -812,7 +795,7 @@ class VLMLoader:
         messages.append(
             {
                 "role": "user",
-                "content": [structured_text, image_payload],
+                "content": [structured_text, *image_payloads],
             }
         )
         return {"messages": messages}
@@ -1074,7 +1057,7 @@ class VLMLoader:
     @overload
     def inference(
         self,
-        image_path: str | Path,
+        image_path: str | Path | list[str | Path],
         prompt: str,
         schema: Type[T] = GenericObjectDetection,
         temperature: float = 0.7,
@@ -1102,7 +1085,7 @@ class VLMLoader:
     @overload
     def inference(
         self,
-        image_path: str | Path,
+        image_path: str | Path | list[str | Path],
         prompt: str,
         schema: Type[T] = GenericObjectDetection,
         temperature: float = 0.7,
@@ -1129,7 +1112,7 @@ class VLMLoader:
 
     def inference(
         self,
-        image_path: str | Path,
+        image_path: str | Path | list[str | Path],
         prompt: str,
         schema: Type[T] = GenericObjectDetection,  # type: ignore[assignment]
         temperature: float = 0.7,
@@ -1153,7 +1136,7 @@ class VLMLoader:
             result: PolypDetection = loader.inference("imagen.jpg", prompt, schema=PolypDetection)
 
         Args:
-            image_path (str | Path): Ruta al archivo de imagen (local).
+            image_path (str | Path | list[str | Path]): Ruta local de imagen o lista de rutas.
             prompt (str): Pregunta o instrucción para el modelo.
             schema (Type[T]): Clase Pydantic que define el contrato de respuesta JSON.
                 Por defecto usa ``GenericObjectDetection`` para compatibilidad hacia atrás.
@@ -1186,13 +1169,24 @@ class VLMLoader:
         if not (0.0 <= temperature_value <= 2.0):
             raise ValueError("temperature debe estar entre 0.0 y 2.0")
 
-        # Normaliza la ruta: acepta str o Path
-        image_path_str = str(image_path).strip()
-        if not image_path_str:
+        # Solo se aceptan rutas locales para evitar prompts gigantes por base64 inline.
+        raw_paths: list[str | Path]
+        if isinstance(image_path, list):
+            raw_paths = image_path
+        else:
+            raw_paths = [image_path]
+
+        if len(raw_paths) == 0:
             raise ValueError("image_path no puede estar vacío")
 
-        if not os.path.isfile(image_path_str):
-            raise FileNotFoundError(f"Imagen no encontrada en: {image_path_str}")
+        image_paths: list[str] = []
+        for raw_path in raw_paths:
+            image_path_str = str(raw_path).strip()
+            if not image_path_str:
+                raise ValueError("image_path no puede estar vacío")
+            if not os.path.isfile(image_path_str):
+                raise FileNotFoundError(f"Imagen no encontrada en: {image_path_str}")
+            image_paths.append(image_path_str)
 
         # Carga el modelo si aún no está en memoria
         self.load_model()
@@ -1214,7 +1208,7 @@ class VLMLoader:
         try:
             multimodal_input = self._build_multimodal_history(
                 structured_text,
-                image_path_str,
+                image_paths,
                 system_prompt=resolved_system_prompt,
             )
         except TypeError as error:
@@ -1223,7 +1217,7 @@ class VLMLoader:
                 structured_text_with_system = f"{resolved_system_prompt}\n\n{structured_text}"
                 multimodal_input = self._build_multimodal_history(
                     structured_text_with_system,
-                    image_path_str,
+                    image_paths,
                 )
             else:
                 raise

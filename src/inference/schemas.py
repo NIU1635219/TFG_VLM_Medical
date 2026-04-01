@@ -551,29 +551,22 @@ class PolypDiagnosisAndGrounding(BaseModel):
 
     DEFAULT_SYSTEM_PROMPT: ClassVar[str] = (
         "Eres un sistema de Inteligencia Artificial experto en endoscopia avanzada y visión computacional médica. "
-        "Tu misión es realizar un diagnóstico diferencial de lesiones colorrectales basándote en la evidencia visual.\n\n"
-
-        "REGLAS GEOMÉTRICAS CRÍTICAS PARA EL BOUNDING BOX:\n"
-        "Al determinar las coordenadas [ymin, xmin, ymax, xmax] en la escala 0-1000:\n"
-        "1. El valor 'xmin' debe ser estrictamente MENOR que 'xmax'.\n"
-        "2. El valor 'ymin' debe ser estrictamente MENOR que 'ymax'.\n"
-        "3. El punto (xmin, ymin) debe representar la esquina superior izquierda de la lesión y "
-        "(xmax, ymax) la esquina inferior derecha. No inviertas los ejes.\n\n"
+        "Tu misión es realizar un diagnóstico diferencial de lesiones colorrectales basándote en la evidencia visual. "
+        "PREMISA INALTERABLE: En la imagen proporcionada EXISTE un pólipo, aunque pueda ser muy sutil, plano o del mismo color que la mucosa circundante. "
+        "Solo debes elegir entre estas tres categorías histológicas: 1. Adenoma (AD) 2. Pólipo Hiperplásico (HP) 3. Adenoma Serrado Sésil (ASS). "
     )
 
     # --- PASO 2: LOCALIZACIÓN (Visual Grounding) ---
     detected_subject: str = Field(
         ...,
-        min_length=100,
+        min_length=150,
         description=(
             "Localización espacial directa de la lesión. "
             "1. Indica la posición en la imagen usando términos simples o mezclas: arriba, abajo, izquierda, derecha o en el centro. "
             "2. Describe su relación con la anatomía visible (ej: 'en la derecha, pegado a la pared del colon', 'abajo, sobre un pliegue'). "
-            "3. Si hay un recuadro rojo, confirma explícitamente qué ves dentro de él. "
-            "Indica si la lesión se ve clara o si cuesta verla por culpa de reflejos de luz o moco."
         ),
     )
-    
+
     ymin: int = Field(
         ..., 
         ge=0, 
@@ -621,8 +614,8 @@ class PolypDiagnosisAndGrounding(BaseModel):
         min_length=150,
         description=(
             "Análisis de forma y límites: ¿Es protrusiva, pediculada o plana? "
-            "Describe si los bordes son nítidos (típico AD) o si son difusos, velados "
-            "o irregulares (típico ASS según criterios WASP)."
+            "Describe si los bordes son nítidos o si son difusos, velados "
+            "o irregulares (según criterios WASP)."
         ),
     )
     surface_and_vascular_pattern: str = Field(
@@ -646,7 +639,7 @@ class PolypDiagnosisAndGrounding(BaseModel):
     )
     final_diagnosis_class: Literal["AD", "HP", "ASS"] = Field(
         ...,
-        description="Veredicto histológico final: AD, HP o ASS."
+        description="Veredicto histológico final: AD (Adenoma), HP (Hiperplasia) o ASS (Adenoma con Síndrome de Serrado)."
     )
 
     @model_validator(mode="after")
@@ -820,7 +813,18 @@ def get_schema_variant(schema_name: str, include_reasoning: bool) -> tuple[str, 
 
     base_schema = SCHEMA_REGISTRY[schema_name]
     if include_reasoning:
-        return f"{schema_name}WithReasoning", REASONING_SCHEMA_REGISTRY[schema_name]
+        # Devuelve la variante registrada si existe.
+        if schema_name in REASONING_SCHEMA_REGISTRY:
+            return f"{schema_name}WithReasoning", REASONING_SCHEMA_REGISTRY[schema_name]
+        # Si no existe, genera dinámicamente una variante con razonamiento
+        # usando la fábrica ya definida y la registra para reutilización.
+        generated = _create_reasoning_schema(
+            base_schema,
+            reasoning_description="Proceso lógico paso a paso previo a la decisión.",
+            docstring=f"Variante generada dinámicamente con razonamiento para {schema_name}.",
+        )
+        REASONING_SCHEMA_REGISTRY[schema_name] = generated
+        return f"{schema_name}WithReasoning", generated
     return schema_name, base_schema
 
 

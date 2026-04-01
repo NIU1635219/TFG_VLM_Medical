@@ -6,12 +6,12 @@ persistence so all scenarios can reuse the same execution primitives.
 
 from __future__ import annotations
 
-import base64
 import dataclasses
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, TypeVar, cast
 
+import cv2
 import pandas as pd
 
 from src.inference.schemas import PolypDiagnosisAndGrounding
@@ -247,30 +247,119 @@ def resolve_ground_truth_class_from_lookup(
     )
 
 
-def encode_image_base64(image_path: str) -> str:
-    """Encode an image file to a base64 UTF-8 string.
+def draw_bbox_and_save_temp_image(
+    image_path: Path,
+    bbox_norm: list[int],
+    *,
+    temp_dir: Path,
+) -> Path:
+    """Dibuja un bbox GT y guarda la imagen temporal en disco.
 
-    Args:
-        image_path: Path to the image file.
-
-    Returns:
-        Base64-encoded image content.
-
-    Raises:
-        FileNotFoundError: If the image path does not exist.
-        RuntimeError: If encoding fails.
+    Devuelve la ruta de una imagen JPEG temporal lista para pasar como `image_path`
+    a la inferencia multimodal.
     """
-    path = Path(image_path)
-    if not path.exists() or not path.is_file():
-        raise FileNotFoundError(f"Image file not found: {path}")
+    image = _draw_bbox_overlay(image_path=image_path, bbox_norm=bbox_norm)
+
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    output_path = temp_dir / f"{image_path.stem}_forced_bbox_{timestamp}.jpg"
+    ok = cv2.imwrite(str(output_path), image)
+    if not ok:
+        raise RuntimeError(f"No se pudo escribir imagen temporal: {output_path}")
+    return output_path
+
+
+def crop_roi_and_save_temp_image(
+    image_path: Path,
+    bbox_norm: list[int],
+    temp_dir: Path,
+    padding_pct: float = 0.1,
+) -> Path:
+    """Recorta la ROI del bbox GT con padding y guarda el resultado temporalmente."""
+    if len(bbox_norm) != 4:
+        raise ValueError("bbox_norm debe contener 4 elementos: [ymin, xmin, ymax, xmax]")
+
+    if padding_pct < 0:
+        raise ValueError("padding_pct debe ser mayor o igual que 0")
+
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError(f"No se pudo leer la imagen con OpenCV: {image_path}")
+
+    height, width = image.shape[:2]
 
     try:
-        with path.open("rb") as image_handle:
-            encoded = base64.b64encode(image_handle.read()).decode("utf-8")
-    except Exception as exc:  # pragma: no cover - defensive guard
-        raise RuntimeError(f"Failed to encode image as base64 at {path}: {exc}") from exc
+        ymin = int(float(bbox_norm[0]) * float(height) / 1000.0)
+        xmin = int(float(bbox_norm[1]) * float(width) / 1000.0)
+        ymax = int(float(bbox_norm[2]) * float(height) / 1000.0)
+        xmax = int(float(bbox_norm[3]) * float(width) / 1000.0)
+    except Exception as exc:
+        raise ValueError("bbox_norm contiene valores no numéricos") from exc
 
-    return encoded
+    y1 = max(0, min(height - 1, min(ymin, ymax)))
+    y2 = max(0, min(height, max(ymin, ymax)))
+    x1 = max(0, min(width - 1, min(xmin, xmax)))
+    x2 = max(0, min(width, max(xmin, xmax)))
+
+    bbox_h = max(1, y2 - y1)
+    bbox_w = max(1, x2 - x1)
+
+    pad_y = int(round(float(bbox_h) * float(padding_pct)))
+    pad_x = int(round(float(bbox_w) * float(padding_pct)))
+
+    crop_y1 = max(0, y1 - pad_y)
+    crop_y2 = min(height, y2 + pad_y)
+    crop_x1 = max(0, x1 - pad_x)
+    crop_x2 = min(width, x2 + pad_x)
+
+    if crop_y2 <= crop_y1:
+        crop_y2 = min(height, crop_y1 + 1)
+    if crop_x2 <= crop_x1:
+        crop_x2 = min(width, crop_x1 + 1)
+
+    cropped_img = image[crop_y1:crop_y2, crop_x1:crop_x2]
+    if cropped_img.size == 0:
+        raise RuntimeError(f"El recorte ROI quedó vacío para la imagen: {image_path}")
+
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    output_path = temp_dir / f"{image_path.stem}_roi_crop_{timestamp}.jpg"
+    ok = cv2.imwrite(str(output_path), cropped_img)
+    if not ok:
+        raise RuntimeError(f"No se pudo escribir imagen temporal: {output_path}")
+    return output_path
+
+
+def _draw_bbox_overlay(*, image_path: Path, bbox_norm: list[int]) -> Any:
+    """Construye imagen OpenCV con el bbox dibujado en rojo."""
+    if len(bbox_norm) != 4:
+        raise ValueError("bbox_norm debe contener 4 elementos: [ymin, xmin, ymax, xmax]")
+
+    if not image_path.exists() or not image_path.is_file():
+        raise FileNotFoundError(f"Image file not found: {image_path}")
+
+    image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise RuntimeError(f"No se pudo leer la imagen con OpenCV: {image_path}")
+
+    height, width = image.shape[:2]
+
+    try:
+        ymin = int(float(bbox_norm[0]) * float(height) / 1000.0)
+        xmin = int(float(bbox_norm[1]) * float(width) / 1000.0)
+        ymax = int(float(bbox_norm[2]) * float(height) / 1000.0)
+        xmax = int(float(bbox_norm[3]) * float(width) / 1000.0)
+    except Exception as exc:
+        raise ValueError("bbox_norm contiene valores no numéricos") from exc
+
+    # Recorta coordenadas para evitar errores de dibujo fuera de rango.
+    ymin = max(0, min(height - 1, ymin))
+    ymax = max(0, min(height - 1, ymax))
+    xmin = max(0, min(width - 1, xmin))
+    xmax = max(0, min(width - 1, xmax))
+
+    cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 0, 255), thickness=3)
+    return image
 
 
 def save_result(output_file: str, result_dict: dict[str, Any]) -> None:
@@ -474,7 +563,7 @@ def build_scenario_record(
 def safe_inference_with_optional_telemetry(
     *,
     loader: Any,
-    image_path: Path,
+    image_path: Path | str | list[Path | str],
     prompt: str,
     schema: type[SchemaT],
 ) -> tuple[SchemaT, dict[str, Any] | None]:
@@ -620,7 +709,8 @@ __all__ = [
     "compute_classification_accuracy_from_records",
     "default_scenario_output_path",
     "emit_report_event",
-    "encode_image_base64",
+    "draw_bbox_and_save_temp_image",
+    "crop_roi_and_save_temp_image",
     "generate_single_detection_markdown_report",
     "has_unfilled_scenario_records",
     "load_ground_truth",

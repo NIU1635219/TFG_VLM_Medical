@@ -845,7 +845,7 @@ def test_setup_tests_ui_grounding_scenario_selector_runs_scenario_a(monkeypatch)
             menu_calls["tests"] += 1
             if menu_calls["tests"] == 1:
                 return next(
-                    item for item in options if item.label == " Select Grounding Scenario (A/B/C/D)"
+                    item for item in options if item.label == " Select Grounding Scenario (A/B/C/D/E)"
                 )
             return None
         if menu_id == "grounding_scenarios_selector":
@@ -932,7 +932,7 @@ def test_setup_tests_ui_grounding_scenario_selector_runs_scenario_b(monkeypatch)
             menu_calls["tests"] += 1
             if menu_calls["tests"] == 1:
                 return next(
-                    item for item in options if item.label == " Select Grounding Scenario (A/B/C/D)"
+                    item for item in options if item.label == " Select Grounding Scenario (A/B/C/D/E)"
                 )
             return None
         if menu_id == "grounding_scenarios_selector":

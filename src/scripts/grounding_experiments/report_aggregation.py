@@ -156,6 +156,8 @@ def upsert_scenario_result_record(
     lines = _read_jsonl_lines(output_path)
     replacement_line = json.dumps(result_dict, ensure_ascii=False)
     replaced = False
+    first_matching_index: int | None = None
+    pending_matching_index: int | None = None
     for index, line in enumerate(lines):
         try:
             payload = json.loads(line)
@@ -173,9 +175,21 @@ def upsert_scenario_result_record(
             continue
         if current_normalized != target_normalized:
             continue
-        lines[index] = replacement_line
+
+        if first_matching_index is None:
+            first_matching_index = index
+
+        current_status = str(payload.get("status") or "").strip().lower()
+        if current_status in {"pending", "queued", "in_progress", "running"}:
+            pending_matching_index = index
+            break
+
+    if pending_matching_index is not None:
+        lines[pending_matching_index] = replacement_line
         replaced = True
-        break
+    elif first_matching_index is not None:
+        lines[first_matching_index] = replacement_line
+        replaced = True
 
     if not replaced:
         lines.append(replacement_line)

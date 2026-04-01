@@ -168,7 +168,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
         )
 
     def run_grounding_scenarios_selector_wrapper() -> None:
-        """Muestra selector stub de escenarios de grounding A/B/C/D."""
+        """Muestra selector stub de escenarios de grounding A/B/C/D/E."""
         run_grounding_scenarios_selector_screen(
             kit,
             app,
@@ -234,11 +234,10 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             ),
         ),
         kit.MenuItem(
-            " Select Grounding Scenario (A/B/C/D)",
+            " Select Grounding Scenario (A/B/C/D/E)",
             run_grounding_scenarios_selector_wrapper,
             description=(
-                "Abre selector inicial de escenarios de grounding (A, B, C, D). "
-                "Actualmente no ejecuta pipeline; solo prepara la navegación."
+                "Abre selector inicial de escenarios de grounding (A, B, C, D y E)."
             ),
         ),
         kit.MenuItem(

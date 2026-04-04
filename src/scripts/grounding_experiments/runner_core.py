@@ -14,7 +14,7 @@ from typing import Any, Callable, TypeVar, cast
 import cv2
 import pandas as pd
 
-from src.inference.schemas import PolypDiagnosisAndGrounding
+from src.inference.schemas import PolypDiagnosisAndGrounding, PolypDiagnosisClassificationOnly
 from src.utils.tests_ui.metrics import calculate_iou
 
 from .report_aggregation import (

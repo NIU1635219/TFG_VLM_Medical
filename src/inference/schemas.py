@@ -648,6 +648,54 @@ class PolypDiagnosisAndGrounding(BaseModel):
             raise ValueError("Geometría de Bounding Box inválida.")
         return self
 
+
+class PolypDiagnosisClassificationOnly(BaseModel):
+    """
+    Variante de diagnóstico sin grounding para escenarios centrados en clasificación.
+
+    Mantiene el análisis clínico textual y la clase final, pero elimina por completo
+    el bloque de localización (bbox), por lo que no aplica IoU.
+    """
+
+    DEFAULT_SYSTEM_PROMPT: ClassVar[str] = (
+        "Eres un sistema de Inteligencia Artificial experto en endoscopia avanzada y visión computacional médica. "
+        "Tu misión es realizar un diagnóstico diferencial de lesiones colorrectales basándote en la evidencia visual. "
+        "PREMISA INALTERABLE: En la imagen proporcionada EXISTE un pólipo, aunque pueda ser muy sutil, plano o del mismo color que la mucosa circundante. "
+        "Solo debes elegir entre estas tres categorías histológicas: 1. Adenoma (AD) 2. Pólipo Hiperplásico (HP) 3. Adenoma Serrado Sésil (ASS). "
+    )
+
+    morphology_and_borders: str = Field(
+        ...,
+        min_length=150,
+        description=(
+            "Análisis de forma y límites: ¿Es protrusiva, pediculada o plana? "
+            "Describe si los bordes son nítidos o si son difusos, velados "
+            "o irregulares (según criterios WASP)."
+        ),
+    )
+    surface_and_vascular_pattern: str = Field(
+        ...,
+        min_length=150,
+        description=(
+            "Análisis micro-estructural: Describe el color (pálido vs eritematoso), "
+            "la presencia de vasos sanguíneos (NICE 1 vs 2) y el patrón de las criptas "
+            "(liso, puntos, aberturas dilatadas o aspecto de nube/moco)."
+        ),
+    )
+    clinical_justification: str = Field(
+        ...,
+        min_length=200,
+        description=(
+            "Razonamiento final: Conecta las evidencias de morfología y superficie "
+            "con una de las tres clases, descartando las otras dos basándote en la "
+            "ausencia de sus rasgos típicos."
+        ),
+    )
+    final_diagnosis_class: Literal["AD", "HP", "ASS"] = Field(
+        ...,
+        description="Veredicto histológico final: AD (Adenoma), HP (Hiperplasia) o ASS (Adenoma con Síndrome de Serrado)."
+    )
+
 # ---------------------------------------------------------------------------
 # Registro público de esquemas disponibles (utilizado por el CLI interactivo)
 # ---------------------------------------------------------------------------

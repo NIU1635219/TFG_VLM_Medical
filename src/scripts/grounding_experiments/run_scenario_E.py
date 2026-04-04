@@ -1,9 +1,8 @@
-"""Escenario E: techo de calidad con recorte ROI y clase asistida.
+"""Escenario E: combinación de asistencia de clase (B) + guía visual bbox (C).
 
 Este script ejecuta un batch sobre el CSV de ground truth y, para cada imagen,
-genera un recorte temporal de la región de interés (ROI) del pólipo e inyecta
-la clase real en el prompt. El VLM recibe exclusivamente el recorte para
-eliminar el contexto visual de fondo y operar en condiciones ideales.
+genera una versión temporal con la bbox GT superpuesta e inyecta la clase real
+en el prompt para forzar el techo de calidad con una sola imagen de entrada.
 """
 
 from __future__ import annotations
@@ -28,7 +27,6 @@ from .runner_core import (
     build_scenario_record,
     collect_processed_image_ids_from_jsonl,
     compute_iou_safe,
-    crop_roi_and_save_temp_image,
     draw_bbox_and_save_temp_image,
     default_scenario_output_path,
     emit_report_event,
@@ -53,12 +51,12 @@ from .runner_core import (
 
 SCENARIO_E_PROMPT_TEMPLATE = (
     "El sistema experto de biopsias ha confirmado que esta lesión corresponde a un pólipo "
-    "de tipo {gt_cls}. Recibirás dos imágenes en este orden: (1) recorte ROI exacto del pólipo "
-    "y (2) imagen original con el bbox GT dibujado. Usa ambas vistas para analizar detalladamente "
-    "la textura de la superficie, los bordes y el patrón vascular del tejido mostrado, y generar "
-    "la mejor justificación clínica posible de por qué las características coinciden con el diagnóstico "
-    "de {gt_cls}. IMPORTANTE: las coordenadas del bbox deben referirse a la imagen completa, "
-    "es decir, a la imagen (2) con la escena original y el bbox GT dibujado."
+    "de tipo {gt_cls}. Recibirás una única imagen original con el bbox GT dibujado para guiar "
+    "la localización exacta de la lesión. Usa esa imagen para analizar detalladamente la textura "
+    "de la superficie, los bordes y el patrón vascular del tejido mostrado, y generar la mejor "
+    "justificación clínica posible de por qué las características coinciden con el diagnóstico "
+    "de {gt_cls}. IMPORTANTE: las coordenadas del bbox predicho deben referirse a esta misma "
+    "imagen completa anotada."
 )
 
 DEFAULT_IMG_DIR = Path("data/processed/m_train/images")
@@ -134,7 +132,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         default_output=default_scenario_output_path(scenario_name="scenario_E"),
     )
     run_dir, annotated_dir = prepare_run_artifact_dirs(output_jsonl_path=output_path)
-    roi_crops_tmp_dir = run_dir / "_tmp_roi_crops"
     bbox_forced_tmp_dir = run_dir / "_tmp_bbox_forced"
     img_dir = Path(str(args.img_dir))
 
@@ -424,14 +421,8 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 )
                 continue
 
-            crop_image_path: Path | None = None
             bbox_forced_image_path: Path | None = None
             try:
-                crop_image_path = crop_roi_and_save_temp_image(
-                    image_path=image_path,
-                    bbox_norm=gt_bbox_norm,
-                    temp_dir=roi_crops_tmp_dir,
-                )
                 bbox_forced_image_path = draw_bbox_and_save_temp_image(
                     image_path=image_path,
                     bbox_norm=gt_bbox_norm,
@@ -441,7 +432,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
 
                 parsed_response, telemetry_payload = safe_inference_with_optional_telemetry(
                     loader=loader,
-                    image_path=[str(crop_image_path), str(bbox_forced_image_path)],
+                    image_path=str(bbox_forced_image_path),
                     prompt=scenario_prompt,
                     schema=PolypDiagnosisAndGrounding,
                 )
@@ -564,11 +555,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     error=str(error),
                 )
             finally:
-                if crop_image_path is not None:
-                    try:
-                        crop_image_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
                 if bbox_forced_image_path is not None:
                     try:
                         bbox_forced_image_path.unlink(missing_ok=True)

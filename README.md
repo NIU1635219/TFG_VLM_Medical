@@ -145,8 +145,8 @@ Dependencias declaradas en `pyproject.toml`.
 │   │   │   ├── run_scenario_A.py       # Scenario A: zero-shot (bbox + clase) con reporte Markdown.
 │   │   │   ├── run_scenario_B.py       # Scenario B: asistido por clase GT (lookup split) con reporte Markdown.
 │   │   │   ├── run_scenario_C.py       # Scenario C: bbox GT superpuesto sobre imagen completa para guiar la localización.
-│   │   │   ├── run_scenario_D.py       # Scenario D: inferencia dual (imagen completa + ROI) con bbox evaluado en imagen completa.
-│   │   │   ├── run_scenario_E.py       # Scenario E: techo de calidad (ROI + imagen con bbox GT + clase asistida).
+│   │   │   ├── run_scenario_D.py       # Scenario D: clasificación focalizada con recorte ROI y schema sin bbox/IoU.
+│   │   │   ├── run_scenario_E.py       # Scenario E: combinación de B+C (clase asistida + bbox GT dibujada sobre imagen completa).
 │   │   │   ├── runner_core.py          # Fachada pública compartida usada por escenarios y UI.
 │   │   │   ├── report_aggregation.py   # Persistencia y agregación JSONL (meta/summary/resume).
 │   │   │   ├── report_serialization.py # Serialización compacta de registros por imagen.
@@ -433,6 +433,7 @@ Entre los esquemas disponibles se incluyen:
 - `GenericObjectDetection`
 - `PolypDetection`
 - `PolypClassification`
+- `PolypDiagnosisClassificationOnly`
 - `PolypDiagnosisAndGrounding`
 - `SycophancyTest`
 - `ImageQualityAssessment`
@@ -725,19 +726,19 @@ Escenario con guía visual explícita por bbox GT:
 
 ### Scenario D (`run_scenario_D.py`)
 
-Escenario de aislamiento visual con contexto dual:
+Escenario de clasificación focalizada con recorte ROI:
 
-- Envía dos imágenes al VLM: imagen completa y recorte ROI derivado de la bbox GT.
-- El prompt fija que la bbox predicha debe corresponder a la imagen completa.
-- Permite evaluar cuánto ayuda el foco ROI sin perder referencia espacial global.
+- Envía una sola imagen: el recorte ROI derivado de la bbox GT.
+- Usa un schema sin localización, así que no calcula IoU ni devuelve bbox.
+- Permite medir cuánto ayuda el foco visual cuando el modelo solo debe clasificar el pólipo.
 
 ### Scenario E (`run_scenario_E.py`)
 
-Escenario de techo de calidad con asistencia máxima:
+Escenario que combina B + C:
 
-- Combina ROI + imagen completa con bbox GT superpuesta + clase GT asistida en prompt.
-- Busca un límite superior operativo para clasificación/localización bajo fuerte guía.
-- Conserva el mismo contrato de salida (JSONL incremental + summary + Markdown).
+- Combina la clase GT asistida del escenario B con la imagen completa anotada con bbox GT del escenario C.
+- Mantiene una sola imagen de entrada para evitar multiimagen en esta fase.
+- Conserva el contrato común de salida: JSONL incremental + summary + Markdown.
 
 ### Convenciones de datos para escenarios
 

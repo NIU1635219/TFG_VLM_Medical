@@ -1,8 +1,8 @@
-"""Escenario D: aislamiento visual mediante recorte ROI del pólipo.
+"""Escenario D: clasificación focalizada usando solo el recorte ROI del pólipo.
 
 Este script ejecuta un batch sobre el CSV de ground truth y, para cada imagen,
-genera un recorte temporal de la región de interés (ROI) del pólipo. El VLM
-recibe exclusivamente ese recorte para eliminar el contexto visual de fondo.
+genera un recorte temporal de la región de interés (ROI). El VLM recibe
+exclusivamente ese recorte y devuelve diagnóstico sin localización (sin bbox).
 """
 
 from __future__ import annotations
@@ -20,13 +20,11 @@ from src.inference.vlm_runner import VLMLoader
 
 from .runner_core import (
     DEFAULT_GROUND_TRUTH_CSV,
-    PolypDiagnosisAndGrounding,
-    build_annotated_comparison_filename,
+    PolypDiagnosisClassificationOnly,
     build_class_lookup_from_m_split_csvs,
     build_markdown_records_from_scenario_jsonl,
     build_scenario_record,
     collect_processed_image_ids_from_jsonl,
-    compute_iou_safe,
     crop_roi_and_save_temp_image,
     default_scenario_output_path,
     emit_report_event,
@@ -46,16 +44,13 @@ from .runner_core import (
     upsert_scenario_execution_summary,
     upsert_scenario_meta_header,
     upsert_scenario_result_record,
-    write_comparison_image,
 )
 
 SCENARIO_D_PROMPT = (
-    "Recibirás dos imágenes en este orden: (1) imagen original completa y (2) recorte de alta "
-    "resolución centrado exclusivamente en la lesión detectada durante una colonoscopia. Usa "
-    "principalmente la segunda imagen para analizar detalladamente la textura de la superficie, "
-    "los bordes y el patrón vascular del tejido mostrado, y emite un diagnóstico histológico a "
-    "ciegas (AD, HP o ASS). IMPORTANTE: las coordenadas del bbox deben referirse a la imagen (1), "
-    "la imagen completa original."
+    "Recibirás un único recorte ROI de alta resolución centrado exclusivamente en la lesión "
+    "detectada durante una colonoscopia. Analiza detalladamente la textura de la superficie, "
+    "los bordes y el patrón vascular del tejido mostrado, y emite un diagnóstico histológico "
+    "(AD, HP o ASS). No debes devolver coordenadas de bbox, solo análisis clínico y clase final."
 )
 DEFAULT_IMG_DIR = Path("data/processed/m_train/images")
 Reporter = Callable[[str, dict[str, Any]], None]
@@ -64,7 +59,7 @@ Reporter = Callable[[str, dict[str, Any]], None]
 def build_parser() -> argparse.ArgumentParser:
     """Construye el parser CLI para Escenario D."""
     parser = argparse.ArgumentParser(
-        description="Run Scenario D (visual isolation via ROI crop) over ground truth CSV."
+        description="Run Scenario D (classification-only from ROI crop) over ground truth CSV."
     )
     parser.add_argument(
         "--model",
@@ -129,7 +124,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         raw_output=args.output,
         default_output=default_scenario_output_path(scenario_name="scenario_D"),
     )
-    run_dir, annotated_dir = prepare_run_artifact_dirs(output_jsonl_path=output_path)
+    run_dir, _ = prepare_run_artifact_dirs(output_jsonl_path=output_path)
     roi_crops_tmp_dir = run_dir / "_tmp_roi_crops"
     img_dir = Path(str(args.img_dir))
 
@@ -236,7 +231,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 build_scenario_record(
                     scenario_name="scenario_D",
                     model_id=str(args.model),
-                    schema_name="PolypDiagnosisAndGrounding",
+                    schema_name="PolypDiagnosisClassificationOnly",
                     image_id=image_id_value,
                     image_path=img_dir / str(image_id_value or "unknown"),
                     status="pending",
@@ -261,7 +256,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
     processed_skip = 0
     matched_class = 0
     mismatched_class = 0
-    iou_values: list[float] = []
     ttft_values: list[float] = []
     tps_values: list[float] = []
     total_duration_values: list[float] = []
@@ -314,7 +308,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     result_dict=build_scenario_record(
                         scenario_name="scenario_D",
                         model_id=str(args.model),
-                        schema_name="PolypDiagnosisAndGrounding",
+                        schema_name="PolypDiagnosisClassificationOnly",
                         image_id=image_id_value,
                         image_path=img_dir / str(image_id_value or "unknown"),
                         status="skip",
@@ -349,7 +343,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     result_dict=build_scenario_record(
                         scenario_name="scenario_D",
                         model_id=str(args.model),
-                        schema_name="PolypDiagnosisAndGrounding",
+                        schema_name="PolypDiagnosisClassificationOnly",
                         image_id=image_id_value,
                         image_path=image_path,
                         status="skip",
@@ -393,7 +387,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     result_dict=build_scenario_record(
                         scenario_name="scenario_D",
                         model_id=str(args.model),
-                        schema_name="PolypDiagnosisAndGrounding",
+                        schema_name="PolypDiagnosisClassificationOnly",
                         image_id=image_id_value,
                         image_path=image_path,
                         status="skip",
@@ -429,9 +423,9 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
 
                 parsed_response, telemetry_payload = safe_inference_with_optional_telemetry(
                     loader=loader,
-                    image_path=[str(image_path), str(crop_image_path)],
+                    image_path=str(crop_image_path),
                     prompt=SCENARIO_D_PROMPT,
-                    schema=PolypDiagnosisAndGrounding,
+                    schema=PolypDiagnosisClassificationOnly,
                 )
 
                 parsed_payload = dict(parsed_response.model_dump())
@@ -440,19 +434,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     or ""
                 )
                 parsed_payload["final_diagnosis_class"] = predicted_cls
-                pred_bbox = [
-                    parsed_payload.get("ymin"),
-                    parsed_payload.get("xmin"),
-                    parsed_payload.get("ymax"),
-                    parsed_payload.get("xmax"),
-                ]
-                iou_score = compute_iou_safe(
-                    gt_bbox=gt_bbox,
-                    pred_bbox=pred_bbox,
-                )
-                if isinstance(iou_score, float):
-                    iou_values.append(iou_score)
-
                 is_match = bool(predicted_cls and gt_cls and predicted_cls == gt_cls)
                 if predicted_cls and gt_cls:
                     if is_match:
@@ -474,7 +455,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 result_dict = build_scenario_record(
                     scenario_name="scenario_D",
                     model_id=str(args.model),
-                    schema_name="PolypDiagnosisAndGrounding",
+                    schema_name="PolypDiagnosisClassificationOnly",
                     image_id=image_id_value,
                     image_path=image_path,
                     status="ok",
@@ -484,24 +465,9 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     payload=parsed_payload,
                     telemetry_payload=telemetry_payload,
                     class_match=is_match,
-                    iou_score=iou_score,
+                    iou_score=None,
                 )
                 upsert_scenario_result_record(output_path=output_path, result_dict=result_dict)
-
-                annotated_candidate = annotated_dir / build_annotated_comparison_filename(
-                    image_id=image_id_value,
-                    image_path=image_path,
-                )
-                _ = write_comparison_image(
-                    image_path=image_path,
-                    output_path=annotated_candidate,
-                    gt_bbox=gt_bbox,
-                    pred_bbox=pred_bbox,
-                    model_name=str(args.model),
-                    gt_label=str(gt_cls),
-                    pred_label=predicted_cls or "N/D",
-                    iou_score=iou_score,
-                )
 
                 processed_ok += 1
                 emit_report_event(
@@ -514,7 +480,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     ground_truth_cls=gt_cls,
                     predicted_cls=predicted_cls,
                     class_match=is_match,
-                    iou_score=iou_score,
                     telemetry=telemetry_payload,
                 )
             except Exception as error:
@@ -528,7 +493,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     result_dict=build_scenario_record(
                         scenario_name="scenario_D",
                         model_id=str(args.model),
-                        schema_name="PolypDiagnosisAndGrounding",
+                        schema_name="PolypDiagnosisClassificationOnly",
                         image_id=image_id_value,
                         image_path=image_path,
                         status="error",
@@ -564,7 +529,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
     avg_ttft = (sum(ttft_values) / len(ttft_values)) if ttft_values else None
     avg_tps = (sum(tps_values) / len(tps_values)) if tps_values else None
     avg_total_duration = (sum(total_duration_values) / len(total_duration_values)) if total_duration_values else None
-    avg_iou = (sum(iou_values) / len(iou_values)) if iou_values else None
     elapsed_seconds = max(0.0, time.perf_counter() - started_at)
 
     cumulative_summary = summarize_scenario_records_from_jsonl(output_path=output_path)
@@ -594,7 +558,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         skip=int(cumulative_summary.get("skip") or 0),
         matched_class=int(cumulative_summary.get("matched_class") or 0),
         mismatched_class=int(cumulative_summary.get("mismatched_class") or 0),
-        avg_iou=cumulative_summary.get("avg_iou"),
         output_path=str(output_path),
         markdown_path=str(markdown_path),
         run_dir=str(run_dir),
@@ -619,7 +582,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
             "skip": int(cumulative_summary.get("skip") or 0),
             "matched_class": int(cumulative_summary.get("matched_class") or 0),
             "mismatched_class": int(cumulative_summary.get("mismatched_class") or 0),
-            "avg_iou": cumulative_summary.get("avg_iou"),
             "avg_ttft_seconds": cumulative_summary.get("avg_ttft_seconds"),
             "avg_tokens_per_second": cumulative_summary.get("avg_tokens_per_second"),
             "avg_total_duration_seconds": cumulative_summary.get("avg_total_duration_seconds"),
@@ -633,7 +595,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
             "run_skip": processed_skip,
             "run_matched_class": matched_class,
             "run_mismatched_class": mismatched_class,
-            "run_avg_iou": avg_iou,
             "run_avg_ttft_seconds": avg_ttft,
             "run_avg_tokens_per_second": avg_tps,
             "run_avg_total_duration_seconds": avg_total_duration,

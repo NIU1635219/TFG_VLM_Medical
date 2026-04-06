@@ -25,6 +25,7 @@ from .runner_core import (
     build_markdown_records_from_scenario_jsonl,
     collect_processed_image_ids_from_jsonl, 
     compute_iou_safe,
+    compute_proximity_safe,
     build_scenario_record,
     default_scenario_output_path,
     emit_report_event,
@@ -46,7 +47,7 @@ from .runner_core import (
     write_comparison_image,
 )
 
-SCENARIO_A_PROMPT = (
+SCENARIO_A_PROMPT_TEMPLATE = (
     "Eres un endoscopista experto. Localiza la única lesión en esta imagen devolviendo "
     "sus coordenadas exactas en una escala normalizada [0-1000]. A continuación, "
     "describe detalladamente su morfología, bordes y patrón vascular, y emite un "
@@ -379,7 +380,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 parsed_response, telemetry_payload = safe_inference_with_optional_telemetry(
                     loader=loader,
                     image_path=image_path,
-                    prompt=SCENARIO_A_PROMPT,
+                    prompt=SCENARIO_A_PROMPT_TEMPLATE,
                     schema=PolypDiagnosisAndGrounding,
                 )
             except Exception as error:
@@ -431,6 +432,29 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 parsed_payload.get("xmax"),
             ]
             iou_score = compute_iou_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)
+            proximity_payload = compute_proximity_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)
+            proximity_value = proximity_payload.get("proximity_score") if isinstance(proximity_payload, dict) else None
+            proximity_center_value = (
+                proximity_payload.get("proximity_center_score") if isinstance(proximity_payload, dict) else None
+            )
+            proximity_size_value = (
+                proximity_payload.get("proximity_size_score") if isinstance(proximity_payload, dict) else None
+            )
+            proximity_score = (
+                float(proximity_value)
+                if isinstance(proximity_value, (int, float))
+                else None
+            )
+            proximity_center_score = (
+                float(proximity_center_value)
+                if isinstance(proximity_center_value, (int, float))
+                else None
+            )
+            proximity_size_score = (
+                float(proximity_size_value)
+                if isinstance(proximity_size_value, (int, float))
+                else None
+            )
             if isinstance(iou_score, float):
                 iou_values.append(iou_score)
 
@@ -466,6 +490,9 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 telemetry_payload=telemetry_payload,
                 class_match=is_match,
                 iou_score=iou_score,
+                proximity_score=proximity_score,
+                proximity_center_score=proximity_center_score,
+                proximity_size_score=proximity_size_score,
             )
             upsert_scenario_result_record(output_path=output_path, result_dict=result_dict)
 

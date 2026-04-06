@@ -26,6 +26,7 @@ from .runner_core import (
     build_scenario_record,
     collect_processed_image_ids_from_jsonl,
     compute_iou_safe,
+    compute_proximity_safe,
     default_scenario_output_path,
     emit_report_event,
     generate_single_detection_markdown_report,
@@ -48,6 +49,12 @@ from .runner_core import (
 
 DEFAULT_IMG_DIR = Path("data/processed/m_train/images")
 Reporter = Callable[[str, dict[str, Any]], None]
+
+SCENARIO_B_PROMPT_TEMPLATE = (
+    "El sistema experto de biopsias ha confirmado que en esta imagen hay un pólipo de tipo {gt_cls}. "
+    "Tu tarea es localizar exactamente dónde está esta lesión devolviendo sus coordenadas en una escala normalizada [0-1000]. "
+    "A continuación, describe detalladamente su morfología, bordes y patrón vascular para justificar por qué coincide con el diagnóstico de {gt_cls}."
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -358,17 +365,11 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 )
                 continue
 
-            prompt = (
-                f"El sistema experto de biopsias ha confirmado que en esta imagen hay un pólipo de tipo {gt_cls}. "
-                f"Tu tarea es localizar exactamente dónde está esta lesión devolviendo sus coordenadas en una escala normalizada [0-1000]. "
-                f"A continuación, describe detalladamente su morfología, bordes y patrón vascular para justificar por qué coincide con el diagnóstico de {gt_cls}."
-            )
-
             try:
                 parsed_response, telemetry_payload = safe_inference_with_optional_telemetry(
                     image_path=image_path,
                     loader=loader,
-                    prompt=prompt,
+                    prompt=SCENARIO_B_PROMPT_TEMPLATE.format(gt_cls=gt_cls),
                     schema=PolypDiagnosisAndGrounding,
                 )
             except Exception as error:
@@ -420,6 +421,29 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 parsed_payload.get("xmax"),
             ]
             iou_score = compute_iou_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)
+            proximity_payload = compute_proximity_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)
+            proximity_value = proximity_payload.get("proximity_score") if isinstance(proximity_payload, dict) else None
+            proximity_center_value = (
+                proximity_payload.get("proximity_center_score") if isinstance(proximity_payload, dict) else None
+            )
+            proximity_size_value = (
+                proximity_payload.get("proximity_size_score") if isinstance(proximity_payload, dict) else None
+            )
+            proximity_score = (
+                float(proximity_value)
+                if isinstance(proximity_value, (int, float))
+                else None
+            )
+            proximity_center_score = (
+                float(proximity_center_value)
+                if isinstance(proximity_center_value, (int, float))
+                else None
+            )
+            proximity_size_score = (
+                float(proximity_size_value)
+                if isinstance(proximity_size_value, (int, float))
+                else None
+            )
             if isinstance(iou_score, float):
                 iou_values.append(iou_score)
 
@@ -455,6 +479,9 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 telemetry_payload=telemetry_payload,
                 class_match=is_match,
                 iou_score=iou_score,
+                proximity_score=proximity_score,
+                proximity_center_score=proximity_center_score,
+                proximity_size_score=proximity_size_score,
             )
             upsert_scenario_result_record(output_path=output_path, result_dict=result_dict)
 

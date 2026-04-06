@@ -207,6 +207,7 @@ def test_generate_report_adds_global_accuracy_and_heatmap(tmp_path: Path) -> Non
             "predicted_cls": "AD",
             "class_match": True,
             "iou": 0.7,
+            "proximity": 0.85,
             "annotated_path": None,
         },
         {
@@ -215,6 +216,7 @@ def test_generate_report_adds_global_accuracy_and_heatmap(tmp_path: Path) -> Non
             "predicted_cls": "AD",
             "class_match": False,
             "iou": 0.3,
+            "proximity": 0.45,
             "annotated_path": None,
         },
     ]
@@ -240,8 +242,30 @@ def test_generate_report_adds_global_accuracy_and_heatmap(tmp_path: Path) -> Non
     assert "### Lectura clase por clase" in markdown
     assert "Clase AD:" in markdown
     assert "Clase HP:" in markdown
+    assert "## Análisis IoU" in markdown
+    assert "report_assets/iou_distribution_histogram.png" in markdown
+    assert "report_assets/iou_class_summary_grouped_bars.png" in markdown
+    assert "report_assets/iou_correctness_comparison.png" in markdown
+    assert "report_assets/iou_boxplot_class_correctness.png" in markdown
+    assert "report_assets/iou_threshold_cumulative_curve.png" in markdown
+    assert "## Análisis Proximity" in markdown
+    assert "report_assets/proximity_distribution_histogram.png" in markdown
+    assert "report_assets/proximity_class_summary_grouped_bars.png" in markdown
+    assert "report_assets/proximity_correctness_comparison.png" in markdown
+    assert "report_assets/proximity_boxplot_class_correctness.png" in markdown
+    assert "report_assets/proximity_threshold_cumulative_curve.png" in markdown
     assert "report_assets/class_confusion_heatmap.png" in markdown
     assert (run_dir / "report_assets" / "class_confusion_heatmap.png").exists()
+    assert (run_dir / "report_assets" / "iou_distribution_histogram.png").exists()
+    assert (run_dir / "report_assets" / "iou_class_summary_grouped_bars.png").exists()
+    assert (run_dir / "report_assets" / "iou_correctness_comparison.png").exists()
+    assert (run_dir / "report_assets" / "iou_boxplot_class_correctness.png").exists()
+    assert (run_dir / "report_assets" / "iou_threshold_cumulative_curve.png").exists()
+    assert (run_dir / "report_assets" / "proximity_distribution_histogram.png").exists()
+    assert (run_dir / "report_assets" / "proximity_class_summary_grouped_bars.png").exists()
+    assert (run_dir / "report_assets" / "proximity_correctness_comparison.png").exists()
+    assert (run_dir / "report_assets" / "proximity_boxplot_class_correctness.png").exists()
+    assert (run_dir / "report_assets" / "proximity_threshold_cumulative_curve.png").exists()
 
 
 def test_collect_processed_image_ids_excludes_error_records(tmp_path: Path) -> None:

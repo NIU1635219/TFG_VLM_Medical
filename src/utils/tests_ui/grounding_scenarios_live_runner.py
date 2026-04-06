@@ -48,6 +48,7 @@ class LiveRunState:
     avg_tps: float | None
     avg_duration: float | None
     avg_iou: float | None
+    avg_proximity: float | None
     ttft_sum: float
     ttft_count: int
     tps_sum: float
@@ -56,6 +57,8 @@ class LiveRunState:
     duration_count: int
     iou_sum: float
     iou_count: int
+    proximity_sum: float
+    proximity_count: int
     resumed_existing: int
     gt_class_counts: dict[str, int]
     pred_class_counts: dict[str, int]
@@ -239,6 +242,7 @@ def run_scenario_with_dashboards(
         avg_tps=existing_snapshot.get("avg_tps"),
         avg_duration=existing_snapshot.get("avg_duration"),
         avg_iou=existing_snapshot.get("avg_iou"),
+        avg_proximity=existing_snapshot.get("avg_proximity"),
         ttft_sum=float(existing_snapshot.get("ttft_sum") or 0.0),
         ttft_count=int(existing_snapshot.get("ttft_count") or 0),
         tps_sum=float(existing_snapshot.get("tps_sum") or 0.0),
@@ -247,6 +251,8 @@ def run_scenario_with_dashboards(
         duration_count=int(existing_snapshot.get("duration_count") or 0),
         iou_sum=float(existing_snapshot.get("iou_sum") or 0.0),
         iou_count=int(existing_snapshot.get("iou_count") or 0),
+        proximity_sum=float(existing_snapshot.get("proximity_sum") or 0.0),
+        proximity_count=int(existing_snapshot.get("proximity_count") or 0),
         resumed_existing=existing_current,
         gt_class_counts=cast(dict[str, int], existing_snapshot.get("gt_class_counts") or {"AD": 0, "HP": 0, "ASS": 0, "OTHER": 0}),
         pred_class_counts=cast(dict[str, int], existing_snapshot.get("pred_class_counts") or {"AD": 0, "HP": 0, "ASS": 0, "OTHER": 0}),
@@ -363,6 +369,13 @@ def run_scenario_with_dashboards(
                     if state.iou_count > 0:
                         state.avg_iou = float(state.iou_sum or 0.0) / state.iou_count
 
+                proximity_value = payload.get("proximity_score")
+                if isinstance(proximity_value, (int, float)):
+                    state.proximity_sum = float(state.proximity_sum or 0.0) + float(proximity_value)
+                    state.proximity_count = int(state.proximity_count or 0) + 1
+                    if state.proximity_count > 0:
+                        state.avg_proximity = float(state.proximity_sum or 0.0) / state.proximity_count
+
                 _inc_class_count(cast(dict[str, int], state.gt_class_counts), payload.get("ground_truth_cls"))
                 _inc_class_count(cast(dict[str, int], state.pred_class_counts), payload.get("predicted_cls"))
 
@@ -427,6 +440,7 @@ def run_scenario_with_dashboards(
                     state.avg_tps = payload.get("avg_tokens_per_second")
                     state.avg_duration = payload.get("avg_total_duration_seconds")
                     state.avg_iou = payload.get("avg_iou")
+                    state.avg_proximity = payload.get("avg_proximity")
                 payload_md = payload.get("markdown_path")
                 if payload_md:
                     try:
@@ -458,6 +472,7 @@ def run_scenario_with_dashboards(
             avg_tps = state.avg_tps
             avg_duration = state.avg_duration
             avg_iou = state.avg_iou
+            avg_proximity = state.avg_proximity
             status_line = str(state.status_line or "Estado: ejecutando")
             confusion_counts = cast(dict[str, dict[str, int]], state.confusion_counts or empty_live_confusion_counts())
 
@@ -471,6 +486,10 @@ def run_scenario_with_dashboards(
         duration_text = f"{float(avg_duration):.3f}s" if isinstance(avg_duration, (int, float)) else "N/D"
         metrics_line = f"Rendimiento  |  TTFT {ttft_text}  ·  TPS {tps_text}  ·  Lat {duration_text}"
         iou_text = f"{avg_iou:.4f}" if isinstance(avg_iou, (int, float)) else "N/D"
+        proximity_text = f"{avg_proximity:.4f}" if isinstance(avg_proximity, (int, float)) else "N/D"
+        status_with_metrics = (
+            f"{status_line}  ||  Métricas  Acc {accuracy_text}  ·  IoU {iou_text}  ·  Prox {proximity_text}"
+        )
         heatmap_lines = build_live_confusion_heatmap_lines(
             kit,
             confusion_counts,
@@ -485,9 +504,9 @@ def run_scenario_with_dashboards(
             total=safe_total,
             stats_line=(
                 f"Resultados  |  OK {ok_count}  ·  Error {fail_count}  ·  Skip {skip_count}"
-                f"  ||  Clase  Match {matched}  ·  Mismatch {mismatched}  ·  Acc {accuracy_text}  ·  IoU {iou_text}"
+                f"  ||  Clase  Match {matched}  ·  Mismatch {mismatched}"
             ),
-            status_line=status_line,
+            status_line=status_with_metrics,
             metrics_line=metrics_line,
             coverage_line=None,
             extra_lines=[*heatmap_lines, f"Salida JSONL  |  {output_text}"],

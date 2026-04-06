@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .metrics import calculate_iou, summarize_numeric
+from .metrics import calculate_iou, calculate_proximity_score, summarize_numeric
 from .test_dashboards_ui import _render_table_lines
 
 HEATMAP_CLASS_ORDER: tuple[str, ...] = ("AD", "HP", "ASS")
@@ -292,6 +292,39 @@ def extract_iou(entry: dict[str, Any]) -> float | None:
         return None
 
 
+def extract_proximity(entry: dict[str, Any]) -> float | None:
+    """Calcula Proximity para un registro JSONL cuando hay cajas validas."""
+    direct_proximity = entry.get("proximity_score")
+    if isinstance(direct_proximity, (int, float)):
+        return float(direct_proximity)
+
+    gt_bbox = coerce_bbox4(entry.get("ground_truth_bbox"))
+    raw_payload = entry.get("payload")
+    if isinstance(raw_payload, dict):
+        result_payload: dict[str, Any] = raw_payload
+    else:
+        raw_result = entry.get("result")
+        result_payload = raw_result if isinstance(raw_result, dict) else {}
+    pred_bbox = coerce_bbox4(
+        [
+            result_payload.get("ymin"),
+            result_payload.get("xmin"),
+            result_payload.get("ymax"),
+            result_payload.get("xmax"),
+        ]
+    )
+
+    if gt_bbox is None or pred_bbox is None:
+        return None
+
+    try:
+        payload = calculate_proximity_score(gt_bbox, pred_bbox)
+        value = payload.get("proximity_score") if isinstance(payload, dict) else None
+        return float(value) if isinstance(value, (int, float)) else None
+    except Exception:
+        return None
+
+
 def scenario_recent_record(entry: dict[str, Any]) -> dict[str, object]:
     """Convierte una línea JSONL de grounding en registro de actividad reciente."""
     image_name = str(entry.get("image_id") or "imagen")
@@ -395,6 +428,8 @@ def summarize_existing_scenario_records(records: list[dict[str, Any]]) -> dict[s
     duration_count = 0
     iou_sum = 0.0
     iou_count = 0
+    proximity_sum = 0.0
+    proximity_count = 0
     gt_class_counts: dict[str, int] = {"AD": 0, "HP": 0, "ASS": 0, "OTHER": 0}
     pred_class_counts: dict[str, int] = {"AD": 0, "HP": 0, "ASS": 0, "OTHER": 0}
     confusion_counts = empty_live_confusion_counts()
@@ -463,11 +498,17 @@ def summarize_existing_scenario_records(records: list[dict[str, Any]]) -> dict[s
             iou_sum += iou_value
             iou_count += 1
 
+        proximity_value = extract_proximity(entry)
+        if isinstance(proximity_value, float):
+            proximity_sum += proximity_value
+            proximity_count += 1
+
     current = ok + skip
     avg_ttft = (ttft_sum / ttft_count) if ttft_count > 0 else None
     avg_tps = (tps_sum / tps_count) if tps_count > 0 else None
     avg_duration = (duration_sum / duration_count) if duration_count > 0 else None
     avg_iou = (iou_sum / iou_count) if iou_count > 0 else None
+    avg_proximity = (proximity_sum / proximity_count) if proximity_count > 0 else None
 
     return {
         "current": current,
@@ -480,6 +521,7 @@ def summarize_existing_scenario_records(records: list[dict[str, Any]]) -> dict[s
         "avg_tps": avg_tps,
         "avg_duration": avg_duration,
         "avg_iou": avg_iou,
+        "avg_proximity": avg_proximity,
         "ttft_sum": ttft_sum,
         "ttft_count": ttft_count,
         "tps_sum": tps_sum,
@@ -488,6 +530,8 @@ def summarize_existing_scenario_records(records: list[dict[str, Any]]) -> dict[s
         "duration_count": duration_count,
         "iou_sum": iou_sum,
         "iou_count": iou_count,
+        "proximity_sum": proximity_sum,
+        "proximity_count": proximity_count,
         "gt_class_counts": gt_class_counts,
         "pred_class_counts": pred_class_counts,
         "confusion_counts": confusion_counts,

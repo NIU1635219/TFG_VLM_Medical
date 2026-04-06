@@ -15,7 +15,7 @@ import cv2
 import pandas as pd
 
 from src.inference.schemas import PolypDiagnosisAndGrounding, PolypDiagnosisClassificationOnly
-from src.utils.tests_ui.metrics import calculate_iou
+from src.utils.tests_ui.metrics import calculate_iou, calculate_proximity_score
 
 from .report_aggregation import (
     collect_processed_image_ids_from_jsonl as _collect_processed_image_ids_from_jsonl,
@@ -266,6 +266,45 @@ def draw_bbox_and_save_temp_image(
     ok = cv2.imwrite(str(output_path), image)
     if not ok:
         raise RuntimeError(f"No se pudo escribir imagen temporal: {output_path}")
+    return output_path
+
+
+def draw_gt_bbox_and_save_artifact(
+    image_path: Path,
+    bbox_norm: list[int],
+    *,
+    output_path: Path,
+    label: str | None = None,
+) -> Path:
+    """Dibuja solo el bbox GT sobre la imagen original y guarda el artefacto."""
+    image = _draw_bbox_overlay(image_path=image_path, bbox_norm=bbox_norm)
+
+    if label:
+        cv2.putText(
+            image,
+            label,
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (0, 0, 0),
+            4,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            label,
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    ok = cv2.imwrite(str(output_path), image)
+    if not ok:
+        raise RuntimeError(f"No se pudo escribir imagen anotada en: {output_path}")
     return output_path
 
 
@@ -538,6 +577,9 @@ def build_scenario_record(
     telemetry_payload: dict[str, Any] | None,
     class_match: bool | None,
     iou_score: float | None,
+    proximity_score: float | None = None,
+    proximity_center_score: float | None = None,
+    proximity_size_score: float | None = None,
     error: BaseException | None = None,
 ) -> dict[str, Any]:
     """Backward-compatible wrapper for scenario-record serialization."""
@@ -555,6 +597,9 @@ def build_scenario_record(
         telemetry_payload=telemetry_payload,
         class_match=class_match,
         iou_score=iou_score,
+        proximity_score=proximity_score,
+        proximity_center_score=proximity_center_score,
+        proximity_size_score=proximity_size_score,
         telemetry_fields_map=SCENARIO_TELEMETRY_RECORD_FIELDS,
         error=error,
     )
@@ -614,6 +659,19 @@ def compute_iou_safe(*, gt_bbox: list[Any], pred_bbox: list[Any]) -> float | Non
         return None
 
 
+def compute_proximity_safe(*, gt_bbox: list[Any], pred_bbox: list[Any]) -> dict[str, float] | None:
+    """Compute proximity score/components safely from raw bbox values."""
+    gt_norm = normalize_bbox_for_metrics(gt_bbox)
+    pred_norm = normalize_bbox_for_metrics(pred_bbox)
+    if gt_norm is None or pred_norm is None:
+        return None
+
+    try:
+        return calculate_proximity_score(gt_norm, pred_norm)
+    except Exception:
+        return None
+
+
 def write_comparison_image(
     *,
     image_path: Path,
@@ -650,6 +708,7 @@ def summarize_scenario_records_from_jsonl(*, output_path: Path) -> dict[str, Any
         load_jsonl_records=load_jsonl_records,
         normalize_polyp_class=normalize_polyp_class,
         compute_iou_safe=compute_iou_safe,
+        compute_proximity_safe=compute_proximity_safe,
     )
 
 
@@ -706,6 +765,7 @@ __all__ = [
     "collect_processed_image_ids_from_jsonl",
     "compute_macro_f1_and_recall_by_class",
     "compute_iou_safe",
+    "compute_proximity_safe",
     "compute_classification_accuracy_from_records",
     "default_scenario_output_path",
     "emit_report_event",

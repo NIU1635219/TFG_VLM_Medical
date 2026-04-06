@@ -77,6 +77,9 @@ def build_scenario_record(
     telemetry_payload: dict[str, Any] | None,
     class_match: bool | None,
     iou_score: float | None,
+    proximity_score: float | None = None,
+    proximity_center_score: float | None = None,
+    proximity_size_score: float | None = None,
     telemetry_fields_map: dict[str, str],
     error: BaseException | None = None,
 ) -> dict[str, Any]:
@@ -98,6 +101,9 @@ def build_scenario_record(
         "ground_truth_cls": ground_truth_cls,
         "class_match": class_match,
         "iou_score": iou_score,
+        "proximity_score": proximity_score,
+        "proximity_center_score": proximity_center_score,
+        "proximity_size_score": proximity_size_score,
         "error_type": type(error).__name__ if error is not None else None,
         "error_message": _sanitize_text_for_jsonl(str(error)) if error is not None else None,
     }

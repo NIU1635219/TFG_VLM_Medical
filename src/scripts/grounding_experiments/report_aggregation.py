@@ -14,6 +14,7 @@ LoadJsonlRecordsFn = Callable[[Path], list[dict[str, Any]]]
 NormalizePolypClassFn = Callable[[Any], str]
 NormalizeImageStemFn = Callable[[Any], str]
 ComputeIouSafeFn = Callable[..., float | None]
+ComputeProximitySafeFn = Callable[..., dict[str, float] | None]
 
 
 def save_result(output_file: str, result_dict: dict[str, Any]) -> None:
@@ -309,6 +310,7 @@ def summarize_scenario_records_from_jsonl(
     load_jsonl_records: LoadJsonlRecordsFn,
     normalize_polyp_class: NormalizePolypClassFn,
     compute_iou_safe: ComputeIouSafeFn,
+    compute_proximity_safe: ComputeProximitySafeFn,
 ) -> dict[str, Any]:
     """Build cumulative execution summary from all non-system records in a scenario JSONL."""
     total = 0
@@ -318,6 +320,7 @@ def summarize_scenario_records_from_jsonl(
     matched_class = 0
     mismatched_class = 0
     iou_values: list[float] = []
+    proximity_values: list[float] = []
     ttft_values: list[float] = []
     tps_values: list[float] = []
     total_duration_values: list[float] = []
@@ -378,6 +381,26 @@ def summarize_scenario_records_from_jsonl(
         if isinstance(iou_value, (int, float)):
             iou_values.append(float(iou_value))
 
+        proximity_value = entry.get("proximity_score")
+        if not isinstance(proximity_value, (int, float)):
+            pred_bbox = [
+                payload.get("ymin"),
+                payload.get("xmin"),
+                payload.get("ymax"),
+                payload.get("xmax"),
+            ]
+            gt_bbox = entry.get("ground_truth_bbox")
+            if isinstance(gt_bbox, list):
+                proximity_payload = compute_proximity_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)
+                if isinstance(proximity_payload, dict):
+                    proximity_value = proximity_payload.get("proximity_score")
+                else:
+                    proximity_value = None
+            else:
+                proximity_value = None
+        if isinstance(proximity_value, (int, float)):
+            proximity_values.append(float(proximity_value))
+
         ttft_value = entry.get("ttft_seconds")
         if isinstance(ttft_value, (int, float)):
             ttft_values.append(float(ttft_value))
@@ -396,6 +419,7 @@ def summarize_scenario_records_from_jsonl(
         "matched_class": matched_class,
         "mismatched_class": mismatched_class,
         "avg_iou": mean_or_none(iou_values),
+        "avg_proximity": mean_or_none(proximity_values),
         "avg_ttft_seconds": mean_or_none(ttft_values),
         "avg_tokens_per_second": mean_or_none(tps_values),
         "avg_total_duration_seconds": mean_or_none(total_duration_values),

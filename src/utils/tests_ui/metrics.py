@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Sequence
 
 
@@ -111,3 +112,121 @@ def calculate_iou(boxA: list[int], boxB: list[int]) -> float:
         return 0.0
 
     return inter_area / union_area
+
+
+def calculate_center_distance_score(boxA: list[int], boxB: list[int], *, alpha: float = 3.0) -> float:
+    """Calcula score [0,1] según distancia entre centros normalizada por diagonal conjunta."""
+    _validate_box(boxA, "boxA")
+    _validate_box(boxB, "boxB")
+
+    center_a_y = (boxA[0] + boxA[2]) / 2.0
+    center_a_x = (boxA[1] + boxA[3]) / 2.0
+    center_b_y = (boxB[0] + boxB[2]) / 2.0
+    center_b_x = (boxB[1] + boxB[3]) / 2.0
+
+    delta_y = center_a_y - center_b_y
+    delta_x = center_a_x - center_b_x
+    center_distance = math.sqrt((delta_y * delta_y) + (delta_x * delta_x))
+
+    y_min = min(boxA[0], boxB[0])
+    x_min = min(boxA[1], boxB[1])
+    y_max = max(boxA[2], boxB[2])
+    x_max = max(boxA[3], boxB[3])
+    envelope_h = max(1.0, float(y_max - y_min))
+    envelope_w = max(1.0, float(x_max - x_min))
+    envelope_diag = math.sqrt((envelope_h * envelope_h) + (envelope_w * envelope_w))
+
+    norm_dist = center_distance / envelope_diag
+    score = math.exp(-float(alpha) * (norm_dist * norm_dist))
+    return max(0.0, min(1.0, float(score)))
+
+
+def calculate_size_relative_score(boxA: list[int], boxB: list[int]) -> float:
+    """Calcula score [0,1] por diferencia relativa de área entre dos cajas."""
+    _validate_box(boxA, "boxA")
+    _validate_box(boxB, "boxB")
+
+    area_a = max(0, boxA[2] - boxA[0]) * max(0, boxA[3] - boxA[1])
+    area_b = max(0, boxB[2] - boxB[0]) * max(0, boxB[3] - boxB[1])
+    denom = float(max(1, area_a, area_b))
+    rel_error = abs(float(area_a) - float(area_b)) / denom
+    score = 1.0 - rel_error
+    return max(0.0, min(1.0, float(score)))
+
+
+def _intersection_area(boxA: list[int], boxB: list[int]) -> int:
+    """Devuelve area de interseccion (0 si no hay solapamiento)."""
+    y_inter_min = max(boxA[0], boxB[0])
+    x_inter_min = max(boxA[1], boxB[1])
+    y_inter_max = min(boxA[2], boxB[2])
+    x_inter_max = min(boxA[3], boxB[3])
+
+    inter_height = max(0, y_inter_max - y_inter_min)
+    inter_width = max(0, x_inter_max - x_inter_min)
+    return inter_height * inter_width
+
+
+def _boxes_touch_or_overlap(boxA: list[int], boxB: list[int]) -> bool:
+    """True cuando las cajas se tocan o se solapan (sin hueco entre ellas)."""
+    separated_y = boxA[2] < boxB[0] or boxB[2] < boxA[0]
+    separated_x = boxA[3] < boxB[1] or boxB[3] < boxA[1]
+    return not (separated_y or separated_x)
+
+
+def _containment_ratio(boxA: list[int], boxB: list[int]) -> float:
+    """Mide contencion relativa: interseccion / area de la caja mas pequena."""
+    inter_area = _intersection_area(boxA, boxB)
+    area_a = max(0, boxA[2] - boxA[0]) * max(0, boxA[3] - boxA[1])
+    area_b = max(0, boxB[2] - boxB[0]) * max(0, boxB[3] - boxB[1])
+    min_area = min(area_a, area_b)
+    if min_area <= 0:
+        return 0.0
+    return max(0.0, min(1.0, float(inter_area) / float(min_area)))
+
+
+def calculate_proximity_score(
+    boxA: list[int],
+    boxB: list[int],
+    *,
+    center_weight: float = 0.6,
+    size_weight: float = 0.4,
+    alpha: float = 3.0,
+) -> dict[str, float]:
+    """Calcula score combinado de proximidad y sus componentes en [0,1].
+
+    Criterio geométrico reforzado:
+    - Si las cajas no se tocan, la proximidad final se degrada a casi cero.
+    - Si hay contacto pero poca contención, la proximidad también se penaliza.
+    - La contención alta (una caja dentro de otra) conserva puntuaciones altas.
+    """
+    _validate_box(boxA, "boxA")
+    _validate_box(boxB, "boxB")
+
+    center_score = calculate_center_distance_score(boxA, boxB, alpha=alpha)
+    size_score = calculate_size_relative_score(boxA, boxB)
+
+    c_weight = float(center_weight)
+    s_weight = float(size_weight)
+    weight_sum = c_weight + s_weight
+    if weight_sum <= 0:
+        c_weight, s_weight = 0.6, 0.4
+        weight_sum = 1.0
+
+    combined = ((c_weight * center_score) + (s_weight * size_score)) / weight_sum
+
+    touch_or_overlap = _boxes_touch_or_overlap(boxA, boxB)
+    contain_ratio = _containment_ratio(boxA, boxB)
+
+    # Si no hay contacto espacial, no se puede considerar una localizacion buena.
+    if not touch_or_overlap:
+        combined *= 0.02
+    else:
+        # Penaliza parcialidad y favorece casos de contencion clara.
+        overlap_gate = 0.1 + (0.9 * contain_ratio)
+        combined *= overlap_gate
+
+    return {
+        "proximity_score": max(0.0, min(1.0, float(combined))),
+        "proximity_center_score": center_score,
+        "proximity_size_score": size_score,
+    }

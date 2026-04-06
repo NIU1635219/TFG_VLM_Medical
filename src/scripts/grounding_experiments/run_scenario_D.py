@@ -22,6 +22,7 @@ from .runner_core import (
     DEFAULT_GROUND_TRUTH_CSV,
     PolypDiagnosisClassificationOnly,
     build_class_lookup_from_m_split_csvs,
+    build_annotated_comparison_filename,
     build_markdown_records_from_scenario_jsonl,
     build_scenario_record,
     collect_processed_image_ids_from_jsonl,
@@ -44,9 +45,10 @@ from .runner_core import (
     upsert_scenario_execution_summary,
     upsert_scenario_meta_header,
     upsert_scenario_result_record,
+    draw_gt_bbox_and_save_artifact,
 )
 
-SCENARIO_D_PROMPT = (
+SCENARIO_D_PROMPT_TEMPLATE = (
     "Recibirás un único recorte ROI de alta resolución centrado exclusivamente en la lesión "
     "detectada durante una colonoscopia. Analiza detalladamente la textura de la superficie, "
     "los bordes y el patrón vascular del tejido mostrado, y emite un diagnóstico histológico "
@@ -124,7 +126,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         raw_output=args.output,
         default_output=default_scenario_output_path(scenario_name="scenario_D"),
     )
-    run_dir, _ = prepare_run_artifact_dirs(output_jsonl_path=output_path)
+    run_dir, annotated_dir = prepare_run_artifact_dirs(output_jsonl_path=output_path)
     roi_crops_tmp_dir = run_dir / "_tmp_roi_crops"
     img_dir = Path(str(args.img_dir))
 
@@ -424,7 +426,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 parsed_response, telemetry_payload = safe_inference_with_optional_telemetry(
                     loader=loader,
                     image_path=str(crop_image_path),
-                    prompt=SCENARIO_D_PROMPT,
+                    prompt=SCENARIO_D_PROMPT_TEMPLATE,
                     schema=PolypDiagnosisClassificationOnly,
                 )
 
@@ -468,6 +470,17 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     iou_score=None,
                 )
                 upsert_scenario_result_record(output_path=output_path, result_dict=result_dict)
+
+                annotated_candidate = annotated_dir / build_annotated_comparison_filename(
+                    image_id=image_id_value,
+                    image_path=image_path,
+                )
+                _ = draw_gt_bbox_and_save_artifact(
+                    image_path=image_path,
+                    bbox_norm=gt_bbox_norm,
+                    output_path=annotated_candidate,
+                    label=f"GT: {gt_cls}",
+                )
 
                 processed_ok += 1
                 emit_report_event(

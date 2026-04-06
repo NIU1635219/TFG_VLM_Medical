@@ -7,7 +7,19 @@ from typing import Any
 
 from src.utils.tests_ui.visualizer import draw_comparison_bboxes
 
-from .report_metrics import build_class_confusion_matrix
+from .report_metrics import (
+    build_class_confusion_matrix,
+    compute_iou_boxplot_groups_by_class_and_match,
+    compute_iou_histogram_distribution,
+    compute_iou_summary_by_class,
+    compute_iou_summary_by_class_match,
+    compute_iou_threshold_cumulative_coverage,
+    compute_proximity_boxplot_groups_by_class_and_match,
+    compute_proximity_histogram_distribution,
+    compute_proximity_summary_by_class,
+    compute_proximity_summary_by_class_match,
+    compute_proximity_threshold_cumulative_coverage,
+)
 
 
 def _normalize_image_stem(value: Any) -> str:
@@ -115,6 +127,472 @@ def write_class_confusion_heatmap(
         axis.set_xlabel("Predicted class")
         axis.set_ylabel("Ground-truth class")
         axis.set_title(f"{scenario_name} · Confusion Heatmap")
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=160)
+        plt.close(fig)
+        return output_path
+    except Exception:
+        return None
+
+
+def write_iou_distribution_histogram(
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    scenario_name: str,
+) -> Path | None:
+    """Generate IoU distribution histogram in report_assets."""
+    histogram = compute_iou_histogram_distribution(records=records, bins=10)
+    labels = histogram.get("labels")
+    counts = histogram.get("counts")
+    total = int(histogram.get("total") or 0)
+    if not isinstance(labels, list) or not isinstance(counts, list) or total <= 0:
+        return None
+
+    assets_dir = run_dir / "report_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    output_path = assets_dir / "iou_distribution_histogram.png"
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        positions = list(range(len(labels)))
+        fig, axis = plt.subplots(figsize=(8, 4.8))
+        axis.bar(positions, counts, color="#2878B5", alpha=0.9)
+        axis.set_xticks(positions)
+        axis.set_xticklabels(labels, rotation=35, ha="right")
+        axis.set_ylabel("Número de muestras")
+        axis.set_xlabel("Rango IoU")
+        axis.set_title(f"{scenario_name} · Distribución de IoU (n={total})")
+        axis.grid(axis="y", linestyle="--", alpha=0.35)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=160)
+        plt.close(fig)
+        return output_path
+    except Exception:
+        return None
+
+
+def write_iou_class_summary_grouped_bars(
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    scenario_name: str,
+) -> Path | None:
+    """Generate grouped bars with mean/min/max IoU by class."""
+    rows = compute_iou_summary_by_class(records=records, target_labels=["AD", "HP", "ASS"])
+    usable_rows = [row for row in rows if isinstance(row.get("mean"), (int, float))]
+    if not usable_rows:
+        return None
+
+    labels = [str(row.get("label") or "") for row in usable_rows]
+    mean_values = [float(row.get("mean") or 0.0) for row in usable_rows]
+    min_values = [float(row.get("min") or 0.0) for row in usable_rows]
+    max_values = [float(row.get("max") or 0.0) for row in usable_rows]
+
+    assets_dir = run_dir / "report_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    output_path = assets_dir / "iou_class_summary_grouped_bars.png"
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        positions = list(range(len(labels)))
+        width = 0.24
+        fig, axis = plt.subplots(figsize=(8, 4.8))
+        axis.bar([pos - width for pos in positions], min_values, width=width, label="Mínimo", color="#63ACBE")
+        axis.bar(positions, mean_values, width=width, label="Media", color="#C7A76C")
+        axis.bar([pos + width for pos in positions], max_values, width=width, label="Máximo", color="#EE442F")
+        axis.set_xticks(positions)
+        axis.set_xticklabels(labels)
+        axis.set_ylim(0.0, 1.0)
+        axis.set_ylabel("IoU")
+        axis.set_xlabel("Clase GT")
+        axis.set_title(f"{scenario_name} · IoU por clase (mín/media/máx)")
+        axis.legend(loc="upper right")
+        axis.grid(axis="y", linestyle="--", alpha=0.35)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=160)
+        plt.close(fig)
+        return output_path
+    except Exception:
+        return None
+
+
+def write_iou_correctness_comparison_barplot(
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    scenario_name: str,
+) -> Path | None:
+    """Generate mean IoU comparison for class-match cohorts."""
+    summary = compute_iou_summary_by_class_match(records=records)
+    matched_raw = summary.get("matched")
+    mismatched_raw = summary.get("mismatched")
+    matched: dict[str, float | int | None] = matched_raw if isinstance(matched_raw, dict) else {}
+    mismatched: dict[str, float | int | None] = mismatched_raw if isinstance(mismatched_raw, dict) else {}
+
+    labels: list[str] = []
+    values: list[float] = []
+    counts: list[int] = []
+    matched_mean = matched.get("mean")
+    if isinstance(matched_mean, (int, float)):
+        labels.append("Acierto de clase")
+        values.append(float(matched_mean))
+        counts.append(int(matched.get("count") or 0))
+    mismatched_mean = mismatched.get("mean")
+    if isinstance(mismatched_mean, (int, float)):
+        labels.append("Fallo de clase")
+        values.append(float(mismatched_mean))
+        counts.append(int(mismatched.get("count") or 0))
+    if not labels:
+        return None
+
+    assets_dir = run_dir / "report_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    output_path = assets_dir / "iou_correctness_comparison.png"
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, axis = plt.subplots(figsize=(6.2, 4.6))
+        bars = axis.bar(labels, values, color=["#228B22", "#CD5C5C"][: len(labels)], alpha=0.88)
+        axis.set_ylim(0.0, 1.0)
+        axis.set_ylabel("IoU medio")
+        axis.set_title(f"{scenario_name} · IoU según acierto de clase")
+        axis.grid(axis="y", linestyle="--", alpha=0.35)
+        for index, bar in enumerate(bars):
+            axis.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                bar.get_height() + 0.02,
+                f"n={counts[index]}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=160)
+        plt.close(fig)
+        return output_path
+    except Exception:
+        return None
+
+
+def write_iou_boxplot_by_class_and_correctness(
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    scenario_name: str,
+) -> Path | None:
+    """Generate IoU boxplot split by class and correctness."""
+    groups = compute_iou_boxplot_groups_by_class_and_match(records=records, target_labels=["AD", "HP", "ASS"])
+    if not groups:
+        return None
+
+    labels = [str(group.get("group") or "") for group in groups]
+    values = [list(group.get("values") or []) for group in groups]
+
+    assets_dir = run_dir / "report_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    output_path = assets_dir / "iou_boxplot_class_correctness.png"
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, axis = plt.subplots(figsize=(max(7.6, len(labels) * 1.2), 4.8))
+        axis.boxplot(values, tick_labels=labels, patch_artist=True)
+        axis.set_ylim(0.0, 1.0)
+        axis.set_ylabel("IoU")
+        axis.set_xlabel("Clase GT y estado de clasificación")
+        axis.set_title(f"{scenario_name} · Distribución IoU por clase/acierto")
+        axis.tick_params(axis="x", rotation=30)
+        axis.grid(axis="y", linestyle="--", alpha=0.35)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=160)
+        plt.close(fig)
+        return output_path
+    except Exception:
+        return None
+
+
+def write_iou_threshold_cumulative_curve(
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    scenario_name: str,
+) -> Path | None:
+    """Generate cumulative IoU-threshold coverage chart."""
+    coverage = compute_iou_threshold_cumulative_coverage(records=records, thresholds=[0.3, 0.5, 0.7, 0.9])
+    if not coverage:
+        return None
+
+    thresholds = [float(item["threshold"]) for item in coverage]
+    percentages = [float(item["ratio"]) * 100.0 for item in coverage]
+
+    assets_dir = run_dir / "report_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    output_path = assets_dir / "iou_threshold_cumulative_curve.png"
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, axis = plt.subplots(figsize=(6.8, 4.6))
+        axis.plot(thresholds, percentages, marker="o", linewidth=2.0, color="#7A5195")
+        axis.set_xticks(thresholds)
+        axis.set_xticklabels([f">={threshold:.1f}" for threshold in thresholds])
+        axis.set_ylim(0.0, 100.0)
+        axis.set_ylabel("Cobertura acumulada (%)")
+        axis.set_xlabel("Umbral de IoU")
+        axis.set_title(f"{scenario_name} · Cobertura por umbral IoU")
+        axis.grid(axis="both", linestyle="--", alpha=0.35)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=160)
+        plt.close(fig)
+        return output_path
+    except Exception:
+        return None
+
+
+def write_proximity_distribution_histogram(
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    scenario_name: str,
+) -> Path | None:
+    """Generate proximity distribution histogram in report_assets."""
+    histogram = compute_proximity_histogram_distribution(records=records, bins=10)
+    labels = histogram.get("labels")
+    counts = histogram.get("counts")
+    total = int(histogram.get("total") or 0)
+    if not isinstance(labels, list) or not isinstance(counts, list) or total <= 0:
+        return None
+
+    assets_dir = run_dir / "report_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    output_path = assets_dir / "proximity_distribution_histogram.png"
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        positions = list(range(len(labels)))
+        fig, axis = plt.subplots(figsize=(8, 4.8))
+        axis.bar(positions, counts, color="#2C7FB8", alpha=0.9)
+        axis.set_xticks(positions)
+        axis.set_xticklabels(labels, rotation=35, ha="right")
+        axis.set_ylabel("Número de muestras")
+        axis.set_xlabel("Rango Proximity")
+        axis.set_title(f"{scenario_name} · Distribución de Proximity (n={total})")
+        axis.grid(axis="y", linestyle="--", alpha=0.35)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=160)
+        plt.close(fig)
+        return output_path
+    except Exception:
+        return None
+
+
+def write_proximity_class_summary_grouped_bars(
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    scenario_name: str,
+) -> Path | None:
+    """Generate grouped bars with mean/min/max proximity by class."""
+    rows = compute_proximity_summary_by_class(records=records, target_labels=["AD", "HP", "ASS"])
+    usable_rows = [row for row in rows if isinstance(row.get("mean"), (int, float))]
+    if not usable_rows:
+        return None
+
+    labels = [str(row.get("label") or "") for row in usable_rows]
+    mean_values = [float(row.get("mean") or 0.0) for row in usable_rows]
+    min_values = [float(row.get("min") or 0.0) for row in usable_rows]
+    max_values = [float(row.get("max") or 0.0) for row in usable_rows]
+
+    assets_dir = run_dir / "report_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    output_path = assets_dir / "proximity_class_summary_grouped_bars.png"
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        positions = list(range(len(labels)))
+        width = 0.24
+        fig, axis = plt.subplots(figsize=(8, 4.8))
+        axis.bar([pos - width for pos in positions], min_values, width=width, label="Mínimo", color="#63ACBE")
+        axis.bar(positions, mean_values, width=width, label="Media", color="#C7A76C")
+        axis.bar([pos + width for pos in positions], max_values, width=width, label="Máximo", color="#EE442F")
+        axis.set_xticks(positions)
+        axis.set_xticklabels(labels)
+        axis.set_ylim(0.0, 1.0)
+        axis.set_ylabel("Proximity")
+        axis.set_xlabel("Clase GT")
+        axis.set_title(f"{scenario_name} · Proximity por clase (mín/media/máx)")
+        axis.legend(loc="upper right")
+        axis.grid(axis="y", linestyle="--", alpha=0.35)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=160)
+        plt.close(fig)
+        return output_path
+    except Exception:
+        return None
+
+
+def write_proximity_correctness_comparison_barplot(
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    scenario_name: str,
+) -> Path | None:
+    """Generate mean proximity comparison for class-match cohorts."""
+    summary = compute_proximity_summary_by_class_match(records=records)
+    matched_raw = summary.get("matched")
+    mismatched_raw = summary.get("mismatched")
+    matched: dict[str, float | int | None] = matched_raw if isinstance(matched_raw, dict) else {}
+    mismatched: dict[str, float | int | None] = mismatched_raw if isinstance(mismatched_raw, dict) else {}
+
+    labels: list[str] = []
+    values: list[float] = []
+    counts: list[int] = []
+    matched_mean = matched.get("mean")
+    if isinstance(matched_mean, (int, float)):
+        labels.append("Acierto de clase")
+        values.append(float(matched_mean))
+        counts.append(int(matched.get("count") or 0))
+    mismatched_mean = mismatched.get("mean")
+    if isinstance(mismatched_mean, (int, float)):
+        labels.append("Fallo de clase")
+        values.append(float(mismatched_mean))
+        counts.append(int(mismatched.get("count") or 0))
+    if not labels:
+        return None
+
+    assets_dir = run_dir / "report_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    output_path = assets_dir / "proximity_correctness_comparison.png"
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, axis = plt.subplots(figsize=(6.2, 4.6))
+        bars = axis.bar(labels, values, color=["#2E8B57", "#B22222"][: len(labels)], alpha=0.88)
+        axis.set_ylim(0.0, 1.0)
+        axis.set_ylabel("Proximity medio")
+        axis.set_title(f"{scenario_name} · Proximity según acierto de clase")
+        axis.grid(axis="y", linestyle="--", alpha=0.35)
+        for index, bar in enumerate(bars):
+            axis.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                bar.get_height() + 0.02,
+                f"n={counts[index]}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+            )
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=160)
+        plt.close(fig)
+        return output_path
+    except Exception:
+        return None
+
+
+def write_proximity_boxplot_by_class_and_correctness(
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    scenario_name: str,
+) -> Path | None:
+    """Generate proximity boxplot split by class and correctness."""
+    groups = compute_proximity_boxplot_groups_by_class_and_match(records=records, target_labels=["AD", "HP", "ASS"])
+    if not groups:
+        return None
+
+    labels = [str(group.get("group") or "") for group in groups]
+    values = [list(group.get("values") or []) for group in groups]
+
+    assets_dir = run_dir / "report_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    output_path = assets_dir / "proximity_boxplot_class_correctness.png"
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, axis = plt.subplots(figsize=(max(7.6, len(labels) * 1.2), 4.8))
+        axis.boxplot(values, tick_labels=labels, patch_artist=True)
+        axis.set_ylim(0.0, 1.0)
+        axis.set_ylabel("Proximity")
+        axis.set_xlabel("Clase GT y estado de clasificación")
+        axis.set_title(f"{scenario_name} · Distribución Proximity por clase/acierto")
+        axis.tick_params(axis="x", rotation=30)
+        axis.grid(axis="y", linestyle="--", alpha=0.35)
+        fig.tight_layout()
+        fig.savefig(output_path, dpi=160)
+        plt.close(fig)
+        return output_path
+    except Exception:
+        return None
+
+
+def write_proximity_threshold_cumulative_curve(
+    *,
+    run_dir: Path,
+    records: list[dict[str, Any]],
+    scenario_name: str,
+) -> Path | None:
+    """Generate cumulative proximity-threshold coverage chart."""
+    coverage = compute_proximity_threshold_cumulative_coverage(records=records, thresholds=[0.3, 0.5, 0.7, 0.9])
+    if not coverage:
+        return None
+
+    thresholds = [float(item["threshold"]) for item in coverage]
+    percentages = [float(item["ratio"]) * 100.0 for item in coverage]
+
+    assets_dir = run_dir / "report_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    output_path = assets_dir / "proximity_threshold_cumulative_curve.png"
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, axis = plt.subplots(figsize=(6.8, 4.6))
+        axis.plot(thresholds, percentages, marker="o", linewidth=2.0, color="#2A9D8F")
+        axis.set_xticks(thresholds)
+        axis.set_xticklabels([f">={threshold:.1f}" for threshold in thresholds])
+        axis.set_ylim(0.0, 100.0)
+        axis.set_ylabel("Cobertura acumulada (%)")
+        axis.set_xlabel("Umbral de Proximity")
+        axis.set_title(f"{scenario_name} · Cobertura por umbral Proximity")
+        axis.grid(axis="both", linestyle="--", alpha=0.35)
         fig.tight_layout()
         fig.savefig(output_path, dpi=160)
         plt.close(fig)

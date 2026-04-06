@@ -27,6 +27,7 @@ from .runner_core import (
     build_scenario_record,
     collect_processed_image_ids_from_jsonl,
     compute_iou_safe,
+    compute_proximity_safe,
     draw_bbox_and_save_temp_image,
     default_scenario_output_path,
     emit_report_event,
@@ -50,13 +51,9 @@ from .runner_core import (
 )
 
 SCENARIO_E_PROMPT_TEMPLATE = (
-    "El sistema experto de biopsias ha confirmado que esta lesión corresponde a un pólipo "
-    "de tipo {gt_cls}. Recibirás una única imagen original con el bbox GT dibujado para guiar "
-    "la localización exacta de la lesión. Usa esa imagen para analizar detalladamente la textura "
-    "de la superficie, los bordes y el patrón vascular del tejido mostrado, y generar la mejor "
-    "justificación clínica posible de por qué las características coinciden con el diagnóstico "
-    "de {gt_cls}. IMPORTANTE: las coordenadas del bbox predicho deben referirse a esta misma "
-    "imagen completa anotada."
+    "El sistema experto de biopsias ha confirmado que en esta imagen hay un pólipo de tipo {gt_cls}. "
+    "El recuadro rojo en la imagen señala la ubicación exacta del {gt_cls}. "
+    "A continuación, describe detalladamente su morfología, bordes y patrón vascular para justificar por qué coincide con el diagnóstico de {gt_cls}."
 )
 
 DEFAULT_IMG_DIR = Path("data/processed/m_train/images")
@@ -428,12 +425,11 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     bbox_norm=gt_bbox_norm,
                     temp_dir=bbox_forced_tmp_dir,
                 )
-                scenario_prompt = SCENARIO_E_PROMPT_TEMPLATE.format(gt_cls=gt_cls)
 
                 parsed_response, telemetry_payload = safe_inference_with_optional_telemetry(
                     loader=loader,
                     image_path=str(bbox_forced_image_path),
-                    prompt=scenario_prompt,
+                    prompt=SCENARIO_E_PROMPT_TEMPLATE.format(gt_cls=gt_cls),
                     schema=PolypDiagnosisAndGrounding,
                 )
 
@@ -452,6 +448,31 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 iou_score = compute_iou_safe(
                     gt_bbox=gt_bbox,
                     pred_bbox=pred_bbox,
+                )
+                proximity_payload = compute_proximity_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)
+                proximity_value = (
+                    proximity_payload.get("proximity_score") if isinstance(proximity_payload, dict) else None
+                )
+                proximity_center_value = (
+                    proximity_payload.get("proximity_center_score") if isinstance(proximity_payload, dict) else None
+                )
+                proximity_size_value = (
+                    proximity_payload.get("proximity_size_score") if isinstance(proximity_payload, dict) else None
+                )
+                proximity_score = (
+                    float(proximity_value)
+                    if isinstance(proximity_value, (int, float))
+                    else None
+                )
+                proximity_center_score = (
+                    float(proximity_center_value)
+                    if isinstance(proximity_center_value, (int, float))
+                    else None
+                )
+                proximity_size_score = (
+                    float(proximity_size_value)
+                    if isinstance(proximity_size_value, (int, float))
+                    else None
                 )
                 if isinstance(iou_score, float):
                     iou_values.append(iou_score)
@@ -488,6 +509,9 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     telemetry_payload=telemetry_payload,
                     class_match=is_match,
                     iou_score=iou_score,
+                    proximity_score=proximity_score,
+                    proximity_center_score=proximity_center_score,
+                    proximity_size_score=proximity_size_score,
                 )
                 upsert_scenario_result_record(output_path=output_path, result_dict=result_dict)
 

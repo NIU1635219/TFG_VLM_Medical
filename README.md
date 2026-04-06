@@ -22,9 +22,20 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - `UIKit` añade `render_and_wait_responsive(...)` como helper común de espera reactiva, con repintado automático al redimensionar el terminal.
 - Dashboard de escenarios de grounding (A/B/C/D/E) en vivo desde Setup Tests UI:
     - barra de progreso con clamp defensivo (`current` no excede `total`),
-    - resumen de clase (match/mismatch + accuracy),
-    - IoU medio en la misma línea de métricas de clasificación,
+    - resumen de clase (match/mismatch),
+    - línea de estado con bloque `Métricas` (Acc/IoU/Proximity) en tiempo real,
     - heatmap GT→Pred en tabla TUI con color por celda y gradiente continuo.
+- Evaluación espacial dual en grounding: IoU como métrica base + `Proximity` como métrica complementaria.
+- `Proximity` se calcula por imagen a partir de dos componentes:
+    - `proximity_center_score`: cercanía entre centros de bbox (función gaussiana),
+    - `proximity_size_score`: similitud relativa de tamaño (área).
+- Score combinado `proximity_score` en rango [0,1] con pesos 0.6 (centros) y 0.4 (tamaño),
+  reforzado por compuerta geométrica:
+    - sin contacto entre cajas => score cercano a 0,
+    - con contacto => penalización/bonificación según contención (intersección respecto a la caja menor).
+- Registros JSONL de escenarios A/B/C/E ampliados con `proximity_score`, `proximity_center_score` y `proximity_size_score`.
+- Resumen acumulado de escenarios ampliado con `avg_proximity`.
+- Reporte Markdown de escenarios A/B/C/E ampliado con sección `Análisis Proximity` y 5 gráficos en `report_assets`.
 - Schema Tester integrado en el manager: selección interactiva de modelo + esquema + inferencia por lotes.
 - Batch Runner CLI con exportado incremental en JSONL compartido por manifiesto+schema.
 - Batch Runner: enriquecimiento espacial opcional en JSONL para detecciones con `iou_score` (por bbox),
@@ -70,7 +81,7 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Catálogo de esquemas simplificado:
     - retirada de `PolypClassificationDetailed` y su variante `WithReasoning`.
 
-## Novedades recientes (marzo 2026)
+## Novedades recientes (marzo-abril 2026)
 
 - Estandarización de docstrings en estilo Google en módulos refactorizados.
 - Corrección de imports tras mover helpers de LM Studio a `src/utils/models_ui/`.
@@ -96,6 +107,15 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Cobertura de pruebas ampliada para flujo A/B y renderizado reactivo de tablas en pantallas finales.
 - Nuevo script `src/preprocessing/extract_gt_bboxes.py` para extraer bounding boxes Ground Truth desde máscaras binarias (`.tif/.tiff`) y normalizarlas a escala 0-1000 (`[ymin, xmin, ymax, xmax]`).
 - Nuevo notebook `notebooks/03_ground_truth_bboxes.ipynb` para orquestar la ejecución del extractor y validar visualmente los BBoxes.
+- Grounding: integración de evaluación espacial combinada `IoU + Proximity` para escenarios A/B/C/E.
+- Grounding: persistencia de `proximity_score`, `proximity_center_score` y `proximity_size_score` por registro en JSONL.
+- Grounding reportes: nueva sección `Análisis Proximity` con distribución, resumen por clase, comparación por acierto/fallo, boxplot y curva por umbrales.
+- Grounding aggregation: resumen acumulado con `avg_proximity` además de `avg_iou`.
+- Tests nuevos para proximidad geométrica: `tests/test_proximity_metrics.py` y `tests/test_grounding_report_proximity_metrics.py`.
+- Proximity endurecido para reducir falsos positivos espaciales:
+    - cajas sin contacto pasan a puntuaciones casi nulas,
+    - contención completa/alta se premia frente a solapamientos parciales.
+- Rehidratación de runs históricos soportada: se pueden recalcular campos `proximity_*` en `results.jsonl` y regenerar `results.md`/`report_assets` con la nueva lógica.
 
 ## Stack técnico
 
@@ -147,12 +167,12 @@ Dependencias declaradas en `pyproject.toml`.
 │   │   │   ├── run_scenario_C.py       # Scenario C: bbox GT superpuesto sobre imagen completa para guiar la localización.
 │   │   │   ├── run_scenario_D.py       # Scenario D: clasificación focalizada con recorte ROI y schema sin bbox/IoU.
 │   │   │   ├── run_scenario_E.py       # Scenario E: combinación de B+C (clase asistida + bbox GT dibujada sobre imagen completa).
-│   │   │   ├── runner_core.py          # Fachada pública compartida usada por escenarios y UI.
-│   │   │   ├── report_aggregation.py   # Persistencia y agregación JSONL (meta/summary/resume).
-│   │   │   ├── report_serialization.py # Serialización compacta de registros por imagen.
-│   │   │   ├── report_markdown.py      # Construcción de records y generación de informe Markdown.
-│   │   │   ├── report_visuals.py       # Generación de imágenes anotadas y heatmap de confusión.
-│   │   │   ├── report_metrics.py       # Accuracy, macro-F1, recall y matriz de confusión.
+│   │   │   ├── runner_core.py          # Fachada pública compartida usada por escenarios y UI (IoU + Proximity safe).
+│   │   │   ├── report_aggregation.py   # Persistencia y agregación JSONL (meta/summary/resume, avg_iou + avg_proximity).
+│   │   │   ├── report_serialization.py # Serialización compacta de registros por imagen (incluye campos proximity_*).
+│   │   │   ├── report_markdown.py      # Construcción de records y generación de informe Markdown (secciones IoU y Proximity).
+│   │   │   ├── report_visuals.py       # Generación de imágenes anotadas, heatmap y gráficos IoU/Proximity.
+│   │   │   ├── report_metrics.py       # Accuracy, macro-F1, confusión + agregaciones IoU/Proximity.
 │   │   │   └── report_narrative.py     # Explicaciones narrativas por clase y top de errores.
 │   │   ├── poc_bbox.py                 # PoC de visual grounding con soporte multi-bbox y reporter para UI reactiva.
 │   │   ├── test_inference.py           # Smoke test CLI con descarga automática de imágenes de muestra.
@@ -678,6 +698,37 @@ Arquitectura actual:
 - Serialización de registros por imagen en `report_serialization.py`.
 - Métricas, narrativa, visuales y markdown desacoplados en módulos dedicados.
 
+### Evaluación espacial combinada: IoU + Proximity
+
+Para escenarios con localización (A/B/C/E), la evaluación espacial se interpreta en doble plano:
+
+- `IoU` como medida base de solapamiento geométrico estricto.
+- `Proximity` como señal complementaria de cercanía clínica entre bbox predicha y bbox GT.
+
+Definición operativa de `Proximity`:
+
+- `proximity_center_score`: score [0,1] basado en distancia de centros normalizada por diagonal conjunta y penalización gaussiana.
+- `proximity_size_score`: score [0,1] basado en diferencia relativa de área entre bbox predicha y GT.
+- `proximity_score`: combinación ponderada `0.6 * center + 0.4 * size`.
+
+Campos persistidos por registro JSONL:
+
+- `proximity_score`
+- `proximity_center_score`
+- `proximity_size_score`
+
+Resumen acumulado por ejecución:
+
+- `avg_iou`
+- `avg_proximity`
+
+Interpretación recomendada:
+
+- `IoU` bajo + `Proximity` alta: posible atención correcta con regresión geométrica imperfecta.
+- `IoU` alto + `Proximity` baja: posible solapamiento aceptable con desajuste centro/tamaño.
+
+Los reportes Markdown muestran ambas señales y deben leerse junto con la inspección visual de artefactos de grounding.
+
 ### Scenario A (`run_scenario_A.py`)
 
 Zero-shot sobre imágenes clínicas:
@@ -739,6 +790,23 @@ Escenario que combina B + C:
 - Combina la clase GT asistida del escenario B con la imagen completa anotada con bbox GT del escenario C.
 - Mantiene una sola imagen de entrada para evitar multiimagen en esta fase.
 - Conserva el contrato común de salida: JSONL incremental + summary + Markdown.
+
+### Artefactos visuales de reporte (A/B/C/E)
+
+Además del heatmap de confusión (`class_confusion_heatmap.png`), el reporte genera:
+
+- IoU:
+    - `iou_distribution_histogram.png`
+    - `iou_class_summary_grouped_bars.png`
+    - `iou_correctness_comparison.png`
+    - `iou_boxplot_class_correctness.png`
+    - `iou_threshold_cumulative_curve.png`
+- Proximity:
+    - `proximity_distribution_histogram.png`
+    - `proximity_class_summary_grouped_bars.png`
+    - `proximity_correctness_comparison.png`
+    - `proximity_boxplot_class_correctness.png`
+    - `proximity_threshold_cumulative_curve.png`
 
 ### Convenciones de datos para escenarios
 
@@ -828,6 +896,9 @@ Tests más relevantes:
 - `tests/test_batch_runner.py`: exportado incremental y persistencia de resultados por imagen.
 - `tests/test_experiment_ab_text.py`: detección de variantes y balanceo estratificado de muestras A/B.
 - `tests/test_grounding_runner_core.py`: completitud/resume, agregación acumulada y reportes para escenarios A/B/C/D/E.
+- `tests/test_grounding_report_iou_metrics.py`: agregaciones IoU usadas por el reporte (histograma, resumen por clase, cohorts y umbrales).
+- `tests/test_grounding_report_proximity_metrics.py`: agregaciones Proximity equivalentes a IoU para el reporte.
+- `tests/test_proximity_metrics.py`: validación de funciones base de proximidad (centro, tamaño y score combinado).
 - `tests/test_grounding_live_heatmap.py`: render del heatmap live (conteo + %global/%fila, gradiente y leyenda).
 - `tests/test_progress_bar.py`: clamp de barra de progreso y casos límite sin muestra.
 - `tests/test_schemas.py`: validación de esquemas Pydantic base y variantes `WithReasoning`.

@@ -7,53 +7,159 @@ and readable text generation so runner_core stays focused on data handling.
 from __future__ import annotations
 
 
-def build_global_performance_explanation(*, accuracy: float | None, avg_iou: float | None) -> str:
+def _normalize_metric_name(metric_name: str) -> str:
+    normalized = str(metric_name or "").strip().lower()
+    if normalized in {"iou", "intersection over union"}:
+        return "iou"
+    if normalized in {"proximity", "prox"}:
+        return "proximity"
+    return normalized
+
+
+def build_global_performance_explanation(
+    *,
+    accuracy: float | None,
+    avg_iou: float | None,
+    avg_proximity: float | None = None,
+) -> str:
     """Build a generic explanation that varies by simple comparison rules."""
-    if accuracy is None and avg_iou is None:
+    if accuracy is None and avg_iou is None and avg_proximity is None:
         return (
             "No hay suficientes datos para interpretar el rendimiento global. "
-            "Se necesitan clases GT y predichas validas para estimar accuracy e IoU."
+            "Se necesitan clases GT y predichas validas para estimar accuracy, IoU y Proximity."
         )
 
     if accuracy is None:
         return (
-            "No se pudo calcular accuracy global de clase, pero si hay IoU medio disponible. "
+            "No se pudo calcular accuracy global de clase, pero si hay metrica espacial disponible. "
             "Revisa que todas las predicciones incluyan clase para poder comparar clasificacion."
         )
 
-    if avg_iou is None:
+    if avg_iou is None and avg_proximity is None:
         if accuracy > 0.7:
             return (
                 "El accuracy global es alto (> 70%), lo que sugiere buena clasificacion. "
-                "No hay IoU medio para evaluar la precision espacial de las cajas."
+                "No hay IoU/Proximity medio para evaluar la precision espacial de las cajas."
             )
         if accuracy < 0.4:
             return (
                 "El accuracy global es bajo (< 40%), indicando errores frecuentes de clase. "
-                "No hay IoU medio para contrastar el componente espacial."
+                "No hay IoU/Proximity medio para contrastar el componente espacial."
             )
         return (
             "El accuracy global es intermedio (=~ rango medio), con margen de mejora en clasificacion. "
-            "No hay IoU medio para completar el analisis espacial."
+            "No hay IoU/Proximity medio para completar el analisis espacial."
         )
 
-    if accuracy > avg_iou:
-        relation = "accuracy > IoU"
-    elif accuracy < avg_iou:
-        relation = "accuracy < IoU"
-    else:
-        relation = "accuracy = IoU"
+    metric_relations: list[str] = []
+    if isinstance(avg_iou, (int, float)):
+        if accuracy > avg_iou:
+            metric_relations.append("accuracy > IoU")
+        elif accuracy < avg_iou:
+            metric_relations.append("accuracy < IoU")
+        else:
+            metric_relations.append("accuracy = IoU")
+    if isinstance(avg_proximity, (int, float)):
+        if accuracy > avg_proximity:
+            metric_relations.append("accuracy > Proximity")
+        elif accuracy < avg_proximity:
+            metric_relations.append("accuracy < Proximity")
+        else:
+            metric_relations.append("accuracy = Proximity")
+    relation = ", ".join(metric_relations) if metric_relations else "comparativa no disponible"
 
-    if accuracy >= 0.7 and avg_iou >= 0.5:
+    spatial_low = False
+    if isinstance(avg_iou, (int, float)) and avg_iou < 0.2:
+        spatial_low = True
+    if isinstance(avg_proximity, (int, float)) and avg_proximity < 0.3:
+        spatial_low = True
+
+    spatial_high = False
+    if isinstance(avg_iou, (int, float)) and isinstance(avg_proximity, (int, float)):
+        spatial_high = avg_iou >= 0.5 and avg_proximity >= 0.6
+    elif isinstance(avg_iou, (int, float)):
+        spatial_high = avg_iou >= 0.5
+    elif isinstance(avg_proximity, (int, float)):
+        spatial_high = avg_proximity >= 0.6
+
+    if accuracy >= 0.7 and spatial_high:
         quality = "Rendimiento global solido: clasificacion y localizacion estan en zona alta."
-    elif accuracy < 0.4 or avg_iou < 0.2:
+    elif accuracy < 0.4 or spatial_low:
         quality = "Rendimiento global debil: conviene revisar prompt, datos y/o modelo."
     else:
         quality = "Rendimiento global intermedio: existe senal util pero aun hay variabilidad."
 
+    metric_status_parts: list[str] = []
+    metric_status_parts.append(
+        f"IoU medio={float(avg_iou):.3f}" if isinstance(avg_iou, (int, float)) else "IoU medio=N/A"
+    )
+    metric_status_parts.append(
+        (
+            f"Proximity medio={float(avg_proximity):.3f}"
+            if isinstance(avg_proximity, (int, float))
+            else "Proximity medio=N/A"
+        )
+    )
+    metric_status_text = "; ".join(metric_status_parts)
+
     return (
         f"{quality} Comparativa global: {relation}. "
-        "El mapa de calor muestra en que pares GT-Pred se concentran los aciertos y confusiones."
+        f"{metric_status_text}. El mapa de calor muestra en que pares GT-Pred se concentran los aciertos y confusiones, "
+        "mientras IoU y Proximity detallan la calidad espacial desde perspectivas complementarias."
+    )
+
+
+def build_metric_charts_reading_guide(*, metric_name: str) -> list[str]:
+    """Return user-facing guide lines to interpret metric chart blocks."""
+    normalized = _normalize_metric_name(metric_name)
+
+    if normalized == "proximity":
+        return [
+            "Histograma: muestra como se reparte Proximity en el escenario (cuanto mas cerca de 1, mejor alineacion espacial global).",
+            "Barras por clase: compara minimo, media y maximo Proximity en cada clase GT.",
+            "Acierto vs fallo: verifica si acertar la clase suele venir acompanado de mejor ajuste espacial global.",
+            "Boxplot: resume mediana, dispersion y outliers por clase y por estado de clasificacion.",
+            "Curva de umbrales: indica la cobertura acumulada al exigir Proximity minimo.",
+        ]
+
+    return [
+        "Histograma: muestra como se distribuyen las puntuaciones IoU del escenario.",
+        "Barras por clase: compara minimo, media y maximo IoU en cada clase GT.",
+        "Acierto vs fallo: contrasta el IoU medio cuando la clase se acierta o se falla.",
+        "Boxplot: resume mediana, dispersion y atipicos por clase y estado de clasificacion.",
+        "Curva de umbrales: indica la cobertura acumulada al exigir IoU minimo.",
+    ]
+
+
+def build_metric_section_explanation(*, metric_name: str, average_value: float | None) -> str:
+    """Build a compact interpretation paragraph for IoU/Proximity sections."""
+    normalized = _normalize_metric_name(metric_name)
+    metric_label = "Proximity" if normalized == "proximity" else "IoU"
+
+    if average_value is None:
+        return (
+            f"No hay suficiente informacion para interpretar {metric_label} de forma global en esta ejecucion. "
+            "Se recomienda revisar si todas las muestras incluyen bbox GT y bbox predicha validas."
+        )
+
+    value = float(average_value)
+    if value >= 0.7:
+        quality = "alto"
+    elif value >= 0.4:
+        quality = "intermedio"
+    else:
+        quality = "bajo"
+
+    if normalized == "proximity":
+        return (
+            f"El Proximity medio es {value:.4f}, en rango {quality}. "
+            "Esta metrica combina cercania de centros y similitud de tamano, por lo que ayuda a detectar ajustes espaciales "
+            "razonables incluso cuando IoU no es alto."
+        )
+
+    return (
+        f"El IoU medio es {value:.4f}, en rango {quality}. "
+        "IoU evalua solapamiento estricto entre cajas GT y predicha: valores altos implican localizacion precisa."
     )
 
 
@@ -191,7 +297,25 @@ def _describe_iou_band(iou_value: float | None) -> str:
     return "La superposicion es muy baja: la localizacion espacial necesita mejoras claras."
 
 
-def describe_result_item(*, class_match: bool | None, iou_value: float | None) -> str:
+def _describe_proximity_band(proximity_value: float | None) -> str:
+    """Return a user-friendly qualitative Proximity interpretation."""
+    if proximity_value is None:
+        return "No se pudo estimar Proximity para este caso, por lo que la cercania espacial global es incierta."
+    if proximity_value >= 0.75:
+        return "La cercania espacial global es alta (centro y tamano bien alineados)."
+    if proximity_value >= 0.5:
+        return "La cercania espacial es intermedia: hay alineacion general, pero con desviaciones apreciables."
+    if proximity_value >= 0.3:
+        return "La cercania espacial es baja, con diferencias relevantes en posicion y/o tamano."
+    return "La cercania espacial es muy baja: la caja predicha queda lejos del objetivo esperado."
+
+
+def describe_result_item(
+    *,
+    class_match: bool | None,
+    iou_value: float | None,
+    proximity_value: float | None = None,
+) -> str:
     """Build a concise, easy-to-read explanation for one sample result."""
     if class_match is True:
         class_text = "La clase predicha coincide con la clase real"
@@ -201,7 +325,8 @@ def describe_result_item(*, class_match: bool | None, iou_value: float | None) -
         class_text = "No se pudo confirmar coincidencia de clase"
 
     iou_text = _describe_iou_band(iou_value)
-    return f"{class_text}. {iou_text}"
+    proximity_text = _describe_proximity_band(proximity_value)
+    return f"{class_text}. {iou_text} {proximity_text}"
 
 
 def build_executive_summary_text(
@@ -210,6 +335,7 @@ def build_executive_summary_text(
     class_accuracy: float | None,
     macro_f1: float | None,
     avg_iou: float | None,
+    avg_proximity: float | None = None,
 ) -> str:
     """Create a high-level narrative summary for non-technical readers."""
     accuracy_text = (
@@ -217,12 +343,13 @@ def build_executive_summary_text(
     )
     macro_f1_text = f"{macro_f1:.4f}" if isinstance(macro_f1, (int, float)) else "N/A"
     iou_text = f"{avg_iou:.4f}" if isinstance(avg_iou, (int, float)) else "N/A"
+    proximity_text = f"{avg_proximity:.4f}" if isinstance(avg_proximity, (int, float)) else "N/A"
 
     return (
         f"Este informe resume {total_images} casos evaluados en el escenario. "
         f"A nivel global, la clasificacion alcanza una exactitud del {accuracy_text}, "
         f"con un Macro-F1 de {macro_f1_text} (equilibrio entre precision y recall por clase) "
-        f"y un IoU medio de {iou_text} para la calidad de localizacion. "
+        f"y un IoU medio de {iou_text} junto con Proximity medio de {proximity_text} para la calidad de localizacion. "
         "Las secciones siguientes explican de forma guiada donde acierta mas el sistema, "
         "donde confunde clases y que patrones conviene priorizar en iteraciones futuras."
     )

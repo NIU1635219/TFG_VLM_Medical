@@ -28,17 +28,29 @@ class CropResult:
     bbox: tuple[int, int, int, int]
 
 
-def find_endoscopy_bbox(image_bgr, min_area_ratio: float = 0.1) -> tuple[int, int, int, int]:
+def find_endoscopy_bbox(
+    image_bgr,
+    min_area_ratio: float = 0.1,
+    black_threshold: int = 16,
+    border_non_black_ratio_tol: float = 0.50,
+) -> tuple[int, int, int, int]:
     """
     Encuentra el cuadro delimitador (bbox) de la región útil en una imagen de endoscopia.
 
-    Intenta eliminar los bordes negros típicos de estas imágenes mediante umbralización
-    y detección de contornos.
+    Intenta eliminar los bordes negros típicos de estas imágenes mediante una
+    segmentación conservadora de píxeles no-negros y detección de contornos.
 
     Args:
         image_bgr (numpy.ndarray): Imagen de entrada en formato BGR.
         min_area_ratio (float, optional): Ratio mínimo del área del contorno respecto
             al tamaño total de la imagen para ser considerado válido. Por defecto es 0.1.
+        black_threshold (int, optional): Umbral de intensidad para considerar un
+            píxel como no-negro. Valores bajos hacen el recorte menos agresivo al
+            preservar periferia tenue. Por defecto es 16.
+        border_non_black_ratio_tol (float, optional): Umbral (0-1) de píxeles
+            no-negros permitido para recortar una fila/columna de borde.
+            Ejemplo: 0.50 equivale a recortar cuando hay más del 50% de negro.
+            Por defecto es 0.50.
 
     Returns:
         tuple[int, int, int, int]: Una tupla (x, y, w, h) representando el bbox.
@@ -47,20 +59,40 @@ def find_endoscopy_bbox(image_bgr, min_area_ratio: float = 0.1) -> tuple[int, in
     height, width = image_bgr.shape[:2]
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
 
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, threshold = cv2.threshold(
-        blurred,
-        0,
-        255,
-        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
-    )
+    # Umbral fijo bajo para no perder bordes periféricos oscuros del campo endoscópico.
+    _, threshold = cv2.threshold(gray, int(black_threshold), 255, cv2.THRESH_BINARY)
 
-    contours, _ = cv2.findContours(threshold, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
+    # Cierre morfológico para unir regiones válidas y evitar recortes fragmentados.
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    threshold = cv2.morphologyEx(threshold, cv2.MORPH_CLOSE, kernel)
+
+    # Recorta bandas negras de borde cuando el porcentaje negro supera el criterio.
+    row_non_black_ratio = (gray > int(black_threshold)).mean(axis=1)
+    col_non_black_ratio = (gray > int(black_threshold)).mean(axis=0)
+
+    top = 0
+    while top < height and row_non_black_ratio[top] < float(border_non_black_ratio_tol):
+        top += 1
+
+    bottom = height
+    while bottom > top and row_non_black_ratio[bottom - 1] < float(border_non_black_ratio_tol):
+        bottom -= 1
+
+    left = 0
+    while left < width and col_non_black_ratio[left] < float(border_non_black_ratio_tol):
+        left += 1
+
+    right = width
+    while right > left and col_non_black_ratio[right - 1] < float(border_non_black_ratio_tol):
+        right -= 1
+
+    if not (top < bottom and left < right):
         return (0, 0, width, height)
 
-    largest_contour = max(contours, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(largest_contour)
+    x = left
+    y = top
+    w = max(1, right - left)
+    h = max(1, bottom - top)
 
     min_area = int(width * height * min_area_ratio)
     if w * h < min_area:
@@ -69,7 +101,12 @@ def find_endoscopy_bbox(image_bgr, min_area_ratio: float = 0.1) -> tuple[int, in
     return (x, y, w, h)
 
 
-def crop_image_remove_black_borders(image_bgr, min_area_ratio: float = 0.1):
+def crop_image_remove_black_borders(
+    image_bgr,
+    min_area_ratio: float = 0.1,
+    black_threshold: int = 16,
+    border_non_black_ratio_tol: float = 0.50,
+):
     """
     Recorta los bordes negros de una imagen de endoscopia.
 
@@ -78,13 +115,21 @@ def crop_image_remove_black_borders(image_bgr, min_area_ratio: float = 0.1):
     Args:
         image_bgr (numpy.ndarray): Imagen de entrada en formato BGR.
         min_area_ratio (float, optional): Ratio mínimo de área para considerar válido el recorte.
+        black_threshold (int, optional): Umbral para considerar negro/no-negro en bordes.
+        border_non_black_ratio_tol (float, optional): Umbral de no-negro en bordes
+            para decidir recorte (0.50 => recorta si negro > 50%).
 
     Returns:
         tuple: Una tupla conteniendo:
             - cropped (numpy.ndarray): La imagen recortada (o la original si no se recortó).
             - bbox (tuple): El cuadro delimitador usado (x, y, w, h).
     """
-    x, y, w, h = find_endoscopy_bbox(image_bgr, min_area_ratio=min_area_ratio)
+    x, y, w, h = find_endoscopy_bbox(
+        image_bgr,
+        min_area_ratio=min_area_ratio,
+        black_threshold=black_threshold,
+        border_non_black_ratio_tol=border_non_black_ratio_tol,
+    )
     cropped = image_bgr[y : y + h, x : x + w]
     return cropped, (x, y, w, h)
 
@@ -190,6 +235,8 @@ def process_dataset(
     output_dir: Path,
     max_images: int | None = None,
     min_area_ratio: float = 0.1,
+    black_threshold: int = 16,
+    border_non_black_ratio_tol: float = 0.50,
     dry_run: bool = False,
 ) -> list[CropResult]:
     """
@@ -203,6 +250,9 @@ def process_dataset(
         output_dir (Path): Directorio donde guardar el dataset procesado.
         max_images (int, optional): Límite máximo de imágenes a procesar.
         min_area_ratio (float, optional): Ratio mínimo de área para detección de bbox.
+        black_threshold (int, optional): Umbral para considerar negro/no-negro en bordes.
+        border_non_black_ratio_tol (float, optional): Umbral de no-negro para
+            decidir recorte en bordes (0.50 => recorta si negro > 50%).
         dry_run (bool, optional): Si es True, simula el proceso sin escribir archivos.
 
     Returns:
@@ -227,7 +277,12 @@ def process_dataset(
             print(f"[WARN] No se pudo leer: {image_path}")
             continue
 
-        cropped, bbox = crop_image_remove_black_borders(image, min_area_ratio=min_area_ratio)
+        cropped, bbox = crop_image_remove_black_borders(
+            image,
+            min_area_ratio=min_area_ratio,
+            black_threshold=black_threshold,
+            border_non_black_ratio_tol=border_non_black_ratio_tol,
+        )
         was_cropped = cropped.shape[:2] != image.shape[:2]
 
         if not dry_run:
@@ -292,6 +347,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Área mínima relativa del contorno para aceptar recorte (0-1).",
     )
     parser.add_argument(
+        "--black-threshold",
+        type=int,
+        default=16,
+        help="Umbral para considerar un píxel como no-negro al recortar bordes.",
+    )
+    parser.add_argument(
+        "--border-non-black-ratio-tol",
+        type=float,
+        default=0.50,
+        help=(
+            "Umbral (0-1) de píxeles no-negros para recortar bandas de borde "
+            "(0.50 => recorta si el borde tiene más del 50% de negro)."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Calcula recortes sin escribir archivos en disco.",
@@ -314,6 +384,8 @@ def main() -> int:
         output_dir=output_dir,
         max_images=args.max_images,
         min_area_ratio=args.min_area_ratio,
+        black_threshold=args.black_threshold,
+        border_non_black_ratio_tol=args.border_non_black_ratio_tol,
         dry_run=args.dry_run,
     )
     csv_copied_count = copy_csv_files(

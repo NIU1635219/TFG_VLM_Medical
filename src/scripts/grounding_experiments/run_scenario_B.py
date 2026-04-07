@@ -512,6 +512,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 predicted_cls=predicted_cls,
                 class_match=is_match,
                 iou_score=iou_score,
+                proximity_score=proximity_score,
                 telemetry=telemetry_payload,
             )
 
@@ -550,6 +551,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         matched_class=int(cumulative_summary.get("matched_class") or 0),
         mismatched_class=int(cumulative_summary.get("mismatched_class") or 0),
         avg_iou=cumulative_summary.get("avg_iou"),
+        avg_proximity=cumulative_summary.get("avg_proximity"),
         output_path=str(output_path),
         markdown_path=str(markdown_path),
         run_dir=str(run_dir),

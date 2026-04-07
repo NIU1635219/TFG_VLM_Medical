@@ -260,6 +260,26 @@ class VLMLoader:
             f"Detalle original: {error}"
         )
 
+    def _is_model_not_loaded_issue(self, error: BaseException) -> bool:
+        """
+        Detecta errores donde el modelo ya no está cargado en LM Studio.
+
+        Args:
+            error (BaseException): Error capturado durante inferencia/carga.
+
+        Returns:
+            bool: ``True`` cuando el servidor reporta ausencia de modelo cargado.
+        """
+        error_text = str(error).lower()
+        patterns = (
+            "nomodelmatchingquery",
+            "no model found that fits the query",
+            "loadedmodelssample",
+            "totalloadedmodels",
+            "no model loaded",
+        )
+        return any(pattern in error_text for pattern in patterns)
+
     def _extract_model_key(self, model_obj: Any) -> str | None:
         """
         Extrae el identificador único (key) de un objeto de modelo de LM Studio.
@@ -1222,47 +1242,72 @@ class VLMLoader:
             else:
                 raise
 
-        model_handle = self._loaded_model
-        assert model_handle is not None
-
+        response: Any | None = None
         started_at = time.perf_counter()
-        try:
-            response = self._respond_with_config_compat(
-                model_handle,
-                multimodal_input,
-                temperature_value,
-                seed=seed,
-                schema=schema,
-            )
-        except Exception as image_error:
-            if self._is_lmstudio_connection_issue(image_error):
-                raise RuntimeError(
-                    self._build_lmstudio_connection_message("ejecutar la inferencia", image_error)
-                ) from image_error
+        first_error: Exception | None = None
+        for attempt in range(2):
+            model_handle = self._loaded_model
+            if model_handle is None:
+                self.load_model()
+                model_handle = self._loaded_model
+            assert model_handle is not None
+
             try:
-                self._respond_with_config_compat(
+                response = self._respond_with_config_compat(
                     model_handle,
-                    structured_text,
+                    multimodal_input,
                     temperature_value,
+                    seed=seed,
                     schema=schema,
                 )
-            except Exception as fallback_error:
-                if self._is_lmstudio_connection_issue(fallback_error):
+                break
+            except Exception as image_error:
+                if first_error is None:
+                    first_error = image_error
+
+                # Si LM Studio descargó el modelo durante el batch, reintenta una vez
+                # forzando recarga para evitar cascadas de errores por handle stale.
+                if attempt == 0 and self._is_model_not_loaded_issue(image_error):
+                    self._loaded_model = None
+                    self._client = None
+                    try:
+                        self.load_model()
+                        continue
+                    except Exception as reload_error:
+                        image_error = reload_error
+
+                if self._is_lmstudio_connection_issue(image_error):
                     raise RuntimeError(
-                        self._build_lmstudio_connection_message(
-                            "ejecutar la inferencia",
-                            fallback_error,
-                        )
+                        self._build_lmstudio_connection_message("ejecutar la inferencia", image_error)
                     ) from image_error
+                try:
+                    self._respond_with_config_compat(
+                        model_handle,
+                        structured_text,
+                        temperature_value,
+                        schema=schema,
+                    )
+                except Exception as fallback_error:
+                    if self._is_lmstudio_connection_issue(fallback_error):
+                        raise RuntimeError(
+                            self._build_lmstudio_connection_message(
+                                "ejecutar la inferencia",
+                                fallback_error,
+                            )
+                        ) from image_error
+                    raise RuntimeError(
+                        "Fallo de inferencia en LM Studio: no se pudo procesar la imagen "
+                        f"ni ejecutar fallback de texto. Detalle: {fallback_error}"
+                    ) from image_error
+
                 raise RuntimeError(
-                    "Fallo de inferencia en LM Studio: no se pudo procesar la imagen "
-                    f"ni ejecutar fallback de texto. Detalle: {fallback_error}"
+                    "Fallo de inferencia multimodal en LM Studio: error al manejar la imagen. "
+                    "Se verificó fallback de texto, pero esta operación requiere imagen válida."
                 ) from image_error
 
-            raise RuntimeError(
-                "Fallo de inferencia multimodal en LM Studio: error al manejar la imagen. "
-                "Se verificó fallback de texto, pero esta operación requiere imagen válida."
-            ) from image_error
+        if response is None:
+            assert first_error is not None
+            raise RuntimeError(f"No se pudo completar la inferencia tras reintento: {first_error}") from first_error
 
         total_duration_seconds = time.perf_counter() - started_at
         telemetry = self._extract_inference_telemetry(response, total_duration_seconds)

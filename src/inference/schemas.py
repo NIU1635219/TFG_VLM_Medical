@@ -639,7 +639,7 @@ class PolypDiagnosisAndGrounding(BaseModel):
     )
     final_diagnosis_class: Literal["AD", "HP", "ASS"] = Field(
         ...,
-        description="Veredicto histológico final: AD (Adenoma), HP (Hiperplasia) o ASS (Adenoma con Síndrome de Serrado)."
+        description="Veredicto histológico final: Adenoma (AD), Pólipo Hiperplásico (HP), Adenoma Serrado Sésil (ASS)."
     )
 
     @model_validator(mode="after")
@@ -693,7 +693,7 @@ class PolypDiagnosisClassificationOnly(BaseModel):
     )
     final_diagnosis_class: Literal["AD", "HP", "ASS"] = Field(
         ...,
-        description="Veredicto histológico final: AD (Adenoma), HP (Hiperplasia) o ASS (Adenoma con Síndrome de Serrado)."
+        description="Veredicto histológico final: Adenoma (AD), Pólipo Hiperplásico (HP), Adenoma Serrado Sésil (ASS)."
     )
 
 # ---------------------------------------------------------------------------

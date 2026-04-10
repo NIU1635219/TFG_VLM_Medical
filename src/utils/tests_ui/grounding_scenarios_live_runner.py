@@ -76,6 +76,20 @@ def _safe_read_jsonl_records(path: Path) -> list[dict[str, Any]]:
         return []
 
 
+def _format_eta(eta_seconds: float | None) -> str:
+    """Formatea ETA en un formato simple para usuario final."""
+    if not isinstance(eta_seconds, (int, float)):
+        return "N/D"
+    total_seconds = max(0, int(round(float(eta_seconds))))
+    if total_seconds < 60:
+        return f"{total_seconds}s"
+    minutes, seconds = divmod(total_seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
+
+
 def _render_scenario_final_screen(
     *,
     kit: Any,
@@ -478,13 +492,18 @@ def run_scenario_with_dashboards(
 
         safe_total = max(0, total)
         safe_current = max(0, min(current, safe_total if safe_total > 0 else current))
+        remaining_inferences = max(0, safe_total - safe_current)
 
         cls_total = matched + mismatched
         accuracy_text = f"{(matched / cls_total * 100.0):.1f}%" if cls_total > 0 else "N/D"
         ttft_text = f"{float(avg_ttft):.3f}s" if isinstance(avg_ttft, (int, float)) else "N/D"
         tps_text = f"{float(avg_tps):.2f}" if isinstance(avg_tps, (int, float)) else "N/D"
         duration_text = f"{float(avg_duration):.3f}s" if isinstance(avg_duration, (int, float)) else "N/D"
-        metrics_line = f"Rendimiento  |  TTFT {ttft_text}  ·  TPS {tps_text}  ·  Lat {duration_text}"
+        eta_seconds = (float(avg_duration) * float(remaining_inferences)) if isinstance(avg_duration, (int, float)) else None
+        eta_text = _format_eta(eta_seconds)
+        metrics_line = (
+            f"Rendimiento  |  TTFT {ttft_text}  ·  TPS {tps_text}  ·  Lat {duration_text}  ·  ETA {eta_text}"
+        )
         iou_text = f"{avg_iou:.4f}" if isinstance(avg_iou, (int, float)) else "N/D"
         proximity_text = f"{avg_proximity:.4f}" if isinstance(avg_proximity, (int, float)) else "N/D"
         status_with_metrics = (

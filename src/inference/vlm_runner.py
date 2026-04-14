@@ -722,8 +722,9 @@ class VLMLoader:
             return image_path
 
         try:
+            resolved_image_path = self._resolve_existing_image_path(str(image_path)) or image_path
             max_pixels = 1_800_000
-            with Image.open(image_path) as image_obj:
+            with Image.open(resolved_image_path) as image_obj:
                 clean_image = image_obj.convert("RGB")
                 width, height = clean_image.size
                 current_pixels = width * height
@@ -739,7 +740,7 @@ class VLMLoader:
                 clean_image.save(buffer, format="PNG", optimize=True)
                 buffer.seek(0)
 
-                normalized_name = str(image_path).replace("\\", "/")
+                normalized_name = str(resolved_image_path).replace("\\", "/")
                 base_name, _ = os.path.splitext(normalized_name.rsplit("/", 1)[-1])
                 if not base_name:
                     base_name = "image"

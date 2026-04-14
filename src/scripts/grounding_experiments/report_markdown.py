@@ -49,6 +49,16 @@ def _normalize_polyp_class(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
+def _extract_predicted_class(payload: dict[str, Any], fallback: Any = "") -> str:
+    """Extract predicted class from canonical payload field without class normalization."""
+    value = payload.get("final_diagnosis_class")
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(fallback, str):
+        return fallback.strip()
+    return ""
+
+
 def build_markdown_records_from_scenario_jsonl(*, output_path: Path, run_dir: Path) -> list[dict[str, Any]]:
     """Build markdown report records from the full scenario JSONL history."""
     from .runner_core import compute_iou_safe, compute_proximity_safe, load_jsonl_records
@@ -85,11 +95,7 @@ def build_markdown_records_from_scenario_jsonl(*, output_path: Path, run_dir: Pa
                 annotated_path = str(annotated_candidate)
                 break
 
-        predicted_cls = _normalize_polyp_class(
-            payload.get("final_diagnosis_class")
-            or entry.get("predicted_cls")
-            or ""
-        )
+        predicted_cls = _extract_predicted_class(payload, entry.get("predicted_cls") or "")
         iou_value = entry.get("iou_score")
         if not isinstance(iou_value, (int, float)):
             pred_bbox = [

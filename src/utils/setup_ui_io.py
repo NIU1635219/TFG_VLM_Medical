@@ -7,6 +7,7 @@ acoplamiento y tamaño del módulo principal `setup_env.py`.
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -14,9 +15,34 @@ import os
 import sys
 from typing import Any, Callable
 
+try:
+    import select
+except Exception:  # pragma: no cover
+    select = None
+
+try:
+    import termios
+    import tty
+except Exception:  # pragma: no cover
+    termios = None
+    tty = None
+
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 DEFAULT_UI_WIDTH = 86
+
+
+def _get_posix_tty_api() -> tuple[Any, Any, Any, int] | None:
+    """Obtiene APIs POSIX de terminal de forma segura para entornos sin soporte."""
+    if termios is None or tty is None:
+        return None
+    tcgetattr = getattr(termios, "tcgetattr", None)
+    tcsetattr = getattr(termios, "tcsetattr", None)
+    setcbreak = getattr(tty, "setcbreak", None)
+    tcsadrain = int(getattr(termios, "TCSADRAIN", 1))
+    if not callable(tcgetattr) or not callable(tcsetattr) or not callable(setcbreak):
+        return None
+    return tcgetattr, tcsetattr, setcbreak, tcsadrain
 
 
 # ---------------------------------------------------------------------------
@@ -459,11 +485,15 @@ def clear_screen_ansi(*, os_module: Any, sys_module: Any) -> None:
         os_module (Any): Módulo `os` inyectado.
         sys_module (Any): Módulo `sys` inyectado.
     """
-    if os_module.name == "nt":
-        os_module.system("cls")
-    else:
+    try:
         sys_module.stdout.write("\033[H\033[2J")
         sys_module.stdout.flush()
+        return
+    except Exception:
+        pass
+
+    if os_module.name == "nt":
+        os_module.system("cls")
 
 
 def read_key(*, os_module: Any, msvcrt_module: Any) -> str | None:
@@ -507,6 +537,70 @@ def read_key(*, os_module: Any, msvcrt_module: Any) -> str | None:
             return "ESC"
         elif key == b"\x03":
             raise KeyboardInterrupt
+        return None
+
+    # POSIX path (Linux/macOS): non-blocking ANSI key parsing.
+    if (
+        os_module.name != "nt"
+        and select is not None
+        and _get_posix_tty_api() is not None
+        and hasattr(sys.stdin, "isatty")
+        and sys.stdin.isatty()
+    ):
+        tcgetattr, tcsetattr, setcbreak, tcsadrain = _get_posix_tty_api() or (None, None, None, 1)
+        if not callable(tcgetattr) or not callable(tcsetattr) or not callable(setcbreak):
+            return None
+        try:
+            fd = sys.stdin.fileno()
+            old_settings = tcgetattr(fd)
+        except Exception:
+            return None
+
+        try:
+            setcbreak(fd)
+            readable, _, _ = select.select([sys.stdin], [], [], 0)
+            if not readable:
+                return None
+
+            key = os.read(fd, 1)
+            if not key:
+                return None
+
+            if key == b"\x03":
+                raise KeyboardInterrupt
+            if key in (b"\r", b"\n"):
+                return "ENTER"
+            if key == b" ":
+                return "SPACE"
+            if key == b"\x1b":
+                seq = b""
+                for _ in range(2):
+                    more, _, _ = select.select([sys.stdin], [], [], 0)
+                    if not more:
+                        break
+                    seq += os.read(fd, 1)
+                if seq == b"[A":
+                    return "UP"
+                if seq == b"[B":
+                    return "DOWN"
+                if seq == b"[D":
+                    return "LEFT"
+                if seq == b"[C":
+                    return "RIGHT"
+                return "ESC"
+
+            try:
+                char = key.decode("utf-8", errors="ignore")
+            except Exception:
+                return None
+            if char:
+                return char.upper() if char == " " else None
+            return None
+        finally:
+            try:
+                tcsetattr(fd, tcsadrain, old_settings)
+            except Exception:
+                pass
     return None
 
 
@@ -988,6 +1082,62 @@ def input_with_esc(*, prompt: str, os_module: Any, msvcrt_module: Any) -> str | 
             buffer.append(char)
             print(char, end="", flush=True)
 
+    if (
+        os_module.name != "nt"
+        and _get_posix_tty_api() is not None
+        and hasattr(sys.stdin, "isatty")
+        and sys.stdin.isatty()
+    ):
+        print(prompt, end="", flush=True)
+        buffer: list[str] = []
+        tcgetattr, tcsetattr, setcbreak, tcsadrain = _get_posix_tty_api() or (None, None, None, 1)
+        if not callable(tcgetattr) or not callable(tcsetattr) or not callable(setcbreak):
+            value = input(prompt).strip()
+            if value.lower() == "esc":
+                return None
+            return value
+        try:
+            fd = sys.stdin.fileno()
+            old_settings = tcgetattr(fd)
+            setcbreak(fd)
+        except Exception:
+            value = input(prompt).strip()
+            if value.lower() == "esc":
+                return None
+            return value
+
+        try:
+            while True:
+                key = os.read(fd, 1)
+                if not key:
+                    continue
+                if key == b"\x1b":
+                    print()
+                    return None
+                if key in (b"\r", b"\n"):
+                    print()
+                    return "".join(buffer).strip()
+                if key in (b"\x08", b"\x7f"):
+                    if buffer:
+                        buffer.pop()
+                        print("\b \b", end="", flush=True)
+                    continue
+                if key == b"\x03":
+                    raise KeyboardInterrupt
+                try:
+                    char = key.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+                if not char.isprintable():
+                    continue
+                buffer.append(char)
+                print(char, end="", flush=True)
+        finally:
+            try:
+                tcsetattr(fd, tcsadrain, old_settings)
+            except Exception:
+                pass
+
     value = input(prompt).strip()
     if value.lower() == "esc":
         return None
@@ -1066,12 +1216,40 @@ def wait_for_any_key(
             print()
             return
 
+    if (
+        os_module.name != "nt"
+        and _get_posix_tty_api() is not None
+        and hasattr(sys.stdin, "isatty")
+        and sys.stdin.isatty()
+    ):
+        tcgetattr, tcsetattr, setcbreak, tcsadrain = _get_posix_tty_api() or (None, None, None, 1)
+        if not callable(tcgetattr) or not callable(tcsetattr) or not callable(setcbreak):
+            input()
+            return
+        fd = None
+        old_settings = None
+        try:
+            fd = sys.stdin.fileno()
+            old_settings = tcgetattr(fd)
+            setcbreak(fd)
+            _ = os.read(fd, 1)
+            print()
+            return
+        except Exception:
+            pass
+        finally:
+            try:
+                if old_settings is not None and fd is not None:
+                    tcsetattr(fd, tcsadrain, old_settings)
+            except Exception:
+                pass
+
     input()
 
 
 def run_cmd(
     *,
-    cmd: str,
+    cmd: str | list[str],
     critical: bool,
     style: Any,
     ask_user_fn: Callable[[str, str], bool],
@@ -1083,7 +1261,7 @@ def run_cmd(
     Permite reintentar si el comando es crítico.
     
     Args:
-        cmd (str): El comando de shell a ejecutar.
+        cmd (str | list[str]): Comando a ejecutar (texto o argv).
         critical (bool): Si es True, preguntará al usuario si quiere reintentar en caso de fallo.
         style (Any): Clase con definiciones de estilos ANSI.
         ask_user_fn (Callable): Función para solicitar confirmación al usuario.
@@ -1093,9 +1271,21 @@ def run_cmd(
         bool: True si el comando tuvo éxito, False si falló y no se recuperó.
     """
     print(f"{style.DIM}$ {cmd}{style.ENDC}")
+    if isinstance(cmd, str):
+        parsed_cmd = shlex.split(cmd, posix=(os.name != "nt"))
+    else:
+        parsed_cmd = list(cmd)
+
+    if not parsed_cmd:
+        log_fn("Empty command.", "error")
+        return False
+
     try:
-        subprocess.check_call(cmd, shell=True)
+        subprocess.check_call(parsed_cmd)
         return True
+    except FileNotFoundError:
+        log_fn(f"Command not found: {parsed_cmd[0]}", "error")
+        return False
     except subprocess.CalledProcessError:
         log_fn(f"Command failed: {cmd}", "error")
         if critical:

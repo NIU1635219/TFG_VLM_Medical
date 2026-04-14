@@ -159,6 +159,16 @@ def normalize_polyp_class(value: Any) -> str:
     return str(value or "").strip().upper()
 
 
+def extract_predicted_class(payload: dict[str, Any], fallback: Any = "") -> str:
+    """Return predicted class using final_diagnosis_class as canonical container."""
+    value = payload.get("final_diagnosis_class")
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(fallback, str):
+        return fallback.strip()
+    return ""
+
+
 def build_annotated_comparison_filename(*, image_id: Any, image_path: Path) -> str:
     """Backward-compatible wrapper for visual artifact naming helper."""
     return _build_annotated_comparison_filename(image_id=image_id, image_path=image_path)
@@ -769,6 +779,7 @@ __all__ = [
     "compute_classification_accuracy_from_records",
     "default_scenario_output_path",
     "emit_report_event",
+    "extract_predicted_class",
     "draw_bbox_and_save_temp_image",
     "crop_roi_and_save_temp_image",
     "generate_single_detection_markdown_report",

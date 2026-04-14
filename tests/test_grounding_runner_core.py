@@ -51,7 +51,7 @@ def test_markdown_records_keep_summary_and_visualization_aligned(tmp_path: Path)
         "image_path": image_path,
         "ground_truth_cls": "ad",
         "payload": {
-            "final_diagnosis_class": "ass",
+            "final_diagnosis_class": "ASS",
             "ymin": 100,
             "xmin": 110,
             "ymax": 220,
@@ -67,7 +67,7 @@ def test_markdown_records_keep_summary_and_visualization_aligned(tmp_path: Path)
         "image_path": image_path,
         "ground_truth_cls": "hp",
         "payload": {
-            "final_diagnosis_class": "ad",
+            "final_diagnosis_class": "AD",
             "ymin": 120,
             "xmin": 140,
             "ymax": 250,
@@ -123,7 +123,7 @@ def test_markdown_records_resolve_legacy_images_dir_for_visualization(tmp_path: 
         "image_path": image_path,
         "ground_truth_cls": "ad",
         "payload": {
-            "final_diagnosis_class": "ad",
+            "final_diagnosis_class": "AD",
             "ymin": 100,
             "xmin": 110,
             "ymax": 220,

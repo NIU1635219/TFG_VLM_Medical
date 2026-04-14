@@ -17,6 +17,16 @@ ComputeIouSafeFn = Callable[..., float | None]
 ComputeProximitySafeFn = Callable[..., dict[str, float] | None]
 
 
+def _extract_predicted_class(payload: dict[str, Any], fallback: Any = "") -> str:
+    """Extract predicted class from canonical payload field without class normalization."""
+    value = payload.get("final_diagnosis_class")
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(fallback, str):
+        return fallback.strip()
+    return ""
+
+
 def save_result(output_file: str, result_dict: dict[str, Any]) -> None:
     """Append one result entry to a JSONL file safely."""
     output_path = Path(output_file)
@@ -347,11 +357,7 @@ def summarize_scenario_records_from_jsonl(
             raw_result = entry.get("result")
             payload = raw_result if isinstance(raw_result, dict) else {}
 
-        predicted_cls = normalize_polyp_class(
-            payload.get("final_diagnosis_class")
-            or entry.get("predicted_cls")
-            or ""
-        )
+        predicted_cls = _extract_predicted_class(payload, entry.get("predicted_cls") or "")
         gt_cls = normalize_polyp_class(entry.get("ground_truth_cls") or "")
         class_match = entry.get("class_match")
         if isinstance(class_match, bool):

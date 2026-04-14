@@ -221,11 +221,7 @@ def interactive_menu(
         cursor_memory[menu_id] = safe_index
 
     print("\033[?25l", end="")
-
-    if os_module.name == "nt":
-        os_module.system("cls")
-    else:
-        sys_module.stdout.write("\033[H\033[2J")
+    clear_screen_fn()
 
     try:
         while True:

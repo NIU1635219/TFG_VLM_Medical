@@ -34,9 +34,19 @@ try:
 except ImportError:
     psutil = None
 
-# Habilitar secuencias ANSI en Windows (Simple & Robust)
-if os.name == 'nt':
-    os.system('') # Activa VT100 en Windows 10/11 sin deps extra
+# Habilitar secuencias ANSI en Windows cuando stdout es TTY.
+if os.name == "nt" and hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            kernel32.SetConsoleMode(handle, mode.value | 0x0004)
+    except Exception:
+        # Si no se puede activar VT, seguimos con salida estándar sin abortar.
+        pass
 
 # --- Visual Styles ---
 # Style ahora vive en src.utils.setup_ui_io — re-exportada aquí
@@ -101,9 +111,12 @@ def get_sys_info(refresh=False):
 
     # GPU via nvidia-smi
     try:
-        res = subprocess.check_output("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader", shell=True)
-        info["gpu"] = res.decode("utf-8").strip()
-    except:
+        res = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
+            stderr=subprocess.DEVNULL,
+        )
+        info["gpu"] = res.decode("utf-8", errors="ignore").strip()
+    except (FileNotFoundError, subprocess.CalledProcessError):
         info["gpu"] = "Not Detected (CPU Mode)"
 
     _SYS_INFO_CACHE = dict(info)

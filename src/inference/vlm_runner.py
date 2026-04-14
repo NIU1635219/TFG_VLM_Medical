@@ -739,11 +739,27 @@ class VLMLoader:
                 clean_image.save(buffer, format="PNG", optimize=True)
                 buffer.seek(0)
 
-                base_name, _ = os.path.splitext(os.path.basename(image_path))
+                normalized_name = str(image_path).replace("\\", "/")
+                base_name, _ = os.path.splitext(normalized_name.rsplit("/", 1)[-1])
+                if not base_name:
+                    base_name = "image"
                 buffer.name = f"{base_name}.png"
                 return buffer
         except Exception:
             return image_path
+
+    def _resolve_existing_image_path(self, raw_path: str) -> str | None:
+        """Resuelve rutas locales tolerando separadores de Windows/Linux cruzados."""
+        candidate_paths: list[str] = [raw_path]
+        if "\\" in raw_path:
+            candidate_paths.append(raw_path.replace("\\", "/"))
+        if "/" in raw_path:
+            candidate_paths.append(raw_path.replace("/", "\\"))
+
+        for candidate in dict.fromkeys(candidate_paths):
+            if os.path.isfile(candidate):
+                return candidate
+        return None
 
     def _build_multimodal_history(
         self,
@@ -1204,9 +1220,10 @@ class VLMLoader:
             image_path_str = str(raw_path).strip()
             if not image_path_str:
                 raise ValueError("image_path no puede estar vacío")
-            if not os.path.isfile(image_path_str):
+            resolved_image_path = self._resolve_existing_image_path(image_path_str)
+            if resolved_image_path is None:
                 raise FileNotFoundError(f"Imagen no encontrada en: {image_path_str}")
-            image_paths.append(image_path_str)
+            image_paths.append(resolved_image_path)
 
         # Carga el modelo si aún no está en memoria
         self.load_model()

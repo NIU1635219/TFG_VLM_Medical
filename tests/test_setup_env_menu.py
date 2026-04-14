@@ -1,4 +1,5 @@
 import builtins
+from types import SimpleNamespace
 
 import setup_env
 from src.utils import setup_ui_io, setup_menu_engine
@@ -76,6 +77,126 @@ def test_wait_for_any_key_fallback_non_windows(monkeypatch):
         msvcrt_module=None,
     )
     assert called["input"] is True
+
+
+def test_read_key_posix_parses_ansi_arrow_up(monkeypatch):
+    """Verifica que read_key decodifique secuencias ANSI de flechas en POSIX."""
+
+    class FakeStdin:
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 0
+
+    class FakeSelect:
+        def __init__(self):
+            self.calls = 0
+
+        def select(self, *_args, **_kwargs):
+            self.calls += 1
+            return ([FakeStdin()], [], [])
+
+    fake_select = FakeSelect()
+    byte_stream = iter([b"\x1b", b"[", b"A"])
+
+    monkeypatch.setattr(setup_ui_io.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(setup_ui_io, "select", fake_select)
+    monkeypatch.setattr(
+        setup_ui_io,
+        "termios",
+        SimpleNamespace(tcgetattr=lambda _fd: [1], tcsetattr=lambda *_a, **_k: None, TCSADRAIN=0),
+    )
+    monkeypatch.setattr(setup_ui_io, "tty", SimpleNamespace(setcbreak=lambda _fd: None))
+    monkeypatch.setattr(setup_ui_io.os, "read", lambda _fd, _size: next(byte_stream))
+
+    key = setup_ui_io.read_key(
+        os_module=SimpleNamespace(name="posix"),
+        msvcrt_module=None,
+    )
+
+    assert key == "UP"
+
+
+def test_input_with_esc_posix_cancels_on_escape(monkeypatch):
+    """Asegura que input_with_esc cancele con ESC también en POSIX."""
+
+    class FakeStdin:
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 0
+
+    bytes_stream = iter([b"a", b"\x1b"])
+    called = {"input": False}
+
+    monkeypatch.setattr(setup_ui_io.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(
+        setup_ui_io,
+        "termios",
+        SimpleNamespace(tcgetattr=lambda _fd: [1], tcsetattr=lambda *_a, **_k: None, TCSADRAIN=0),
+    )
+    monkeypatch.setattr(setup_ui_io, "tty", SimpleNamespace(setcbreak=lambda _fd: None))
+    monkeypatch.setattr(setup_ui_io.os, "read", lambda _fd, _size: next(bytes_stream))
+
+    def _fake_input(*_a, **_k):
+        called["input"] = True
+        return ""
+
+    monkeypatch.setattr(builtins, "input", _fake_input)
+
+    result = setup_ui_io.input_with_esc(
+        prompt="Prompt: ",
+        os_module=SimpleNamespace(name="posix"),
+        msvcrt_module=None,
+    )
+
+    assert result is None
+    assert called["input"] is False
+
+
+def test_wait_for_any_key_posix_reads_single_key_without_enter(monkeypatch):
+    """Comprueba espera reactiva POSIX por una tecla sin usar input()."""
+
+    class FakeStdin:
+        def isatty(self):
+            return True
+
+        def fileno(self):
+            return 0
+
+    called = {"input": False, "read": 0}
+
+    monkeypatch.setattr(setup_ui_io.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(
+        setup_ui_io,
+        "termios",
+        SimpleNamespace(tcgetattr=lambda _fd: [1], tcsetattr=lambda *_a, **_k: None, TCSADRAIN=0),
+    )
+    monkeypatch.setattr(setup_ui_io, "tty", SimpleNamespace(setcbreak=lambda _fd: None))
+
+    def _fake_read(_fd, _size):
+        called["read"] += 1
+        return b"x"
+
+    monkeypatch.setattr(setup_ui_io.os, "read", _fake_read)
+
+    def _fake_input(*_a, **_k):
+        called["input"] = True
+        return ""
+
+    monkeypatch.setattr(builtins, "input", _fake_input)
+
+    setup_ui_io.wait_for_any_key(
+        message="Press any key...",
+        style=setup_env.Style,
+        os_module=SimpleNamespace(name="posix"),
+        msvcrt_module=None,
+    )
+
+    assert called["read"] == 1
+    assert called["input"] is False
 
 
 def test_factory_reset_confirmation_defaults_to_no(monkeypatch):

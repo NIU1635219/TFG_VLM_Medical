@@ -145,14 +145,13 @@ def detect_gpu_memory_bytes() -> int:
     """
     try:
         raw = subprocess.check_output(
-            "nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits",
-            shell=True,
+            ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
             stderr=subprocess.DEVNULL,
         ).decode("utf-8", errors="ignore")
         first_line = next((line.strip() for line in raw.splitlines() if line.strip()), "")
         mib = float(first_line)
         return int(mib * 1024 * 1024)
-    except Exception:
+    except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
         return 0
 
 

@@ -327,6 +327,9 @@ Opciones útiles:
 
 ## Instalación y arranque
 
+Guía corta para tutor en Linux/HPC (clonado + setup + batch runner):
+- Ver `docs/INSTRUCCIONES_TUTOR.md`.
+
 ### Opción A: flujo recomendado (manager interactivo)
 
 Windows:

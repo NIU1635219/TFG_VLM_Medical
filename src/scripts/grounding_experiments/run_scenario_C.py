@@ -30,6 +30,7 @@ from .runner_core import (
     compute_proximity_safe,
     default_scenario_output_path,
     draw_bbox_and_save_temp_image,
+    extract_predicted_class,
     emit_report_event,
     generate_single_detection_markdown_report,
     initialize_scenario_result_skeleton,
@@ -510,10 +511,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                         pass
 
             parsed_payload = dict(parsed_response.model_dump())
-            predicted_cls = normalize_polyp_class(
-                parsed_payload.get("final_diagnosis_class")
-                or ""
-            )
+            predicted_cls = extract_predicted_class(parsed_payload)
             parsed_payload["final_diagnosis_class"] = predicted_cls
             pred_bbox = [
                 parsed_payload.get("ymin"),

@@ -322,3 +322,35 @@ def test_prepare_image_source_for_lms_preserves_high_resolution_until_1_8mp(tmp_
     assert width * height <= 1_800_000
     assert width > height
     assert width > 2000
+
+
+@pytest.mark.skipif(PILImage is None, reason="Pillow no está disponible")
+def test_prepare_image_source_for_lms_handles_windows_style_name_on_posix(tmp_path):
+    """Genera nombre PNG correcto aunque la ruta entrante tenga separadores Windows."""
+    image_path = tmp_path / "sample_input.jpg"
+    source_image = PILImage.new("RGB", (64, 64), color="white")
+    source_image.save(image_path)
+
+    loader = VLMLoader(model_path=FAKE_MODEL_TAG)
+    prepared = loader._prepare_image_source_for_lms(str(image_path).replace("/", "\\"))
+
+    assert getattr(prepared, "name", "").endswith("sample_input.png")
+
+
+def test_inference_accepts_mixed_separator_path(monkeypatch, loader, mock_lms_sdk):
+    """Acepta rutas con separador cruzado si existe la variante normalizada."""
+    _mock_lms, mock_model = mock_lms_sdk
+    mock_model.respond.return_value = '{"object_detected": "cat", "confidence_score": 91, "justification": "ok"}'
+
+    requested: list[str] = []
+
+    def _fake_isfile(path: str) -> bool:
+        requested.append(str(path))
+        return str(path) == "data/raw/fake_image.jpg"
+
+    monkeypatch.setattr("src.inference.vlm_runner.os.path.isfile", _fake_isfile)
+
+    result = loader.inference("data\\raw\\fake_image.jpg", "Prompt de prueba")
+
+    assert isinstance(result, GenericObjectDetection)
+    assert "data/raw/fake_image.jpg" in requested

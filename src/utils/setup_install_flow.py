@@ -25,13 +25,12 @@ def detect_gpu() -> bool:
     """
     try:
         subprocess.check_call(
-            "nvidia-smi",
-            shell=True,
+            ["nvidia-smi"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         return True
-    except Exception:
+    except (FileNotFoundError, subprocess.CalledProcessError):
         return False
 
 
@@ -43,13 +42,12 @@ def check_uv() -> bool:
     """
     try:
         subprocess.check_call(
-            "uv --version",
-            shell=True,
+            ["uv", "--version"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         return True
-    except Exception:
+    except (FileNotFoundError, subprocess.CalledProcessError):
         return False
 
 

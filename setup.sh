@@ -8,6 +8,9 @@ then
     exit 1
 fi
 
+# Make user-local CLIs visible in non-interactive shells (WSL/Linux).
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.cache/lm-studio/bin:$PATH"
+
 echo "[SETUP] Launching automation script..."
 if ! python3 setup_env.py; then
     echo "[ERROR] Setup failed. Review errors above."

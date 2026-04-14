@@ -78,10 +78,30 @@ def _get_module_version_in_project_env(import_name: str) -> str:
 
 def _is_lmstudio_server_reachable() -> bool:
     """Detecta si el servidor LM Studio responde en el puerto local por defecto."""
-    urls = (
+    urls = [
         "http://127.0.0.1:1234/v1/models",
         "http://localhost:1234/v1/models",
-    )
+    ]
+
+    configured_host = (os.environ.get("LMSTUDIO_HOST", "") or "").strip()
+    if configured_host:
+        if configured_host.startswith(("http://", "https://")):
+            urls.insert(0, configured_host.rstrip("/") + "/v1/models")
+        else:
+            urls.insert(0, f"http://{configured_host}/v1/models")
+
+    # En WSL, LM Studio puede vivir en Windows host en vez de localhost Linux.
+    try:
+        with open("/etc/resolv.conf", "r", encoding="utf-8", errors="ignore") as resolv:
+            for line in resolv:
+                line = line.strip()
+                if line.startswith("nameserver "):
+                    host_ip = line.split(maxsplit=1)[1].strip()
+                    if host_ip:
+                        urls.append(f"http://{host_ip}:1234/v1/models")
+                    break
+    except Exception:
+        pass
 
     for url in urls:
         try:

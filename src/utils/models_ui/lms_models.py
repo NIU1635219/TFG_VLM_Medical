@@ -7,6 +7,8 @@ import os
 import re
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from typing import Any, Callable
 
 try:
@@ -70,18 +72,109 @@ def _extract_quantization(name: str, fallback: str | None = None) -> str | None:
 
 def _resolve_lms_executable() -> str | None:
     """Resuelve la ruta del ejecutable `lms` incluso fuera de PATH."""
+    user_home = os.path.expanduser("~")
+    path_dirs = os.environ.get("PATH", "").split(os.pathsep) if os.environ.get("PATH") else []
+
+    if os.name == "nt":
+        name_candidates = ("lms", "lms.exe", "lms.cmd")
+    else:
+        # En Linux/WSL podemos encontrar binarios Windows en PATH; los validamos por ejecución real.
+        name_candidates = ("lms", "lms.exe", "lms.cmd")
+
     candidates = [
         shutil.which("lms"),
+        shutil.which("lms.exe") if os.name == "nt" else None,
+        shutil.which("lms.cmd") if os.name == "nt" else None,
         os.path.expanduser("~/.local/bin/lms"),
         os.path.expanduser("~/.cargo/bin/lms"),
+        os.path.expanduser("~/.cache/lm-studio/bin/lms"),
+        os.path.expanduser("~/.cache/lm-studio/bin/lms.exe") if os.name == "nt" else None,
+        os.path.expanduser("~/.cache/lm-studio/bin/lms.cmd") if os.name == "nt" else None,
+        f"{user_home}/.cache/lm-studio/bin/lms",
+        f"{user_home}/.cache/lm-studio/bin/lms.exe" if os.name == "nt" else None,
+        f"{user_home}/.cache/lm-studio/bin/lms.cmd" if os.name == "nt" else None,
     ]
+
+    for directory in path_dirs:
+        if not directory:
+            continue
+        for name in name_candidates:
+            candidates.append(os.path.join(directory, name))
+
+    def _is_candidate_runnable(path: str) -> bool:
+        if not os.path.exists(path):
+            return False
+
+        if os.name == "nt":
+            return bool(os.access(path, os.X_OK) or path.lower().endswith((".exe", ".cmd")))
+
+        is_windows_ext = path.lower().endswith((".exe", ".cmd", ".bat"))
+
+        # En WSL, .exe/.cmd pueden parecer ejecutables por permisos; validamos ejecución real.
+        if is_windows_ext:
+            try:
+                probe = subprocess.run(
+                    [path, "version"],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    timeout=3,
+                )
+                return probe.returncode == 0
+            except Exception:
+                return False
+
+        if os.access(path, os.X_OK):
+            return True
+        return False
 
     for candidate in candidates:
         if not candidate:
             continue
-        if os.path.exists(candidate):
+        if _is_candidate_runnable(candidate):
             return candidate
     return None
+
+
+def _is_server_reachable_via_http() -> bool:
+    """Comprueba si el servidor LM Studio responde por HTTP en localhost:1234."""
+    urls = [
+        "http://127.0.0.1:1234/v1/models",
+        "http://localhost:1234/v1/models",
+    ]
+
+    configured_host = (os.environ.get("LMSTUDIO_HOST", "") or "").strip()
+    if configured_host:
+        if configured_host.startswith(("http://", "https://")):
+            urls.insert(0, configured_host.rstrip("/") + "/v1/models")
+        else:
+            urls.insert(0, f"http://{configured_host}/v1/models")
+
+    # En WSL, LM Studio puede correr en Windows host y no en localhost Linux.
+    try:
+        with open("/etc/resolv.conf", "r", encoding="utf-8", errors="ignore") as resolv:
+            for line in resolv:
+                line = line.strip()
+                if line.startswith("nameserver "):
+                    host_ip = line.split(maxsplit=1)[1].strip()
+                    if host_ip:
+                        urls.append(f"http://{host_ip}:1234/v1/models")
+                    break
+    except Exception:
+        pass
+
+    for url in urls:
+        try:
+            with urllib.request.urlopen(url, timeout=1.5) as response:
+                status_code = int(getattr(response, "status", 200))
+                if status_code < 500:
+                    return True
+        except urllib.error.HTTPError as error:
+            if int(getattr(error, "code", 500)) < 500:
+                return True
+        except Exception:
+            continue
+    return False
 
 def _run_lms_command(args: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
     """
@@ -184,6 +277,8 @@ def get_server_status() -> tuple[bool, str]:
         tuple[bool, str]: (Está corriendo?, Detalle/Mensaje de salida).
     """
     if not check_lms():
+        if _is_server_reachable_via_http():
+            return True, "LM Studio server reachable via HTTP (CLI not found)"
         return False, "lms CLI not found"
 
     try:

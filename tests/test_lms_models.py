@@ -55,9 +55,19 @@ def test_get_server_status_not_running(mock_run, mock_check_lms):
 @patch('src.utils.models_ui.lms_models.check_lms')
 def test_get_server_status_no_lms(mock_check_lms):
     mock_check_lms.return_value = False
-    is_running, output = get_server_status()
+    with patch('src.utils.models_ui.lms_models._is_server_reachable_via_http', return_value=False):
+        is_running, output = get_server_status()
     assert is_running is False
     assert "lms CLI not found" in output
+
+
+@patch('src.utils.models_ui.lms_models.check_lms')
+def test_get_server_status_http_fallback_when_no_cli(mock_check_lms):
+    mock_check_lms.return_value = False
+    with patch('src.utils.models_ui.lms_models._is_server_reachable_via_http', return_value=True):
+        is_running, output = get_server_status()
+    assert is_running is True
+    assert "reachable" in output.lower()
 
 
 # ---------------------------------------------------------------------------

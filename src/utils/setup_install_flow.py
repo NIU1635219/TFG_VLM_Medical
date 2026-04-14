@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -40,6 +41,34 @@ def check_uv() -> bool:
     Returns:
         bool: ``True`` si ``uv --version`` se ejecuta correctamente.
     """
+    _prepend_uv_dirs_to_path()
+
+    uv_candidates = [
+        shutil.which("uv"),
+        os.path.expanduser("~/.local/bin/uv"),
+        os.path.expanduser("~/.cargo/bin/uv"),
+    ]
+
+    for candidate in uv_candidates:
+        if not candidate:
+            continue
+        if not os.path.isabs(candidate):
+            resolved = shutil.which(candidate)
+            if not resolved:
+                continue
+            candidate = resolved
+        if not os.path.exists(candidate):
+            continue
+        try:
+            subprocess.check_call(
+                [candidate, "--version"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            continue
+
     try:
         subprocess.check_call(
             ["uv", "--version"],

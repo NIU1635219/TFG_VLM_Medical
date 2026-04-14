@@ -68,6 +68,21 @@ def _extract_quantization(name: str, fallback: str | None = None) -> str | None:
 # CLI (`lms`) fallback helpers
 # ==========================================================
 
+def _resolve_lms_executable() -> str | None:
+    """Resuelve la ruta del ejecutable `lms` incluso fuera de PATH."""
+    candidates = [
+        shutil.which("lms"),
+        os.path.expanduser("~/.local/bin/lms"),
+        os.path.expanduser("~/.cargo/bin/lms"),
+    ]
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
 def _run_lms_command(args: list[str], check: bool = False) -> subprocess.CompletedProcess[str]:
     """
     Ejecuta un comando del CLI `lms`.
@@ -79,8 +94,17 @@ def _run_lms_command(args: list[str], check: bool = False) -> subprocess.Complet
     Returns:
         subprocess.CompletedProcess: Resultado de la ejecución con stdout/stderr capturados.
     """
+    if not args:
+        raise ValueError("args cannot be empty")
+
+    resolved_args = list(args)
+    if resolved_args[0] == "lms":
+        executable = _resolve_lms_executable()
+        if executable:
+            resolved_args[0] = executable
+
     return subprocess.run(
-        args,
+        resolved_args,
         text=True,
         capture_output=True,
         check=check,

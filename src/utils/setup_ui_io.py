@@ -604,7 +604,13 @@ def read_key(*, os_module: Any, msvcrt_module: Any) -> str | None:
                     more, _, _ = select.select([sys.stdin], [], [], 0.01)
                     if not more:
                         break
-                    seq += os.read(fd, 1)
+                    try:
+                        next_chunk = os.read(fd, 1)
+                    except Exception:
+                        break
+                    if not next_chunk:
+                        break
+                    seq += next_chunk
                 if seq == b"[A":
                     return "UP"
                 if seq == b"[B":

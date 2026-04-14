@@ -18,8 +18,11 @@ uv --version
 
 Requisitos minimos:
 - Python 3.12+
-- `uv` instalado en PATH
+- `curl` o `wget` disponibles para auto-instalar `uv` durante `setup.sh`
 - LM Studio y CLI `lms` disponibles si se va a ejecutar inferencia real
+
+Nota: si `uv` no está instalado, `setup.sh` intentará instalarlo automáticamente
+con el instalador oficial (sin usar `pip install uv`).
 
 ## 3) Inicializar entorno
 

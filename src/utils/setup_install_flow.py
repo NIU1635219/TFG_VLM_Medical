@@ -51,6 +51,63 @@ def check_uv() -> bool:
         return False
 
 
+def _prepend_uv_dirs_to_path() -> None:
+    """Añade rutas comunes de instalación de uv al PATH del proceso actual."""
+    candidates = [
+        os.path.expanduser("~/.local/bin"),
+        os.path.expanduser("~/.cargo/bin"),
+    ]
+    current_path = os.environ.get("PATH", "")
+    current_parts = current_path.split(os.pathsep) if current_path else []
+
+    updated = False
+    for candidate in candidates:
+        if os.path.isdir(candidate) and candidate not in current_parts:
+            current_parts.insert(0, candidate)
+            updated = True
+
+    if updated:
+        os.environ["PATH"] = os.pathsep.join(current_parts)
+
+
+def ensure_uv_available(kit: "UIKit") -> bool:
+    """Garantiza disponibilidad de `uv` con estrategia específica por plataforma."""
+    _prepend_uv_dirs_to_path()
+    if check_uv():
+        return True
+
+    if os.name != "nt":
+        kit.log("uv not found. Installing via official installer...", "step")
+        linux_install_cmds = [
+            "curl -LsSf https://astral.sh/uv/install.sh | sh",
+            "wget -qO- https://astral.sh/uv/install.sh | sh",
+        ]
+
+        for cmd in linux_install_cmds:
+            if kit.run_cmd(cmd):
+                _prepend_uv_dirs_to_path()
+                if check_uv():
+                    return True
+
+        kit.log("Official installer not available. Trying pip user fallback...", "warning")
+        if kit.run_cmd("python3 -m pip install --user --break-system-packages uv"):
+            _prepend_uv_dirs_to_path()
+            if check_uv():
+                return True
+        return False
+
+    kit.log("uv not found. Attempting to install via pip...", "step")
+    win_install_cmds = [
+        "py -m pip install uv",
+        "python -m pip install uv",
+        "pip install uv",
+    ]
+    for cmd in win_install_cmds:
+        if kit.run_cmd(cmd) and check_uv():
+            return True
+    return False
+
+
 def create_project_structure(verbose: bool = True, *, log_fn=None) -> None:
     """Crea la estructura de carpetas necesaria para el proyecto.
 
@@ -125,11 +182,9 @@ def perform_install(kit: "UIKit", app: "AppContext", *, full_reinstall: bool = F
 
     create_project_structure(verbose=False)
 
-    if not check_uv():
-        kit.log("uv not found. Attempting to install via pip...", "step")
-        if not kit.run_cmd("pip install uv"):
-            kit.log("Could not install uv. Please install it manually.", "error")
-            return
+    if not ensure_uv_available(kit):
+        kit.log("Could not install uv automatically. Please install it manually.", "error")
+        return
 
     use_gpu = detect_gpu()
     if not use_gpu:

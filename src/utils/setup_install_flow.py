@@ -141,6 +141,13 @@ def create_project_structure(verbose: bool = True, *, log_fn=None) -> None:
         _log("All directories verified.", "success")
 
 
+def _expected_venv_python_path(venv_dir: str = ".venv") -> str:
+    """Devuelve la ruta esperada del intérprete dentro del virtualenv actual."""
+    if os.name == "nt":
+        return os.path.join(venv_dir, "Scripts", "python.exe")
+    return os.path.join(venv_dir, "bin", "python")
+
+
 # ---------------------------------------------------------------------------
 # Flujo de instalación
 # ---------------------------------------------------------------------------
@@ -193,7 +200,23 @@ def perform_install(kit: "UIKit", app: "AppContext", *, full_reinstall: bool = F
         kit.log("NVIDIA GPU detected. Using High Performance configuration.", "success")
 
     kit.log("Configuring Virtual Environment...", "step")
-    if not os.path.exists(".venv"):
+    expected_venv_python = _expected_venv_python_path(".venv")
+
+    if os.path.isdir(".venv") and not os.path.exists(expected_venv_python):
+        kit.log(
+            "Existing .venv is incompatible with this OS. Recreating environment...",
+            "warning",
+        )
+        try:
+            import shutil as _shutil
+
+            _shutil.rmtree(".venv")
+        except Exception as error:
+            kit.log(f"Failed to remove incompatible .venv: {error}", "error")
+            kit.log("Please delete .venv manually and rerun setup.", "warning")
+            return
+
+    if not os.path.exists(expected_venv_python):
         kit.run_cmd("uv venv .venv --python 3.12")
     else:
         kit.log(".venv exists.", "info")

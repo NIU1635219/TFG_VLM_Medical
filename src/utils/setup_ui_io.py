@@ -547,17 +547,42 @@ def read_key(*, os_module: Any, msvcrt_module: Any) -> str | None:
         and hasattr(sys.stdin, "isatty")
         and sys.stdin.isatty()
     ):
-        tcgetattr, tcsetattr, setcbreak, tcsadrain = _get_posix_tty_api() or (None, None, None, 1)
-        if not callable(tcgetattr) or not callable(tcsetattr) or not callable(setcbreak):
+        tcgetattr, tcsetattr, _setcbreak, tcsadrain = _get_posix_tty_api() or (None, None, None, 1)
+        if not callable(tcgetattr) or not callable(tcsetattr):
             return None
         try:
             fd = sys.stdin.fileno()
-            old_settings = tcgetattr(fd)
+            old_settings_raw = tcgetattr(fd)
         except Exception:
             return None
 
+        if not isinstance(old_settings_raw, (list, tuple)):
+            return None
+
+        old_settings = list(old_settings_raw)
+
         try:
-            setcbreak(fd)
+            # Modo raw no-canonical + sin echo para evitar que flechas se impriman como ^[[A.
+            new_settings = list(old_settings)
+            if len(new_settings) >= 4:
+                lflag = int(new_settings[3])
+                if termios is not None:
+                    lflag &= ~int(getattr(termios, "ICANON", 0))
+                    lflag &= ~int(getattr(termios, "ECHO", 0))
+                    lflag &= ~int(getattr(termios, "IEXTEN", 0))
+                    lflag &= ~int(getattr(termios, "ISIG", 0))
+                new_settings[3] = lflag
+            if len(new_settings) >= 7:
+                cc = list(new_settings[6])
+                if termios is not None:
+                    vmin_idx = int(getattr(termios, "VMIN", 6))
+                    vtime_idx = int(getattr(termios, "VTIME", 5))
+                    if 0 <= vmin_idx < len(cc):
+                        cc[vmin_idx] = 0
+                    if 0 <= vtime_idx < len(cc):
+                        cc[vtime_idx] = 0
+                new_settings[6] = cc
+            tcsetattr(fd, tcsadrain, new_settings)
             readable, _, _ = select.select([sys.stdin], [], [], 0)
             if not readable:
                 return None
@@ -574,8 +599,9 @@ def read_key(*, os_module: Any, msvcrt_module: Any) -> str | None:
                 return "SPACE"
             if key == b"\x1b":
                 seq = b""
-                for _ in range(2):
-                    more, _, _ = select.select([sys.stdin], [], [], 0)
+                # Pequeña ventana para completar la secuencia ANSI de flechas.
+                for _ in range(3):
+                    more, _, _ = select.select([sys.stdin], [], [], 0.01)
                     if not more:
                         break
                     seq += os.read(fd, 1)
@@ -586,6 +612,14 @@ def read_key(*, os_module: Any, msvcrt_module: Any) -> str | None:
                 if seq == b"[D":
                     return "LEFT"
                 if seq == b"[C":
+                    return "RIGHT"
+                if seq == b"OA":
+                    return "UP"
+                if seq == b"OB":
+                    return "DOWN"
+                if seq == b"OD":
+                    return "LEFT"
+                if seq == b"OC":
                     return "RIGHT"
                 return "ESC"
 

@@ -4,13 +4,97 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
+import sys
 import time
+import urllib.error
+import urllib.request
 from typing import TYPE_CHECKING
 
 from .setup_install_flow import check_uv  # sin circular: setup_install_flow no importa setup_diagnostics a nivel de módulo
 
 if TYPE_CHECKING:
     from .menu_kit import AppContext, UIKit
+
+
+def _get_project_python_executable() -> str:
+    """Resuelve el intérprete Python del entorno del proyecto si existe."""
+    if os.name == "nt":
+        candidate = os.path.join(".venv", "Scripts", "python.exe")
+    else:
+        candidate = os.path.join(".venv", "bin", "python")
+
+    if os.path.exists(candidate):
+        return candidate
+    return sys.executable
+
+
+def _can_import_package_in_project_env(import_name: str) -> bool:
+    """Comprueba importabilidad de un módulo usando el Python del proyecto."""
+    if not import_name:
+        return False
+
+    python_exe = _get_project_python_executable()
+    code = (
+        "import importlib, sys; "
+        "importlib.import_module(sys.argv[1]); "
+        "print('ok')"
+    )
+    try:
+        result = subprocess.run(
+            [python_exe, "-c", code, import_name],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except Exception:
+        return False
+
+    return result.returncode == 0
+
+
+def _get_module_version_in_project_env(import_name: str) -> str:
+    """Obtiene la versión de un módulo usando el Python del proyecto."""
+    python_exe = _get_project_python_executable()
+    code = (
+        "import importlib, sys; "
+        "m=importlib.import_module(sys.argv[1]); "
+        "print(getattr(m, '__version__', 'Unknown'))"
+    )
+    try:
+        result = subprocess.run(
+            [python_exe, "-c", code, import_name],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except Exception:
+        return "Unknown"
+
+    if result.returncode != 0:
+        return "Unknown"
+    return (result.stdout or "Unknown").strip() or "Unknown"
+
+
+def _is_lmstudio_server_reachable() -> bool:
+    """Detecta si el servidor LM Studio responde en el puerto local por defecto."""
+    urls = (
+        "http://127.0.0.1:1234/v1/models",
+        "http://localhost:1234/v1/models",
+    )
+
+    for url in urls:
+        try:
+            with urllib.request.urlopen(url, timeout=1.5) as response:
+                status_code = int(getattr(response, "status", 200))
+                if status_code < 500:
+                    return True
+        except urllib.error.HTTPError as error:
+            if int(getattr(error, "code", 500)) < 500:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _render_diagnostics_report_table(kit: "UIKit", report: list[tuple[str, str, str]], *, width: int) -> None:
@@ -109,23 +193,35 @@ def perform_diagnostics(kit: "UIKit", app: "AppContext"):
 
     for pkg_name in REQUIRED_LIBS:
         import_name = LIB_IMPORT_MAP.get(pkg_name, pkg_name)
-        try:
-            mod = __import__(import_name)
-            version = getattr(mod, "__version__", "Unknown")
+        if _can_import_package_in_project_env(import_name):
+            version = _get_module_version_in_project_env(import_name)
             report.append((f"Lib: {pkg_name}", version, "OK"))
-        except ImportError:
+        else:
             report.append((f"Lib: {pkg_name}", "MISSING", "FAIL"))
             fix_lambda = lambda p=[pkg_name]: fix_libs(p)
             issues.append(DiagnosticIssue(f"Missing {pkg_name}", fix_lambda, f"Install {pkg_name}"))
-        except Exception:
-            report.append((f"Lib: {pkg_name}", "ERROR", "FAIL"))
-            fix_lambda = lambda p=[pkg_name]: fix_libs(p)
-            issues.append(DiagnosticIssue(f"Error {pkg_name}", fix_lambda, f"Reinstall {pkg_name}"))
 
-    if check_lms():
-        report.append(("Tool: lms", "Installed", "OK"))
+    lms_cli_ok = bool(check_lms())
+    lms_server_ok = _is_lmstudio_server_reachable()
+
+    if lms_cli_ok:
+        report.append(("Tool: lms CLI", "Installed", "OK"))
     else:
-        report.append(("Tool: lms", "NOT DETECTED", "FAIL"))
+        report.append(("Tool: lms CLI", "NOT DETECTED", "WARN"))
+
+    if lms_server_ok:
+        report.append(("LM Studio Server", "Reachable (localhost:1234)", "OK"))
+    else:
+        report.append(("LM Studio Server", "NOT REACHABLE", "FAIL"))
+        issues.append(
+            DiagnosticIssue(
+                "LM Studio server not reachable",
+                lambda: kit.log("Open LM Studio and ensure local server is running on port 1234", "warning"),
+                "Check LM Studio Server",
+            )
+        )
+
+    if not lms_cli_ok and not lms_server_ok:
         issues.append(
             DiagnosticIssue(
                 "LM Studio CLI not found",
@@ -133,15 +229,6 @@ def perform_diagnostics(kit: "UIKit", app: "AppContext"):
                 "Install LM Studio CLI",
             )
         )
-
-    try:
-        import lmstudio
-
-        _ = lmstudio
-        report.append(("Lib: lmstudio", "Installed", "OK"))
-    except ImportError:
-        report.append(("Lib: lmstudio", "MISSING", "FAIL"))
-        issues.append(DiagnosticIssue("Missing lmstudio lib", lambda: fix_libs("lmstudio"), "Install lmstudio lib"))
 
     free_gb = shutil.disk_usage(".").free / (1024**3)
     if free_gb < 10:

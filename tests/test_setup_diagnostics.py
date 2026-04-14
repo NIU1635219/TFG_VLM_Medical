@@ -33,12 +33,14 @@ def test_perform_diagnostics():
 
     with patch("src.utils.setup_diagnostics.check_uv", return_value=True):
         with patch("src.utils.setup_diagnostics.os.path.exists", return_value=True):
-            with patch("builtins.__import__", return_value=MagicMock()):
-                with patch(
-                    "src.utils.setup_diagnostics.shutil.disk_usage",
-                    return_value=MagicMock(free=100 * 1024 ** 3),
-                ):
-                    report, issues = perform_diagnostics(kit, app)
+            with patch("src.utils.setup_diagnostics._can_import_package_in_project_env", return_value=True):
+                with patch("src.utils.setup_diagnostics._get_module_version_in_project_env", return_value="1.0.0"):
+                    with patch("src.utils.setup_diagnostics._is_lmstudio_server_reachable", return_value=True):
+                        with patch(
+                            "src.utils.setup_diagnostics.shutil.disk_usage",
+                            return_value=MagicMock(free=100 * 1024 ** 3),
+                        ):
+                            report, issues = perform_diagnostics(kit, app)
 
     assert len(report) > 0
     assert len(issues) == 0
@@ -53,12 +55,13 @@ def test_perform_diagnostics_with_issues():
 
     with patch("src.utils.setup_diagnostics.check_uv", return_value=False):
         with patch("src.utils.setup_diagnostics.os.path.exists", return_value=False):
-            with patch("builtins.__import__", side_effect=ImportError):
-                with patch(
-                    "src.utils.setup_diagnostics.shutil.disk_usage",
-                    return_value=MagicMock(free=1 * 1024 ** 3),
-                ):
-                    report, issues = perform_diagnostics(kit, app)
+            with patch("src.utils.setup_diagnostics._can_import_package_in_project_env", return_value=False):
+                with patch("src.utils.setup_diagnostics._is_lmstudio_server_reachable", return_value=False):
+                    with patch(
+                        "src.utils.setup_diagnostics.shutil.disk_usage",
+                        return_value=MagicMock(free=1 * 1024 ** 3),
+                    ):
+                        report, issues = perform_diagnostics(kit, app)
 
     assert len(issues) > 0
     issue_names = [i.name for i in issues]

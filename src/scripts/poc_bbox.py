@@ -45,7 +45,7 @@ SYSTEM_PROMPT = (
     "You are an expert visual grounding AI. Locate the requested subject in the image. "
     "First reason about how many relevant subjects are present, then provide the total detected subject count. "
     "Return zero, one, or many detections; for each detection include detected_subject and bounding box "
-    "coordinates normalized to 0-1000 as ymin, xmin, ymax, xmax. "
+    "coordinates normalized to 0-1000 as xmin, ymin, xmax, ymax. "
     "detected_subject must be a descriptive phrase (not a single word), including visual cues "
     "such as color/pose/type and rough location in the image. "
     "If none are present, return an empty detections list and count 0."
@@ -281,7 +281,7 @@ def _save_run_results(results_dir: Path, model_tag: str, records: list[dict[str,
             if rec["status"] == "ok":
                 try:
                     pred_bboxes = [
-                        [det.ymin, det.xmin, det.ymax, det.xmax]
+                        [det.xmin, det.ymin, det.xmax, det.ymax]
                         for det in rec["bbox_obj"].detections
                     ]
                     pred_labels = [
@@ -315,7 +315,7 @@ def _save_run_results(results_dir: Path, model_tag: str, records: list[dict[str,
                     gt_bboxes: list[list[int] | None] = []
                     iou_scores: list[float | None] = []
                     for idx, det in enumerate(rec["bbox_obj"].detections, start=1):
-                        pred_bbox = [det.ymin, det.xmin, det.ymax, det.xmax]
+                        pred_bbox = [det.xmin, det.ymin, det.xmax, det.ymax]
                         gt_item = gt_items[idx - 1] if idx - 1 < len(gt_items) else None
                         gt_bbox = gt_item["bbox"] if gt_item is not None else None
                         iou_score = calculate_iou(pred_bbox, gt_bbox) if gt_bbox is not None else None

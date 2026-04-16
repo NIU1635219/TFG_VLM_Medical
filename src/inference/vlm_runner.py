@@ -1,5 +1,6 @@
 """Módulo de carga e inferencia VLM sobre LM Studio usando lmstudio-python."""
 
+import base64
 import io
 import json
 import dataclasses
@@ -90,6 +91,11 @@ try:
     from PIL import Image
 except ImportError:
     Image = None
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 try:
     import lmstudio as lms
@@ -705,12 +711,69 @@ class VLMLoader:
             resources={},
         )
 
+    def _normalize_target_size(self, target_size: int) -> int:
+        """Normaliza target_size para garantizar cuadrado múltiplo de 32."""
+        try:
+            normalized = int(target_size)
+        except (TypeError, ValueError):
+            normalized = 1024
+
+        if normalized <= 0:
+            normalized = 1024
+
+        remainder = normalized % 32
+        if remainder != 0:
+            normalized += 32 - remainder
+        return normalized
+
+    def encode_image_for_vlm(self, image_path: str | Path, target_size: int = 1024) -> str:
+        """Redimensiona la imagen a un cuadrado múltiplo de 32 (sin padding) con LANCZOS4 y codifica en Base64."""
+        if cv2 is None:
+            raise RuntimeError("OpenCV (cv2) no está disponible para codificar imágenes en Base64.")
+
+        resolved_image_path = self._resolve_existing_image_path(str(image_path)) or str(image_path)
+        image_bgr = cv2.imread(str(resolved_image_path))
+        if image_bgr is None:
+            raise ValueError(f"No se pudo cargar la imagen: {image_path}")
+
+        normalized_target_size = self._normalize_target_size(target_size)
+
+        # Forzamos deformación a cuadrado para alinear patches de Qwen sin padding.
+        image_squared = cv2.resize(
+            image_bgr,
+            (normalized_target_size, normalized_target_size),
+            interpolation=cv2.INTER_LANCZOS4,
+        )
+
+        ok, buffer = cv2.imencode(
+            ".jpg",
+            image_squared,
+            [int(cv2.IMWRITE_JPEG_QUALITY), 95],
+        )
+        if not ok:
+            raise RuntimeError(f"No se pudo codificar la imagen en JPEG: {image_path}")
+
+        return base64.b64encode(buffer.tobytes()).decode("utf-8")
+
+    def _schema_requires_deterministic_temperature(self, schema: type[BaseModel]) -> bool:
+        """Detecta esquemas de grounding para forzar temperatura 0.0."""
+        schema_name = getattr(schema, "__name__", "")
+        if "BoundingBox" in schema_name or "Grounding" in schema_name:
+            return True
+
+        model_fields = getattr(schema, "model_fields", {})
+        if all(key in model_fields for key in ("xmin", "ymin", "xmax", "ymax")):
+            return True
+
+        return False
+
     def _prepare_image_source_for_lms(self, image_path: str) -> Any:
         """
-        Prepara y optimiza una imagen para ser enviada a través de la API de LM Studio.
-        
-        Redimensiona la imagen si es necesario para no exceder las dimensiones máximas
-        soportadas y la convierte a formato PNG optimizado.
+        Prepara y optimiza una imagen para LM Studio.
+
+        Para tareas de grounding prioriza pipeline Qwen SOTA: resize cuadrado múltiplo
+        de 32 mediante LANCZOS4 y codificación JPEG base64. Si ese camino falla,
+        mantiene fallback con Pillow para preservar compatibilidad.
         
         Args:
             image_path (str): Ruta al archivo de imagen original.
@@ -718,6 +781,21 @@ class VLMLoader:
         Returns:
             Any: Un objeto BytesIO con la imagen procesada o la ruta original en caso de error.
         """
+        try:
+            encoded_image = self.encode_image_for_vlm(image_path=image_path, target_size=1024)
+            decoded_image = base64.b64decode(encoded_image)
+            buffer = io.BytesIO(decoded_image)
+
+            normalized_name = str(image_path).replace("\\", "/")
+            base_name, _ = os.path.splitext(normalized_name.rsplit("/", 1)[-1])
+            if not base_name:
+                base_name = "image"
+            buffer.name = f"{base_name}.jpg"
+            buffer.seek(0)
+            return buffer
+        except Exception:
+            pass
+
         if Image is None:
             return image_path
 
@@ -765,7 +843,7 @@ class VLMLoader:
     def _build_multimodal_history(
         self,
         structured_text: str,
-        image_paths: list[str],
+        image_sources: list[Any],
         system_prompt: str | None = None,
     ) -> Any:
         """
@@ -776,7 +854,7 @@ class VLMLoader:
         
         Args:
             structured_text (str): El texto del prompt estructurado.
-            image_paths (list[str]): Rutas a las imágenes locales a analizar.
+            image_sources (list[Any]): Fuentes de imagen (rutas locales o buffers en memoria).
             system_prompt (str | None): Instrucción de sistema opcional para
                 guiar el comportamiento del modelo.
             
@@ -789,14 +867,27 @@ class VLMLoader:
             prepare_image_fn = getattr(lms, "prepare_image", None) if lms is not None else None
 
         image_payloads: list[Any] = []
-        for image_path in image_paths:
-            image_source = self._prepare_image_source_for_lms(image_path)
+        for raw_image_source in image_sources:
+            if isinstance(raw_image_source, (str, Path)):
+                image_source = self._prepare_image_source_for_lms(str(raw_image_source))
+            elif isinstance(raw_image_source, (bytes, bytearray)):
+                image_source = io.BytesIO(bytes(raw_image_source))
+                image_source.name = "image.jpg"
+                image_source.seek(0)
+            else:
+                image_source = raw_image_source
+                if hasattr(image_source, "seek") and callable(image_source.seek):
+                    try:
+                        image_source.seek(0)
+                    except Exception:
+                        pass
+
             if callable(prepare_image_fn):
                 try:
                     image_payload = prepare_image_fn(image_source)
                 except Exception:
                     try:
-                        image_payload = prepare_image_fn(image_path)
+                        image_payload = prepare_image_fn(raw_image_source)
                     except Exception:
                         image_payload = image_source
             else:
@@ -1206,25 +1297,46 @@ class VLMLoader:
         if not (0.0 <= temperature_value <= 2.0):
             raise ValueError("temperature debe estar entre 0.0 y 2.0")
 
-        # Solo se aceptan rutas locales para evitar prompts gigantes por base64 inline.
-        raw_paths: list[str | Path]
-        if isinstance(image_path, list):
-            raw_paths = image_path
-        else:
-            raw_paths = [image_path]
+        # En tareas de grounding forzamos temperatura determinista para reducir jitter espacial.
+        effective_temperature = (
+            0.0 if self._schema_requires_deterministic_temperature(schema) else temperature_value
+        )
 
-        if len(raw_paths) == 0:
+        raw_inputs: list[Any]
+        if isinstance(image_path, list):
+            raw_inputs = image_path
+        else:
+            raw_inputs = [image_path]
+
+        if len(raw_inputs) == 0:
             raise ValueError("image_path no puede estar vacío")
 
-        image_paths: list[str] = []
-        for raw_path in raw_paths:
-            image_path_str = str(raw_path).strip()
+        image_sources: list[Any] = []
+        for raw_input in raw_inputs:
+            # Soporte de imágenes en memoria para evitar artefactos temporales en disco.
+            if hasattr(raw_input, "read") and callable(getattr(raw_input, "read", None)):
+                if hasattr(raw_input, "seek") and callable(raw_input.seek):
+                    try:
+                        raw_input.seek(0)
+                    except Exception:
+                        pass
+                image_sources.append(raw_input)
+                continue
+
+            if isinstance(raw_input, (bytes, bytearray)):
+                buffer = io.BytesIO(bytes(raw_input))
+                buffer.name = "image.jpg"
+                buffer.seek(0)
+                image_sources.append(buffer)
+                continue
+
+            image_path_str = str(raw_input).strip()
             if not image_path_str:
                 raise ValueError("image_path no puede estar vacío")
             resolved_image_path = self._resolve_existing_image_path(image_path_str)
             if resolved_image_path is None:
                 raise FileNotFoundError(f"Imagen no encontrada en: {image_path_str}")
-            image_paths.append(resolved_image_path)
+            image_sources.append(resolved_image_path)
 
         # Carga el modelo si aún no está en memoria
         self.load_model()
@@ -1246,7 +1358,7 @@ class VLMLoader:
         try:
             multimodal_input = self._build_multimodal_history(
                 structured_text,
-                image_paths,
+                image_sources,
                 system_prompt=resolved_system_prompt,
             )
         except TypeError as error:
@@ -1255,7 +1367,7 @@ class VLMLoader:
                 structured_text_with_system = f"{resolved_system_prompt}\n\n{structured_text}"
                 multimodal_input = self._build_multimodal_history(
                     structured_text_with_system,
-                    image_paths,
+                    image_sources,
                 )
             else:
                 raise
@@ -1274,7 +1386,7 @@ class VLMLoader:
                 response = self._respond_with_config_compat(
                     model_handle,
                     multimodal_input,
-                    temperature_value,
+                    effective_temperature,
                     seed=seed,
                     schema=schema,
                 )
@@ -1302,7 +1414,7 @@ class VLMLoader:
                     self._respond_with_config_compat(
                         model_handle,
                         structured_text,
-                        temperature_value,
+                        effective_temperature,
                         schema=schema,
                     )
                 except Exception as fallback_error:

@@ -132,7 +132,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         default_output=default_scenario_output_path(scenario_name="scenario_C"),
     )
     run_dir, annotated_dir = prepare_run_artifact_dirs(output_jsonl_path=output_path)
-    forced_images_tmp_dir = run_dir / "_tmp_forced_images"
     img_dir = Path(str(args.img_dir))
 
     if not img_dir.exists() or not img_dir.is_dir():
@@ -217,10 +216,10 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         for row in rows:
             image_id_value = row.get("image_id")
             gt_bbox = [
-                row.get("ymin"),
                 row.get("xmin"),
-                row.get("ymax"),
+                row.get("ymin"),
                 row.get("xmax"),
+                row.get("ymax"),
             ]
             try:
                 gt_cls_value = normalize_polyp_class(
@@ -290,10 +289,10 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
             image_started_at = time.perf_counter()
             image_id_value = row.get("image_id")
             gt_bbox = [
-                row.get("ymin"),
                 row.get("xmin"),
-                row.get("ymax"),
+                row.get("ymin"),
                 row.get("xmax"),
+                row.get("ymax"),
             ]
             emit_report_event(
                 reporter,
@@ -418,12 +417,10 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 )
                 continue
 
-            forced_image_path: Path | None = None
             try:
-                forced_image_path = draw_bbox_and_save_temp_image(
+                forced_image_buffer = draw_bbox_and_save_temp_image(
                     image_path=image_path,
                     bbox_norm=gt_bbox_norm,
-                    temp_dir=forced_images_tmp_dir,
                 )
             except Exception as error:
                 processed_fail += 1
@@ -464,7 +461,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
             try:
                 parsed_response, telemetry_payload = safe_inference_with_optional_telemetry(
                     loader=loader,
-                    image_path=str(forced_image_path),
+                    image_path=forced_image_buffer,
                     prompt=SCENARIO_C_PROMPT_TEMPLATE,
                     schema=PolypDiagnosisAndGrounding,
                 )
@@ -503,21 +500,14 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     error=str(error),
                 )
                 continue
-            finally:
-                if forced_image_path is not None:
-                    try:
-                        forced_image_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-
             parsed_payload = dict(parsed_response.model_dump())
             predicted_cls = extract_predicted_class(parsed_payload)
             parsed_payload["final_diagnosis_class"] = predicted_cls
             pred_bbox = [
-                parsed_payload.get("ymin"),
                 parsed_payload.get("xmin"),
-                parsed_payload.get("ymax"),
+                parsed_payload.get("ymin"),
                 parsed_payload.get("xmax"),
+                parsed_payload.get("ymax"),
             ]
             iou_score = compute_iou_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)
             proximity_payload = compute_proximity_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)

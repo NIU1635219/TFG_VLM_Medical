@@ -16,6 +16,24 @@ def _normalize_metric_name(metric_name: str) -> str:
     return normalized
 
 
+def _quality_band(value: float | None, *, low: float, high: float) -> str:
+    if not isinstance(value, (int, float)):
+        return "desconocido"
+    numeric = float(value)
+    if numeric < low:
+        return "bajo"
+    if numeric < high:
+        return "intermedio"
+    return "alto"
+
+
+def _coverage_text(available: int, total: int) -> str:
+    if total <= 0:
+        return "0/0 (sin muestras)"
+    ratio = (available / total) * 100.0
+    return f"{available}/{total} ({ratio:.1f}%)"
+
+
 def build_global_performance_explanation(
     *,
     accuracy: float | None,
@@ -106,6 +124,209 @@ def build_global_performance_explanation(
         f"{quality} Comparativa global: {relation}. "
         f"{metric_status_text}. El mapa de calor muestra en que pares GT-Pred se concentran los aciertos y confusiones, "
         "mientras IoU y Proximity detallan la calidad espacial desde perspectivas complementarias."
+    )
+
+
+def build_classification_quality_explanation(
+    *,
+    class_accuracy: float | None,
+    macro_f1: float | None,
+    recall_by_class: dict[str, float] | None = None,
+) -> str:
+    """Explain classification quality using complementary metrics."""
+    if class_accuracy is None and macro_f1 is None:
+        return (
+            "No hay metrica suficiente para interpretar la calidad de clasificacion. "
+            "Se necesitan etiquetas GT y predicciones validas."
+        )
+
+    acc_band = _quality_band(class_accuracy, low=0.45, high=0.7)
+    f1_band = _quality_band(macro_f1, low=0.4, high=0.65)
+
+    if class_accuracy is not None and macro_f1 is not None:
+        if class_accuracy >= 0.7 and macro_f1 >= 0.65:
+            base = (
+                "La clasificacion es solida tanto en exactitud global como en equilibrio entre clases, "
+                "lo que reduce el riesgo de sobreoptimizar solo la clase mayoritaria."
+            )
+        elif class_accuracy >= 0.65 and macro_f1 < 0.45:
+            base = (
+                "La exactitud global es aceptable, pero el Macro-F1 es bajo; esto sugiere desbalance en errores "
+                "y posible castigo sobre clases minoritarias."
+            )
+        elif class_accuracy < 0.45:
+            base = (
+                "La exactitud global es baja y la capacidad de discriminacion por clase necesita mejora prioritaria."
+            )
+        else:
+            base = (
+                "La clasificacion es intermedia: hay señal util, pero aun existen confusiones persistentes entre clases."
+            )
+    elif class_accuracy is not None:
+        base = (
+            f"La exactitud global es {acc_band}. "
+            "Sin Macro-F1 no puede evaluarse con precision el balance entre clases."
+        )
+    else:
+        base = (
+            f"El Macro-F1 es {f1_band}. "
+            "Sin accuracy global no puede estimarse el porcentaje total de aciertos."
+        )
+
+    if not isinstance(recall_by_class, dict) or not recall_by_class:
+        return base
+
+    recalls = [float(v) for v in recall_by_class.values() if isinstance(v, (int, float))]
+    if not recalls:
+        return base
+
+    min_recall = min(recalls)
+    max_recall = max(recalls)
+    spread = max_recall - min_recall
+    spread_comment: str
+    if spread >= 0.4:
+        spread_comment = (
+            "La variabilidad de recall entre clases es alta, por lo que conviene atacar confusiones especificas por clase."
+        )
+    elif spread >= 0.2:
+        spread_comment = (
+            "La variabilidad de recall es moderada y recomienda ajustes focalizados en las clases con menor cobertura."
+        )
+    else:
+        spread_comment = "La variabilidad de recall es contenida y el comportamiento entre clases es relativamente uniforme."
+
+    return f"{base} {spread_comment}"
+
+
+def build_spatial_consistency_explanation(
+    *,
+    avg_iou: float | None,
+    avg_proximity: float | None,
+) -> str:
+    """Explain when IoU and Proximity agree or diverge."""
+    if avg_iou is None and avg_proximity is None:
+        return "No hay metricas espaciales suficientes para interpretar consistencia geometrica."
+    if avg_iou is None:
+        return (
+            "Solo hay Proximity medio disponible. Esto permite valorar cercania centro-tamano, "
+            "pero no el solapamiento estricto de cajas (IoU)."
+        )
+    if avg_proximity is None:
+        return (
+            "Solo hay IoU medio disponible. Esto mide solapamiento estricto, "
+            "pero no separa explicitamente alineacion de centro y escala."
+        )
+
+    iou = float(avg_iou)
+    prox = float(avg_proximity)
+    gap = prox - iou
+
+    if gap >= 0.2:
+        relation = (
+            "Proximity supera claramente a IoU: el modelo suele aproximar posicion y escala, "
+            "pero falla en ajustar con precision los bordes."
+        )
+    elif gap <= -0.1:
+        relation = (
+            "IoU no queda por debajo de Proximity: puede haber buen solapamiento puntual, "
+            "aunque no siempre estable en centro/tamano a nivel global."
+        )
+    else:
+        relation = "IoU y Proximity son coherentes entre si, indicando una calidad espacial global consistente."
+
+    iou_band = _quality_band(iou, low=0.35, high=0.6)
+    prox_band = _quality_band(prox, low=0.45, high=0.7)
+    return (
+        f"Calidad espacial: IoU en rango {iou_band} y Proximity en rango {prox_band}. "
+        f"{relation}"
+    )
+
+
+def build_timing_performance_explanation(
+    *,
+    total_images: int,
+    total_duration_count: int,
+    avg_total_duration_seconds: float | None,
+    total_inference_seconds: float | None,
+    avg_generation_seconds: float | None,
+    avg_ttft_seconds: float | None,
+    avg_tokens_per_second: float | None,
+) -> str:
+    """Explain timing quality and telemetry completeness."""
+    if total_images <= 0:
+        return "No hay muestras procesadas para analizar latencia global."
+
+    coverage = _coverage_text(total_duration_count, total_images)
+    if avg_total_duration_seconds is None and avg_generation_seconds is None and avg_ttft_seconds is None:
+        return (
+            f"Cobertura temporal: {coverage}. No hay valores suficientes de latencia para una lectura temporal fiable."
+        )
+
+    latency_text = (
+        f"latencia total media={float(avg_total_duration_seconds):.3f} s"
+        if isinstance(avg_total_duration_seconds, (int, float))
+        else "latencia total media=N/A"
+    )
+    total_text = (
+        f"latencia total acumulada={float(total_inference_seconds):.3f} s"
+        if isinstance(total_inference_seconds, (int, float))
+        else "latencia total acumulada=N/A"
+    )
+    gen_text = (
+        f"generacion media={float(avg_generation_seconds):.3f} s"
+        if isinstance(avg_generation_seconds, (int, float))
+        else "generacion media=N/A"
+    )
+    ttft_text = (
+        f"TTFT medio={float(avg_ttft_seconds):.3f} s"
+        if isinstance(avg_ttft_seconds, (int, float))
+        else "TTFT medio=N/A"
+    )
+    tps_text = (
+        f"TPS medio={float(avg_tokens_per_second):.2f} tok/s"
+        if isinstance(avg_tokens_per_second, (int, float))
+        else "TPS medio=N/A"
+    )
+
+    if isinstance(avg_total_duration_seconds, (int, float)):
+        latency = float(avg_total_duration_seconds)
+        if latency <= 1.0:
+            latency_band = "baja"
+        elif latency <= 3.0:
+            latency_band = "moderada"
+        else:
+            latency_band = "alta"
+        latency_note = f"La latencia media se considera {latency_band} para este flujo."
+    else:
+        latency_note = "No hay latencia total media para clasificar el rendimiento temporal."
+
+    return (
+        f"Cobertura temporal: {coverage}. {latency_text}; {total_text}; {gen_text}; {ttft_text}; {tps_text}. "
+        f"{latency_note}"
+    )
+
+
+def build_metrics_completeness_explanation(
+    *,
+    total_images: int,
+    iou_count: int,
+    proximity_count: int,
+    class_match_count: int,
+    total_duration_count: int,
+) -> str:
+    """Explain data completeness for each reported metric group."""
+    if total_images <= 0:
+        return "No hay registros para evaluar cobertura de metricas."
+
+    iou_cov = _coverage_text(iou_count, total_images)
+    prox_cov = _coverage_text(proximity_count, total_images)
+    cls_cov = _coverage_text(class_match_count, total_images)
+    time_cov = _coverage_text(total_duration_count, total_images)
+
+    return (
+        "Cobertura de metricas del informe: "
+        f"clasificacion={cls_cov}, IoU={iou_cov}, Proximity={prox_cov}, tiempos={time_cov}. "
+        "Si alguna cobertura es baja, la interpretacion asociada debe leerse con cautela."
     )
 
 
@@ -310,11 +531,52 @@ def _describe_proximity_band(proximity_value: float | None) -> str:
     return "La cercania espacial es muy baja: la caja predicha queda lejos del objetivo esperado."
 
 
+def _describe_timing_band(
+    *,
+    total_duration_seconds: float | None,
+    generation_duration_seconds: float | None,
+    ttft_seconds: float | None,
+) -> str:
+    """Return a compact timing interpretation for one inference."""
+    if (
+        total_duration_seconds is None
+        and generation_duration_seconds is None
+        and ttft_seconds is None
+    ):
+        return "No hay telemetria temporal suficiente para evaluar la latencia de esta inferencia."
+
+    timing_parts: list[str] = []
+    if isinstance(total_duration_seconds, (int, float)):
+        total_value = float(total_duration_seconds)
+        if total_value <= 1.0:
+            timing_parts.append(f"La latencia total es baja ({total_value:.3f} s)")
+        elif total_value <= 3.0:
+            timing_parts.append(f"La latencia total es moderada ({total_value:.3f} s)")
+        else:
+            timing_parts.append(f"La latencia total es alta ({total_value:.3f} s)")
+
+    if isinstance(generation_duration_seconds, (int, float)):
+        generation_value = float(generation_duration_seconds)
+        timing_parts.append(f"el tiempo de generacion es {generation_value:.3f} s")
+
+    if isinstance(ttft_seconds, (int, float)):
+        ttft_value = float(ttft_seconds)
+        timing_parts.append(f"y el TTFT es {ttft_value:.3f} s")
+
+    if not timing_parts:
+        return "Hay datos temporales parciales, pero no suficientes para una lectura clara de latencia."
+
+    return ", ".join(timing_parts) + "."
+
+
 def describe_result_item(
     *,
     class_match: bool | None,
     iou_value: float | None,
     proximity_value: float | None = None,
+    total_duration_seconds: float | None = None,
+    generation_duration_seconds: float | None = None,
+    ttft_seconds: float | None = None,
 ) -> str:
     """Build a concise, easy-to-read explanation for one sample result."""
     if class_match is True:
@@ -326,7 +588,67 @@ def describe_result_item(
 
     iou_text = _describe_iou_band(iou_value)
     proximity_text = _describe_proximity_band(proximity_value)
-    return f"{class_text}. {iou_text} {proximity_text}"
+    timing_text = _describe_timing_band(
+        total_duration_seconds=total_duration_seconds,
+        generation_duration_seconds=generation_duration_seconds,
+        ttft_seconds=ttft_seconds,
+    )
+
+    recommendation: str
+    if class_match is True and isinstance(iou_value, (int, float)) and iou_value >= 0.5:
+        recommendation = "Caso favorable: conviene usarlo como referencia positiva para calibracion futura."
+    elif class_match is False and isinstance(iou_value, (int, float)) and iou_value < 0.3:
+        recommendation = (
+            "Caso critico: revisar prompt de clasificacion y estrategia de localizacion, "
+            "porque fallan clase y ajuste espacial a la vez."
+        )
+    elif class_match is False:
+        recommendation = "La localizacion puede ser util, pero la clase requiere ajuste para reducir confusiones."
+    else:
+        recommendation = "La clase es correcta, aunque aun hay margen para mejorar la precision espacial."
+
+    return f"{class_text}. {iou_text} {proximity_text} {timing_text} {recommendation}"
+
+
+def build_case_followup_recommendation(
+    *,
+    class_match: bool | None,
+    iou_value: float | None,
+    proximity_value: float | None,
+    total_duration_seconds: float | None = None,
+) -> str:
+    """Return a specific, actionable follow-up suggestion for one sample."""
+    if class_match is False and isinstance(iou_value, (int, float)) and iou_value < 0.2:
+        return (
+            "Prioridad alta: revisar este caso en detalle (prompt + parsing + visualizacion), "
+            "porque combina error de clase con localizacion muy deficiente."
+        )
+
+    if class_match is True and isinstance(iou_value, (int, float)) and iou_value >= 0.6:
+        if isinstance(total_duration_seconds, (int, float)) and float(total_duration_seconds) > 3.0:
+            return (
+                "Caso de referencia en calidad, pero con coste temporal alto; "
+                "puede usarse para explorar optimizaciones de latencia sin perder precision."
+            )
+        return (
+            "Caso de referencia positiva: conviene conservarlo como ejemplo valido para regresion y comparativas de modelo."
+        )
+
+    if class_match is True and isinstance(proximity_value, (int, float)) and proximity_value < 0.35:
+        return (
+            "La clase es correcta pero el ajuste espacial es flojo; "
+            "recomendable priorizar refinamiento de bbox o instrucciones de localizacion."
+        )
+
+    if class_match is False and isinstance(proximity_value, (int, float)) and proximity_value >= 0.6:
+        return (
+            "La geometria es razonable pero la clase falla; "
+            "centrar mejoras en desambiguacion semantica entre AD/HP/ASS."
+        )
+
+    return (
+        "Caso mixto: mantener seguimiento en proximas iteraciones y contrastar con patrones similares del reporte."
+    )
 
 
 def build_executive_summary_text(

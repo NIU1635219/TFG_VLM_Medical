@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.utils.tests_ui.metrics import mean_or_none
+from .report_common import build_bbox_xyxy_from_mapping, extract_predicted_class
 
 
 LoadJsonlRecordsFn = Callable[[Path], list[dict[str, Any]]]
@@ -15,16 +16,6 @@ NormalizePolypClassFn = Callable[[Any], str]
 NormalizeImageStemFn = Callable[[Any], str]
 ComputeIouSafeFn = Callable[..., float | None]
 ComputeProximitySafeFn = Callable[..., dict[str, float] | None]
-
-
-def _extract_predicted_class(payload: dict[str, Any], fallback: Any = "") -> str:
-    """Extract predicted class from canonical payload field without class normalization."""
-    value = payload.get("final_diagnosis_class")
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(fallback, str):
-        return fallback.strip()
-    return ""
 
 
 def save_result(output_file: str, result_dict: dict[str, Any]) -> None:
@@ -357,7 +348,7 @@ def summarize_scenario_records_from_jsonl(
             raw_result = entry.get("result")
             payload = raw_result if isinstance(raw_result, dict) else {}
 
-        predicted_cls = _extract_predicted_class(payload, entry.get("predicted_cls") or "")
+        predicted_cls = extract_predicted_class(payload, entry.get("predicted_cls") or "")
         gt_cls = normalize_polyp_class(entry.get("ground_truth_cls") or "")
         class_match = entry.get("class_match")
         if isinstance(class_match, bool):
@@ -373,12 +364,7 @@ def summarize_scenario_records_from_jsonl(
 
         iou_value = entry.get("iou_score")
         if not isinstance(iou_value, (int, float)):
-            pred_bbox = [
-                payload.get("ymin"),
-                payload.get("xmin"),
-                payload.get("ymax"),
-                payload.get("xmax"),
-            ]
+            pred_bbox = build_bbox_xyxy_from_mapping(payload)
             gt_bbox = entry.get("ground_truth_bbox")
             if isinstance(gt_bbox, list):
                 iou_value = compute_iou_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)
@@ -389,12 +375,7 @@ def summarize_scenario_records_from_jsonl(
 
         proximity_value = entry.get("proximity_score")
         if not isinstance(proximity_value, (int, float)):
-            pred_bbox = [
-                payload.get("ymin"),
-                payload.get("xmin"),
-                payload.get("ymax"),
-                payload.get("xmax"),
-            ]
+            pred_bbox = build_bbox_xyxy_from_mapping(payload)
             gt_bbox = entry.get("ground_truth_bbox")
             if isinstance(gt_bbox, list):
                 proximity_payload = compute_proximity_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)

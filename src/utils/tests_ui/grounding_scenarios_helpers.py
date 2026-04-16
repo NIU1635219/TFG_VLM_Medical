@@ -236,7 +236,7 @@ def resolve_existing_dir(path_like: str | Path) -> Path | None:
 
 
 def coerce_bbox4(value: Any) -> list[int] | None:
-    """Convierte bbox [ymin, xmin, ymax, xmax] a lista de enteros o None."""
+    """Convierte bbox [xmin, ymin, xmax, ymax] a lista de enteros o None."""
     if not isinstance(value, list) or len(value) != 4:
         return None
     converted: list[int] = []
@@ -276,10 +276,10 @@ def extract_iou(entry: dict[str, Any]) -> float | None:
         result_payload = raw_result if isinstance(raw_result, dict) else {}
     pred_bbox = coerce_bbox4(
         [
-            result_payload.get("ymin"),
             result_payload.get("xmin"),
-            result_payload.get("ymax"),
+            result_payload.get("ymin"),
             result_payload.get("xmax"),
+            result_payload.get("ymax"),
         ]
     )
 
@@ -307,10 +307,10 @@ def extract_proximity(entry: dict[str, Any]) -> float | None:
         result_payload = raw_result if isinstance(raw_result, dict) else {}
     pred_bbox = coerce_bbox4(
         [
-            result_payload.get("ymin"),
             result_payload.get("xmin"),
-            result_payload.get("ymax"),
+            result_payload.get("ymin"),
             result_payload.get("xmax"),
+            result_payload.get("ymax"),
         ]
     )
 
@@ -341,10 +341,10 @@ def scenario_recent_record(entry: dict[str, Any]) -> dict[str, object]:
     gt_bbox = coerce_bbox4(entry.get("ground_truth_bbox"))
     pred_bbox = coerce_bbox4(
         [
-            result_payload.get("ymin"),
             result_payload.get("xmin"),
-            result_payload.get("ymax"),
+            result_payload.get("ymin"),
             result_payload.get("xmax"),
+            result_payload.get("ymax"),
         ]
     )
     if gt_bbox is not None and pred_bbox is not None:

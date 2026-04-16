@@ -2289,15 +2289,15 @@ def run_batch_job(
                 if isinstance(payload, dict):
                     detections = payload.get("detections")
                     if isinstance(detections, list) and detections:
-                        # Extraer bboxes predichas como listas [ymin, xmin, ymax, xmax]
+                        # Extraer bboxes predichas como listas [xmin, ymin, xmax, ymax]
                         preds: list[list[int] | None] = []
                         for det in detections:
                             try:
-                                ymin = int(det.get("ymin"))
                                 xmin = int(det.get("xmin"))
-                                ymax = int(det.get("ymax"))
+                                ymin = int(det.get("ymin"))
                                 xmax = int(det.get("xmax"))
-                                preds.append([ymin, xmin, ymax, xmax])
+                                ymax = int(det.get("ymax"))
+                                preds.append([xmin, ymin, xmax, ymax])
                             except Exception:
                                 preds.append(None)
 
@@ -2307,7 +2307,7 @@ def run_batch_job(
                             if p is None:
                                 key = (float("inf"), float("inf"))
                             else:
-                                key = (float(p[1]), float(p[0]))
+                                key = (float(p[0]), float(p[1]))
                             order_keys.append((key, i))
                         order_keys.sort()
                         order_index = [0] * len(preds)

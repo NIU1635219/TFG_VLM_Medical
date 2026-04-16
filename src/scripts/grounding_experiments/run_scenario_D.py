@@ -128,7 +128,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         default_output=default_scenario_output_path(scenario_name="scenario_D"),
     )
     run_dir, annotated_dir = prepare_run_artifact_dirs(output_jsonl_path=output_path)
-    roi_crops_tmp_dir = run_dir / "_tmp_roi_crops"
     img_dir = Path(str(args.img_dir))
 
     if not img_dir.exists() or not img_dir.is_dir():
@@ -215,10 +214,10 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         for row in rows:
             image_id_value = row.get("image_id")
             gt_bbox = [
-                row.get("ymin"),
                 row.get("xmin"),
-                row.get("ymax"),
+                row.get("ymin"),
                 row.get("xmax"),
+                row.get("ymax"),
             ]
             try:
                 gt_cls_value = normalize_polyp_class(
@@ -287,10 +286,10 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
             image_started_at = time.perf_counter()
             image_id_value = row.get("image_id")
             gt_bbox = [
-                row.get("ymin"),
                 row.get("xmin"),
-                row.get("ymax"),
+                row.get("ymin"),
                 row.get("xmax"),
+                row.get("ymax"),
             ]
             emit_report_event(
                 reporter,
@@ -416,17 +415,15 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 )
                 continue
 
-            crop_image_path: Path | None = None
             try:
-                crop_image_path = crop_roi_and_save_temp_image(
+                crop_image_buffer = crop_roi_and_save_temp_image(
                     image_path=image_path,
                     bbox_norm=gt_bbox_norm,
-                    temp_dir=roi_crops_tmp_dir,
                 )
 
                 parsed_response, telemetry_payload = safe_inference_with_optional_telemetry(
                     loader=loader,
-                    image_path=str(crop_image_path),
+                    image_path=crop_image_buffer,
                     prompt=SCENARIO_D_PROMPT_TEMPLATE,
                     schema=PolypDiagnosisClassificationOnly,
                 )
@@ -527,13 +524,6 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     image_path=str(image_path),
                     error=str(error),
                 )
-            finally:
-                if crop_image_path is not None:
-                    try:
-                        crop_image_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-
     finally:
         loader.unload_model()
 

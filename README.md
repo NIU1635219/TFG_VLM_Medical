@@ -105,7 +105,7 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Nuevo script `src/scripts/experiment_ab_text.py` para detección automática de variantes desde JSONL (`__batch_meta__`) y comparación cualitativa A/B sobre muestras AD estratificadas.
 - Motor visual/TUI: tablas estáticas y dashboards migrados al render unificado de `table_menu(..., interactive=False, return_lines=True)` con mejor reparto de columnas y truncado controlado.
 - Cobertura de pruebas ampliada para flujo A/B y renderizado reactivo de tablas en pantallas finales.
-- Nuevo script `src/preprocessing/extract_gt_bboxes.py` para extraer bounding boxes Ground Truth desde máscaras binarias (`.tif/.tiff`) y normalizarlas a escala 0-1000 (`[ymin, xmin, ymax, xmax]`).
+- Nuevo script `src/preprocessing/extract_gt_bboxes.py` para extraer bounding boxes Ground Truth desde máscaras binarias (`.tif/.tiff`) y normalizarlas a escala 0-1000 (`[xmin, ymin, xmax, ymax]`).
 - Nuevo notebook `notebooks/03_ground_truth_bboxes.ipynb` para orquestar la ejecución del extractor y validar visualmente los BBoxes.
 - Grounding: integración de evaluación espacial combinada `IoU + Proximity` para escenarios A/B/C/E.
 - Grounding: persistencia de `proximity_score`, `proximity_center_score` y `proximity_size_score` por registro en JSONL.
@@ -168,6 +168,7 @@ Dependencias declaradas en `pyproject.toml`.
 │   │   │   ├── run_scenario_D.py       # Scenario D: clasificación focalizada con recorte ROI y schema sin bbox/IoU.
 │   │   │   ├── run_scenario_E.py       # Scenario E: combinación de B+C (clase asistida + bbox GT dibujada sobre imagen completa).
 │   │   │   ├── runner_core.py          # Fachada pública compartida usada por escenarios y UI (IoU + Proximity safe).
+│   │   │   ├── report_common.py        # Helpers comunes (normalización de clase, extracción de clase predicha, bbox [xmin,ymin,xmax,ymax]).
 │   │   │   ├── report_aggregation.py   # Persistencia y agregación JSONL (meta/summary/resume, avg_iou + avg_proximity).
 │   │   │   ├── report_serialization.py # Serialización compacta de registros por imagen (incluye campos proximity_*).
 │   │   │   ├── report_markdown.py      # Construcción de records y generación de informe Markdown (secciones IoU y Proximity).
@@ -292,7 +293,7 @@ Script CLI para extraer coordenadas espaciales desde máscaras binarias (`.tif/.
 
 - Busca máscaras recursivamente dentro de carpetas `masks`.
 - Calcula el contorno principal y su `boundingRect` con OpenCV.
-- Normaliza coordenadas al formato `[ymin, xmin, ymax, xmax]` en escala 0-1000.
+- Normaliza coordenadas al formato `[xmin, ymin, xmax, ymax]` en escala 0-1000.
 - Genera CSV por split en `m_train`/`m_valid` (modo recomendado), por ejemplo:
     - `data/processed/m_train/ground_truth_bboxes.csv`
     - `data/processed/m_valid/ground_truth_bboxes.csv`
@@ -697,7 +698,9 @@ Módulo dedicado a escenarios de visual grounding clínico con ejecución increm
 Arquitectura actual:
 
 - `runner_core.py` actúa como fachada única para escenarios y UI.
+- Todos los escenarios A/B/C/D/E importan utilidades compartidas exclusivamente desde `runner_core.py`.
 - Persistencia/agregación JSONL en `report_aggregation.py`.
+- Helpers reutilizables transversales en `report_common.py` (sin duplicación de lógica de clase/bbox).
 - Serialización de registros por imagen en `report_serialization.py`.
 - Métricas, narrativa, visuales y markdown desacoplados en módulos dedicados.
 

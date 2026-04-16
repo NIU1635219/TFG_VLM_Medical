@@ -212,10 +212,10 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
         for row in rows:
             image_id_value = row.get("image_id")
             gt_bbox = [
-                row.get("ymin"),
                 row.get("xmin"),
-                row.get("ymax"),
+                row.get("ymin"),
                 row.get("xmax"),
+                row.get("ymax"),
             ]
             try:
                 gt_cls_value = normalize_polyp_class(
@@ -285,10 +285,10 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
             image_started_at = time.perf_counter()
             image_id_value = row.get("image_id")
             gt_bbox = [
-                row.get("ymin"),
                 row.get("xmin"),
-                row.get("ymax"),
+                row.get("ymin"),
                 row.get("xmax"),
+                row.get("ymax"),
             ]
             emit_report_event(
                 reporter,
@@ -424,10 +424,10 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
             predicted_cls = extract_predicted_class(parsed_payload)
             parsed_payload["final_diagnosis_class"] = predicted_cls
             pred_bbox = [
-                parsed_payload.get("ymin"),
                 parsed_payload.get("xmin"),
-                parsed_payload.get("ymax"),
+                parsed_payload.get("ymin"),
                 parsed_payload.get("xmax"),
+                parsed_payload.get("ymax"),
             ]
             iou_score = compute_iou_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)
             proximity_payload = compute_proximity_safe(gt_bbox=gt_bbox, pred_bbox=pred_bbox)

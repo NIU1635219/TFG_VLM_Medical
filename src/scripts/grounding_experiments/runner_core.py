@@ -7,6 +7,7 @@ persistence so all scenarios can reuse the same execution primitives.
 from __future__ import annotations
 
 import dataclasses
+import io
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, TypeVar, cast
@@ -27,6 +28,12 @@ from .report_aggregation import (
     upsert_scenario_result_record as _upsert_scenario_result_record,
     upsert_scenario_execution_summary as _upsert_scenario_execution_summary,
     upsert_scenario_meta_header as _upsert_scenario_meta_header,
+)
+from .report_common import (
+    build_bbox_xyxy,
+    build_bbox_xyxy_from_mapping,
+    extract_predicted_class,
+    normalize_polyp_class,
 )
 from .report_metrics import (
     build_class_confusion_matrix,
@@ -154,21 +161,6 @@ def normalize_image_stem(value: Any) -> str:
     return text
 
 
-def normalize_polyp_class(value: Any) -> str:
-    """Normalize polyp class labels to stable uppercase text."""
-    return str(value or "").strip().upper()
-
-
-def extract_predicted_class(payload: dict[str, Any], fallback: Any = "") -> str:
-    """Return predicted class using final_diagnosis_class as canonical container."""
-    value = payload.get("final_diagnosis_class")
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(fallback, str):
-        return fallback.strip()
-    return ""
-
-
 def build_annotated_comparison_filename(*, image_id: Any, image_path: Path) -> str:
     """Backward-compatible wrapper for visual artifact naming helper."""
     return _build_annotated_comparison_filename(image_id=image_id, image_path=image_path)
@@ -260,23 +252,23 @@ def resolve_ground_truth_class_from_lookup(
 def draw_bbox_and_save_temp_image(
     image_path: Path,
     bbox_norm: list[int],
-    *,
-    temp_dir: Path,
-) -> Path:
-    """Dibuja un bbox GT y guarda la imagen temporal en disco.
-
-    Devuelve la ruta de una imagen JPEG temporal lista para pasar como `image_path`
-    a la inferencia multimodal.
-    """
+) -> io.BytesIO:
+    """Dibuja un bbox GT y devuelve la imagen en memoria (sin escribir en disco)."""
     image = _draw_bbox_overlay(image_path=image_path, bbox_norm=bbox_norm)
 
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    output_path = temp_dir / f"{image_path.stem}_forced_bbox_{timestamp}.jpg"
-    ok = cv2.imwrite(str(output_path), image)
+    ok, encoded = cv2.imencode(
+        ".jpg",
+        image,
+        [int(cv2.IMWRITE_JPEG_QUALITY), 95],
+    )
     if not ok:
-        raise RuntimeError(f"No se pudo escribir imagen temporal: {output_path}")
-    return output_path
+        raise RuntimeError(f"No se pudo codificar imagen forzada en memoria: {image_path}")
+
+    buffer = io.BytesIO(encoded.tobytes())
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    buffer.name = f"{image_path.stem}_forced_bbox_{timestamp}.jpg"
+    buffer.seek(0)
+    return buffer
 
 
 def draw_gt_bbox_and_save_artifact(
@@ -321,12 +313,11 @@ def draw_gt_bbox_and_save_artifact(
 def crop_roi_and_save_temp_image(
     image_path: Path,
     bbox_norm: list[int],
-    temp_dir: Path,
     padding_pct: float = 0.1,
-) -> Path:
-    """Recorta la ROI del bbox GT con padding y guarda el resultado temporalmente."""
+) -> io.BytesIO:
+    """Recorta la ROI del bbox GT con padding y devuelve JPEG en memoria."""
     if len(bbox_norm) != 4:
-        raise ValueError("bbox_norm debe contener 4 elementos: [ymin, xmin, ymax, xmax]")
+        raise ValueError("bbox_norm debe contener 4 elementos: [xmin, ymin, xmax, ymax]")
 
     if padding_pct < 0:
         raise ValueError("padding_pct debe ser mayor o igual que 0")
@@ -338,10 +329,10 @@ def crop_roi_and_save_temp_image(
     height, width = image.shape[:2]
 
     try:
-        ymin = int(float(bbox_norm[0]) * float(height) / 1000.0)
-        xmin = int(float(bbox_norm[1]) * float(width) / 1000.0)
-        ymax = int(float(bbox_norm[2]) * float(height) / 1000.0)
-        xmax = int(float(bbox_norm[3]) * float(width) / 1000.0)
+        xmin = int(float(bbox_norm[0]) * float(width) / 1000.0)
+        ymin = int(float(bbox_norm[1]) * float(height) / 1000.0)
+        xmax = int(float(bbox_norm[2]) * float(width) / 1000.0)
+        ymax = int(float(bbox_norm[3]) * float(height) / 1000.0)
     except Exception as exc:
         raise ValueError("bbox_norm contiene valores no numéricos") from exc
 
@@ -370,19 +361,25 @@ def crop_roi_and_save_temp_image(
     if cropped_img.size == 0:
         raise RuntimeError(f"El recorte ROI quedó vacío para la imagen: {image_path}")
 
-    temp_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    output_path = temp_dir / f"{image_path.stem}_roi_crop_{timestamp}.jpg"
-    ok = cv2.imwrite(str(output_path), cropped_img)
+    ok, encoded = cv2.imencode(
+        ".jpg",
+        cropped_img,
+        [int(cv2.IMWRITE_JPEG_QUALITY), 95],
+    )
     if not ok:
-        raise RuntimeError(f"No se pudo escribir imagen temporal: {output_path}")
-    return output_path
+        raise RuntimeError(f"No se pudo codificar ROI en memoria: {image_path}")
+
+    buffer = io.BytesIO(encoded.tobytes())
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    buffer.name = f"{image_path.stem}_roi_crop_{timestamp}.jpg"
+    buffer.seek(0)
+    return buffer
 
 
 def _draw_bbox_overlay(*, image_path: Path, bbox_norm: list[int]) -> Any:
     """Construye imagen OpenCV con el bbox dibujado en rojo."""
     if len(bbox_norm) != 4:
-        raise ValueError("bbox_norm debe contener 4 elementos: [ymin, xmin, ymax, xmax]")
+        raise ValueError("bbox_norm debe contener 4 elementos: [xmin, ymin, xmax, ymax]")
 
     if not image_path.exists() or not image_path.is_file():
         raise FileNotFoundError(f"Image file not found: {image_path}")
@@ -394,10 +391,10 @@ def _draw_bbox_overlay(*, image_path: Path, bbox_norm: list[int]) -> Any:
     height, width = image.shape[:2]
 
     try:
-        ymin = int(float(bbox_norm[0]) * float(height) / 1000.0)
-        xmin = int(float(bbox_norm[1]) * float(width) / 1000.0)
-        ymax = int(float(bbox_norm[2]) * float(height) / 1000.0)
-        xmax = int(float(bbox_norm[3]) * float(width) / 1000.0)
+        xmin = int(float(bbox_norm[0]) * float(width) / 1000.0)
+        ymin = int(float(bbox_norm[1]) * float(height) / 1000.0)
+        xmax = int(float(bbox_norm[2]) * float(width) / 1000.0)
+        ymax = int(float(bbox_norm[3]) * float(height) / 1000.0)
     except Exception as exc:
         raise ValueError("bbox_norm contiene valores no numéricos") from exc
 
@@ -618,7 +615,7 @@ def build_scenario_record(
 def safe_inference_with_optional_telemetry(
     *,
     loader: Any,
-    image_path: Path | str | list[Path | str],
+    image_path: Any,
     prompt: str,
     schema: type[SchemaT],
 ) -> tuple[SchemaT, dict[str, Any] | None]:
@@ -644,7 +641,7 @@ def safe_inference_with_optional_telemetry(
 
 
 def normalize_bbox_for_metrics(values: list[Any]) -> list[int] | None:
-    """Normalize bbox values to integer [ymin, xmin, ymax, xmax] format."""
+    """Normalize bbox values to integer [xmin, ymin, xmax, ymax] format."""
     if len(values) != 4:
         return None
     normalized: list[int] = []
@@ -767,6 +764,8 @@ __all__ = [
     "SCENARIO_SUMMARY_KEY",
     "SCENARIO_TELEMETRY_RECORD_FIELDS",
     "build_class_lookup_from_m_split_csvs",
+    "build_bbox_xyxy",
+    "build_bbox_xyxy_from_mapping",
     "build_markdown_records_from_scenario_jsonl",
     "build_scenario_record",
     "build_class_confusion_matrix",

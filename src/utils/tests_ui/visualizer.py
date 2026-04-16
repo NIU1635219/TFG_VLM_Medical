@@ -34,9 +34,9 @@ def _load_image_bgr(image_path: Path) -> np.ndarray:
 
 
 def _validate_bbox(bbox: list[int], bbox_name: str) -> None:
-    """Valida que el bounding box tenga el formato esperado [ymin, xmin, ymax, xmax]."""
+    """Valida que el bounding box tenga el formato esperado [xmin, ymin, xmax, ymax]."""
     if len(bbox) != 4:
-        raise ValueError(f"{bbox_name} debe tener exactamente 4 elementos: [ymin, xmin, ymax, xmax].")
+        raise ValueError(f"{bbox_name} debe tener exactamente 4 elementos: [xmin, ymin, xmax, ymax].")
 
     if any(not isinstance(value, int) for value in bbox):
         raise TypeError(f"{bbox_name} debe contener solo enteros.")
@@ -44,7 +44,7 @@ def _validate_bbox(bbox: list[int], bbox_name: str) -> None:
 
 def _denormalize_bbox(bbox: list[int], width: int, height: int) -> tuple[int, int, int, int]:
     """Convierte un bbox normalizado (0-1000) a coordenadas en píxeles de la imagen."""
-    ymin_norm, xmin_norm, ymax_norm, xmax_norm = bbox
+    xmin_norm, ymin_norm, xmax_norm, ymax_norm = bbox
 
     xmin = int((xmin_norm / SCALE_MAX) * width)
     ymin = int((ymin_norm / SCALE_MAX) * height)
@@ -77,9 +77,9 @@ def draw_comparison_bboxes(
 
     Args:
         image_path: Ruta de la imagen de entrada.
-        gt_bbox: Bounding box Ground Truth normalizado [ymin, xmin, ymax, xmax] en escala 0-1000.
+        gt_bbox: Bounding box Ground Truth normalizado [xmin, ymin, xmax, ymax] en escala 0-1000.
             Si es None, se omite el dibujo de Ground Truth.
-        pred_bbox: Bounding box predicho normalizado [ymin, xmin, ymax, xmax] en escala 0-1000.
+        pred_bbox: Bounding box predicho normalizado [xmin, ymin, xmax, ymax] en escala 0-1000.
         model_name: Nombre del modelo que generó la predicción.
         iou_score: Valor de IoU opcional para mostrar en el texto superpuesto.
         gt_label: Texto opcional para la caja GT (p. ej. tipo de pólipo).
@@ -191,7 +191,7 @@ def draw_multi_comparison_bboxes(
     Args:
         image_path: Ruta de la imagen de entrada.
         gt_bboxes: Lista de bboxes GT (puede contener None en elementos sin referencia).
-        pred_bboxes: Lista de bboxes predichas en formato [ymin, xmin, ymax, xmax].
+        pred_bboxes: Lista de bboxes predichas en formato [xmin, ymin, xmax, ymax].
         model_name: Nombre del modelo.
         iou_scores: Lista opcional de IoU por deteccion.
         output_path: Ruta opcional de guardado.

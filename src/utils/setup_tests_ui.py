@@ -230,7 +230,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             run_poc_bbox_wrapper,
             description=(
                 "Ejecuta prueba de concepto de visual grounding y valida si el modelo "
-                "devuelve coordenadas [ymin,xmin,ymax,xmax] en rango 0-1000."
+                "devuelve coordenadas [xmin,ymin,xmax,ymax] en rango 0-1000."
             ),
         ),
         kit.MenuItem(

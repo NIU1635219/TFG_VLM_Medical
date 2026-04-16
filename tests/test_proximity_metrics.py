@@ -54,7 +54,7 @@ def test_proximity_score_returns_components_and_combined() -> None:
 
 
 def test_proximity_score_invalid_box_raises() -> None:
-    box_a = [500, 100, 300, 200]  # ymin > ymax
+    box_a = [500, 100, 300, 200]  # xmin > xmax
     box_b = [100, 100, 200, 200]
 
     with pytest.raises(ValueError):

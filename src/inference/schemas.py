@@ -457,7 +457,10 @@ class ImageQualityAssessment(BaseModel):
 
 
 class BoundingBoxDetection(BaseModel):
-    """Detección individual para visual grounding con caja normalizada 0-1000."""
+    """Detección individual para visual grounding con caja normalizada 0-1000.
+
+    INSTRUCCIÓN DEL SISTEMA: Return their locations in the form of coordinates. Mapea las coordenadas resultantes a las variables xmin, ymin, xmax, ymax.
+    """
 
     detected_subject: str = Field(
         ...,
@@ -468,23 +471,17 @@ class BoundingBoxDetection(BaseModel):
             "No debe ser una sola palabra como 'cat' o 'dog'."
         ),
     )
-    ymin: int = Field(
-        ...,
-        ge=0,
-        le=1000,
-        description="Coordenada Y mínima normalizada en escala 0-1000.",
-    )
     xmin: int = Field(
         ...,
         ge=0,
         le=1000,
         description="Coordenada X mínima normalizada en escala 0-1000.",
     )
-    ymax: int = Field(
+    ymin: int = Field(
         ...,
         ge=0,
         le=1000,
-        description="Coordenada Y máxima normalizada en escala 0-1000.",
+        description="Coordenada Y mínima normalizada en escala 0-1000.",
     )
     xmax: int = Field(
         ...,
@@ -492,14 +489,20 @@ class BoundingBoxDetection(BaseModel):
         le=1000,
         description="Coordenada X máxima normalizada en escala 0-1000.",
     )
+    ymax: int = Field(
+        ...,
+        ge=0,
+        le=1000,
+        description="Coordenada Y máxima normalizada en escala 0-1000.",
+    )
 
     @model_validator(mode="after")
     def validate_bbox_geometry(self) -> "BoundingBoxDetection":
         """Garantiza geometría válida y área positiva de la bbox."""
-        if self.ymin >= self.ymax:
-            raise ValueError("BoundingBoxDetection inválida: `ymin` debe ser menor que `ymax`.")
         if self.xmin >= self.xmax:
             raise ValueError("BoundingBoxDetection inválida: `xmin` debe ser menor que `xmax`.")
+        if self.ymin >= self.ymax:
+            raise ValueError("BoundingBoxDetection inválida: `ymin` debe ser menor que `ymax`.")
         return self
 
 
@@ -547,6 +550,8 @@ class BoundingBox(BaseModel):
 class PolypDiagnosisAndGrounding(BaseModel):
     """
     Esquema avanzado para visual grounding y diagnóstico diferencial de pólipos.
+
+    INSTRUCCIÓN DEL SISTEMA: Return their locations in the form of coordinates. Mapea las coordenadas resultantes a las variables xmin, ymin, xmax, ymax.
     """
 
     DEFAULT_SYSTEM_PROMPT: ClassVar[str] = (
@@ -567,45 +572,29 @@ class PolypDiagnosisAndGrounding(BaseModel):
         ),
     )
 
-    ymin: int = Field(
-        ..., 
-        ge=0, 
-        le=1000, 
-        description=(
-            "Coordenada vertical mínima (borde superior) del recuadro que encierra la lesión. "
-            "Calculada en una escala normalizada de 0 a 1000, donde 0 representa el límite superior absoluto de la imagen. "
-            "Debe marcar el punto más alto donde comienza el tejido anómalo."
-        )
-    )
     xmin: int = Field(
-        ..., 
-        ge=0, 
-        le=1000, 
-        description=(
-            "Coordenada horizontal mínima (borde izquierdo) del recuadro que encierra la lesión. "
-            "En la escala normalizada 0-1000, el valor 0 indica el extremo izquierdo de la captura. "
-            "Debe situarse exactamente en el margen izquierdo donde se detecta el cambio de textura o relieve."
-        )
+        ...,
+        ge=0,
+        le=1000,
+        description="Coordenada X mínima normalizada en escala 0-1000.",
     )
-    ymax: int = Field(
-        ..., 
-        ge=0, 
-        le=1000, 
-        description=(
-            "Coordenada vertical máxima (borde inferior) del recuadro que encierra la lesión. "
-            "En la escala normalizada 0-1000, el valor 1000 representa el fondo de la imagen. "
-            "Este valor debe ser estrictamente mayor que ymin y delimitar el final de la lesión hacia abajo."
-        )
+    ymin: int = Field(
+        ...,
+        ge=0,
+        le=1000,
+        description="Coordenada Y mínima normalizada en escala 0-1000.",
     )
     xmax: int = Field(
-        ..., 
-        ge=0, 
-        le=1000, 
-        description=(
-            "Coordenada horizontal máxima (borde derecho) del recuadro que encierra la lesión. "
-            "En la escala normalizada 0-1000, el valor 1000 indica el extremo derecho de la captura. "
-            "Debe situarse en el punto más a la derecha donde el pólipo se une con la mucosa sana."
-        )
+        ...,
+        ge=0,
+        le=1000,
+        description="Coordenada X máxima normalizada en escala 0-1000.",
+    )
+    ymax: int = Field(
+        ...,
+        ge=0,
+        le=1000,
+        description="Coordenada Y máxima normalizada en escala 0-1000.",
     )
 
     # --- PASO 3: ANÁLISIS CLÍNICO DETALLADO ---
@@ -644,8 +633,11 @@ class PolypDiagnosisAndGrounding(BaseModel):
 
     @model_validator(mode="after")
     def validate_bbox_geometry(self) -> "PolypDiagnosisAndGrounding":
-        if self.ymin >= self.ymax or self.xmin >= self.xmax:
-            raise ValueError("Geometría de Bounding Box inválida.")
+        """Garantiza geometría válida y área positiva de la bbox."""
+        if self.xmin >= self.xmax:
+            raise ValueError("BoundingBoxDetection inválida: `xmin` debe ser menor que `xmax`.")
+        if self.ymin >= self.ymax:
+            raise ValueError("BoundingBoxDetection inválida: `ymin` debe ser menor que `ymax`.")
         return self
 
 

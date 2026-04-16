@@ -1,7 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, mock_open, patch
+import src.inference.vlm_runner as vlm_module
 from src.inference.vlm_runner import VLMLoader, GenericObjectDetection
-from src.inference.schemas import AdvancedPolypClassification
+from src.inference.schemas import AdvancedPolypClassification, PolypDiagnosisAndGrounding
 
 try:
     from PIL import Image as PILImage
@@ -307,8 +308,8 @@ def test_inference_does_not_send_native_thinking_config(mock_lms_sdk):
 
 
 @pytest.mark.skipif(PILImage is None, reason="Pillow no está disponible")
-def test_prepare_image_source_for_lms_preserves_high_resolution_until_1_8mp(tmp_path):
-    """Redimensiona por píxeles máximos, manteniendo relación de aspecto útil."""
+def test_prepare_image_source_for_lms_resizes_to_square_lanczos_for_qwen(tmp_path):
+    """Aplica resize cuadrado 1024x1024 para grounding, evitando drift espacial."""
     image_path = tmp_path / "large_input.jpg"
     source_image = PILImage.new("RGB", (3000, 1000), color="white")
     source_image.save(image_path)
@@ -319,9 +320,12 @@ def test_prepare_image_source_for_lms_preserves_high_resolution_until_1_8mp(tmp_
     prepared_image = PILImage.open(prepared)
     width, height = prepared_image.size
 
-    assert width * height <= 1_800_000
-    assert width > height
-    assert width > 2000
+    if vlm_module.cv2 is not None:
+        assert width == 1024
+        assert height == 1024
+    else:
+        # Fallback legacy si OpenCV no está disponible.
+        assert width * height <= 1_800_000
 
 
 @pytest.mark.skipif(PILImage is None, reason="Pillow no está disponible")
@@ -334,7 +338,39 @@ def test_prepare_image_source_for_lms_handles_windows_style_name_on_posix(tmp_pa
     loader = VLMLoader(model_path=FAKE_MODEL_TAG)
     prepared = loader._prepare_image_source_for_lms(str(image_path).replace("/", "\\"))
 
-    assert getattr(prepared, "name", "").endswith("sample_input.png")
+    if vlm_module.cv2 is not None:
+        assert getattr(prepared, "name", "").endswith("sample_input.jpg")
+    else:
+        assert getattr(prepared, "name", "").endswith("sample_input.png")
+
+
+def test_inference_forces_temperature_zero_for_grounding_schema(loader, mock_lms_sdk):
+    """En esquemas de grounding se fuerza temperatura 0.0 para estabilidad espacial."""
+    _mock_lms, mock_model = mock_lms_sdk
+    mock_response = MagicMock()
+    mock_response.parsed = {
+        "detected_subject": "lesion central con bordes suaves y relieve discreto" * 5,
+        "xmin": 100,
+        "ymin": 110,
+        "xmax": 300,
+        "ymax": 320,
+        "morphology_and_borders": "texto" * 60,
+        "surface_and_vascular_pattern": "texto" * 60,
+        "clinical_justification": "texto" * 80,
+        "final_diagnosis_class": "AD",
+    }
+    mock_model.respond.return_value = mock_response
+
+    with patch("os.path.isfile", return_value=True), patch("builtins.open", mock_open(read_data=b"image-bytes")):
+        loader.inference(
+            FAKE_IMAGE_PATH,
+            "Prompt de prueba",
+            schema=PolypDiagnosisAndGrounding,
+            temperature=0.9,
+        )
+
+    first_call_kwargs = mock_model.respond.call_args_list[0].kwargs
+    assert first_call_kwargs.get("config") == {"temperature": 0.0}
 
 
 def test_inference_accepts_mixed_separator_path(monkeypatch, loader, mock_lms_sdk):

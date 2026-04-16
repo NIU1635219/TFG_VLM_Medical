@@ -40,7 +40,7 @@ def test_iou_concentric_boxes() -> None:
 
 
 def test_iou_invalid_box_raises_error() -> None:
-    box_a = [900, 100, 800, 500]  # ymin > ymax
+    box_a = [900, 100, 800, 500]  # xmin > xmax
     box_b = [100, 100, 800, 500]
 
     with pytest.raises(ValueError):

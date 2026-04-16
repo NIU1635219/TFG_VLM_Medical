@@ -485,15 +485,30 @@ def clear_screen_ansi(*, os_module: Any, sys_module: Any) -> None:
         os_module (Any): Módulo `os` inyectado.
         sys_module (Any): Módulo `sys` inyectado.
     """
+    # En Windows priorizamos `cls` porque es el camino más estable entre
+    # hosts de consola (PowerShell, Terminal integrado, etc.).
+    if os_module.name == "nt":
+        try:
+            os_module.system("cls")
+            return
+        except Exception:
+            # Fallback ANSI si `cls` no está disponible.
+            pass
+
     try:
-        sys_module.stdout.write("\033[H\033[2J")
+        # 2J limpia pantalla visible, 3J limpia scrollback, H reposiciona cursor.
+        sys_module.stdout.write("\033[2J\033[3J\033[H")
         sys_module.stdout.flush()
         return
     except Exception:
         pass
 
-    if os_module.name == "nt":
-        os_module.system("cls")
+    # Último recurso en POSIX si ANSI falla por algún motivo.
+    if os_module.name != "nt":
+        try:
+            os_module.system("clear")
+        except Exception:
+            pass
 
 
 def read_key(*, os_module: Any, msvcrt_module: Any) -> str | None:

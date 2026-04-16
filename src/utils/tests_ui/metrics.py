@@ -53,24 +53,24 @@ def summarize_numeric(values: Sequence[float | int]) -> dict[str, float | None]:
 def _validate_box(box: list[int], box_name: str) -> None:
     """Valida la estructura y la consistencia geometrica de una bbox normalizada."""
     if len(box) != 4:
-        raise ValueError(f"{box_name} debe tener exactamente 4 elementos [ymin, xmin, ymax, xmax].")
+        raise ValueError(f"{box_name} debe tener exactamente 4 elementos [xmin, ymin, xmax, ymax].")
 
     if any(not isinstance(value, int) for value in box):
         raise ValueError(f"{box_name} debe contener solo enteros.")
 
-    ymin, xmin, ymax, xmax = box
-    if ymin > ymax:
-        raise ValueError(f"{box_name} es invalida: ymin no puede ser mayor que ymax.")
+    xmin, ymin, xmax, ymax = box
     if xmin > xmax:
         raise ValueError(f"{box_name} es invalida: xmin no puede ser mayor que xmax.")
+    if ymin > ymax:
+        raise ValueError(f"{box_name} es invalida: ymin no puede ser mayor que ymax.")
 
 
 def calculate_iou(boxA: list[int], boxB: list[int]) -> float:
     """
     Calcula la metrica IoU (Intersection over Union) entre dos Bounding Boxes.
 
-    Esta funcion recibe dos cajas en formato normalizado estilo Detectron/PyTorch:
-    [ymin, xmin, ymax, xmax], donde cada coordenada es un entero en el rango 0-1000.
+    Esta funcion recibe dos cajas en formato normalizado estilo Qwen Visual Grounding:
+    [xmin, ymin, xmax, ymax], donde cada coordenada es un entero en el rango 0-1000.
 
     IoU se define como:
     area_interseccion / area_union
@@ -86,8 +86,8 @@ def calculate_iou(boxA: list[int], boxB: list[int]) -> float:
       lanza ValueError.
 
     Args:
-        boxA: Primera bbox en formato [ymin, xmin, ymax, xmax].
-        boxB: Segunda bbox en formato [ymin, xmin, ymax, xmax].
+        boxA: Primera bbox en formato [xmin, ymin, xmax, ymax].
+        boxB: Segunda bbox en formato [xmin, ymin, xmax, ymax].
 
     Returns:
         Valor IoU en el rango [0.0, 1.0].
@@ -95,13 +95,13 @@ def calculate_iou(boxA: list[int], boxB: list[int]) -> float:
     _validate_box(boxA, "boxA")
     _validate_box(boxB, "boxB")
 
-    y_inter_min = max(boxA[0], boxB[0])
-    x_inter_min = max(boxA[1], boxB[1])
-    y_inter_max = min(boxA[2], boxB[2])
-    x_inter_max = min(boxA[3], boxB[3])
+    x_inter_min = max(boxA[0], boxB[0])
+    y_inter_min = max(boxA[1], boxB[1])
+    x_inter_max = min(boxA[2], boxB[2])
+    y_inter_max = min(boxA[3], boxB[3])
 
-    inter_height = max(0, y_inter_max - y_inter_min)
     inter_width = max(0, x_inter_max - x_inter_min)
+    inter_height = max(0, y_inter_max - y_inter_min)
     inter_area = inter_height * inter_width
 
     area_a = max(0, boxA[2] - boxA[0]) * max(0, boxA[3] - boxA[1])
@@ -119,21 +119,21 @@ def calculate_center_distance_score(boxA: list[int], boxB: list[int], *, alpha: 
     _validate_box(boxA, "boxA")
     _validate_box(boxB, "boxB")
 
-    center_a_y = (boxA[0] + boxA[2]) / 2.0
-    center_a_x = (boxA[1] + boxA[3]) / 2.0
-    center_b_y = (boxB[0] + boxB[2]) / 2.0
-    center_b_x = (boxB[1] + boxB[3]) / 2.0
+    center_a_x = (boxA[0] + boxA[2]) / 2.0
+    center_a_y = (boxA[1] + boxA[3]) / 2.0
+    center_b_x = (boxB[0] + boxB[2]) / 2.0
+    center_b_y = (boxB[1] + boxB[3]) / 2.0
 
     delta_y = center_a_y - center_b_y
     delta_x = center_a_x - center_b_x
     center_distance = math.sqrt((delta_y * delta_y) + (delta_x * delta_x))
 
-    y_min = min(boxA[0], boxB[0])
-    x_min = min(boxA[1], boxB[1])
-    y_max = max(boxA[2], boxB[2])
-    x_max = max(boxA[3], boxB[3])
-    envelope_h = max(1.0, float(y_max - y_min))
+    x_min = min(boxA[0], boxB[0])
+    y_min = min(boxA[1], boxB[1])
+    x_max = max(boxA[2], boxB[2])
+    y_max = max(boxA[3], boxB[3])
     envelope_w = max(1.0, float(x_max - x_min))
+    envelope_h = max(1.0, float(y_max - y_min))
     envelope_diag = math.sqrt((envelope_h * envelope_h) + (envelope_w * envelope_w))
 
     norm_dist = center_distance / envelope_diag
@@ -156,20 +156,20 @@ def calculate_size_relative_score(boxA: list[int], boxB: list[int]) -> float:
 
 def _intersection_area(boxA: list[int], boxB: list[int]) -> int:
     """Devuelve area de interseccion (0 si no hay solapamiento)."""
-    y_inter_min = max(boxA[0], boxB[0])
-    x_inter_min = max(boxA[1], boxB[1])
-    y_inter_max = min(boxA[2], boxB[2])
-    x_inter_max = min(boxA[3], boxB[3])
+    x_inter_min = max(boxA[0], boxB[0])
+    y_inter_min = max(boxA[1], boxB[1])
+    x_inter_max = min(boxA[2], boxB[2])
+    y_inter_max = min(boxA[3], boxB[3])
 
-    inter_height = max(0, y_inter_max - y_inter_min)
     inter_width = max(0, x_inter_max - x_inter_min)
+    inter_height = max(0, y_inter_max - y_inter_min)
     return inter_height * inter_width
 
 
 def _boxes_touch_or_overlap(boxA: list[int], boxB: list[int]) -> bool:
     """True cuando las cajas se tocan o se solapan (sin hueco entre ellas)."""
-    separated_y = boxA[2] < boxB[0] or boxB[2] < boxA[0]
-    separated_x = boxA[3] < boxB[1] or boxB[3] < boxA[1]
+    separated_x = boxA[2] < boxB[0] or boxB[2] < boxA[0]
+    separated_y = boxA[3] < boxB[1] or boxB[3] < boxA[1]
     return not (separated_y or separated_x)
 
 

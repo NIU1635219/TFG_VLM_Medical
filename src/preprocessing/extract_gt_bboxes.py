@@ -12,10 +12,10 @@ from tqdm import tqdm
 DEFAULT_SPLITS: tuple[str, ...] = ("m_train", "m_valid")
 EMPTY_BBOX_COLUMNS: tuple[str, ...] = (
     "image_id",
-    "ymin",
     "xmin",
-    "ymax",
+    "ymin",
     "xmax",
+    "ymax",
     "mask_path",
 )
 
@@ -88,7 +88,7 @@ def extract_normalized_bbox(mask_path: Path) -> list[int]:
     """
     Extrae y normaliza un bounding box a escala 0-1000 desde una máscara.
 
-    Devuelve el bbox en formato [ymin, xmin, ymax, xmax]. Si no hay contornos,
+    Devuelve el bbox en formato [xmin, ymin, xmax, ymax]. Si no hay contornos,
     devuelve [0, 0, 0, 0].
     """
     image = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
@@ -110,7 +110,7 @@ def extract_normalized_bbox(mask_path: Path) -> list[int]:
     xmax = int(((x + w) / width) * 1000)
     ymax = int(((y + h) / height) * 1000)
 
-    return [ymin, xmin, ymax, xmax]
+    return [xmin, ymin, xmax, ymax]
 
 
 def build_bbox_table(mask_paths: list[Path]) -> pd.DataFrame:
@@ -118,14 +118,14 @@ def build_bbox_table(mask_paths: list[Path]) -> pd.DataFrame:
     records: list[dict[str, str | int]] = []
 
     for mask_path in tqdm(mask_paths, desc="Extrayendo BBoxes", unit="mask"):
-        ymin, xmin, ymax, xmax = extract_normalized_bbox(mask_path)
+        xmin, ymin, xmax, ymax = extract_normalized_bbox(mask_path)
         records.append(
             {
                 "image_id": mask_path.stem,
-                "ymin": ymin,
                 "xmin": xmin,
-                "ymax": ymax,
+                "ymin": ymin,
                 "xmax": xmax,
+                "ymax": ymax,
                 "mask_path": str(mask_path),
             }
         )

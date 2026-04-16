@@ -50,6 +50,10 @@ def test_markdown_records_keep_summary_and_visualization_aligned(tmp_path: Path)
         "image_id": "17",
         "image_path": image_path,
         "ground_truth_cls": "ad",
+        "ttft_seconds": 0.15,
+        "generation_duration_seconds": 0.7,
+        "total_duration_seconds": 1.1,
+        "tokens_per_second": 22.5,
         "payload": {
             "final_diagnosis_class": "ASS",
             "ymin": 100,
@@ -57,7 +61,7 @@ def test_markdown_records_keep_summary_and_visualization_aligned(tmp_path: Path)
             "ymax": 220,
             "xmax": 330,
         },
-        "ground_truth_bbox": [100, 110, 220, 330],
+        "ground_truth_bbox": [110, 100, 330, 220],
         "class_match": False,
         "iou_score": 0.2,
     }
@@ -73,7 +77,7 @@ def test_markdown_records_keep_summary_and_visualization_aligned(tmp_path: Path)
             "ymax": 250,
             "xmax": 360,
         },
-        "ground_truth_bbox": [120, 140, 250, 360],
+        "ground_truth_bbox": [140, 120, 360, 250],
         "class_match": False,
         "iou_score": 0.3,
     }
@@ -108,6 +112,10 @@ def test_markdown_records_keep_summary_and_visualization_aligned(tmp_path: Path)
     assert records[1]["predicted_cls"] == "AD"
     assert records[0]["annotated_path"] == str(ann_a)
     assert records[1]["annotated_path"] == str(ann_b)
+    assert records[0]["ttft_seconds"] == 0.15
+    assert records[0]["generation_duration_seconds"] == 0.7
+    assert records[0]["total_duration_seconds"] == 1.1
+    assert records[0]["tokens_per_second"] == 22.5
 
 
 def test_markdown_records_resolve_legacy_images_dir_for_visualization(tmp_path: Path) -> None:
@@ -129,7 +137,7 @@ def test_markdown_records_resolve_legacy_images_dir_for_visualization(tmp_path: 
             "ymax": 220,
             "xmax": 330,
         },
-        "ground_truth_bbox": [100, 110, 220, 330],
+        "ground_truth_bbox": [110, 100, 330, 220],
         "class_match": True,
         "iou_score": 0.9,
     }
@@ -208,6 +216,10 @@ def test_generate_report_adds_global_accuracy_and_heatmap(tmp_path: Path) -> Non
             "class_match": True,
             "iou": 0.7,
             "proximity": 0.85,
+            "ttft_seconds": 0.2,
+            "generation_duration_seconds": 0.9,
+            "total_duration_seconds": 1.2,
+            "tokens_per_second": 45.0,
             "annotated_path": None,
         },
         {
@@ -217,6 +229,10 @@ def test_generate_report_adds_global_accuracy_and_heatmap(tmp_path: Path) -> Non
             "class_match": False,
             "iou": 0.3,
             "proximity": 0.45,
+            "ttft_seconds": 0.4,
+            "generation_duration_seconds": 1.7,
+            "total_duration_seconds": 2.4,
+            "tokens_per_second": 33.0,
             "annotated_path": None,
         },
     ]
@@ -233,6 +249,21 @@ def test_generate_report_adds_global_accuracy_and_heatmap(tmp_path: Path) -> Non
     markdown = report_path.read_text(encoding="utf-8")
     assert "- **Global Accuracy (class):** 50.00%" in markdown
     assert "- **Macro-F1 (AD/HP/ASS):**" in markdown
+    assert "- **Inference total (avg):** 1.800 s" in markdown
+    assert "- **Inference total (sum):** 3.600 s" in markdown
+    assert "- **Generation time (avg):** 1.300 s" in markdown
+    assert "- **Generation time (sum):** 2.600 s" in markdown
+    assert "- **TTFT (avg):** 0.300 s" in markdown
+    assert "- **TPS (avg):** 39.00 tok/s" in markdown
+    assert "### Rendimiento temporal de inferencia" in markdown
+    assert "Tiempo medio por inferencia (total): 1.800 s" in markdown
+    assert "Tiempo total de inferencia (acumulado): 3.600 s" in markdown
+    assert "Tiempo medio de generacion: 1.300 s" in markdown
+    assert "Tiempo total de generacion (acumulado): 2.600 s" in markdown
+    assert "### Lectura de clasificación" in markdown
+    assert "### Lectura espacial integrada" in markdown
+    assert "### Lectura temporal detallada" in markdown
+    assert "### Cobertura de métricas" in markdown
     assert "## Mapa de calor de confusión" in markdown
     assert "### Top de errores más frecuentes" in markdown
     assert "HP->AD: 1" in markdown
@@ -255,6 +286,12 @@ def test_generate_report_adds_global_accuracy_and_heatmap(tmp_path: Path) -> Non
     assert "report_assets/proximity_boxplot_class_correctness.png" in markdown
     assert "report_assets/proximity_threshold_cumulative_curve.png" in markdown
     assert "report_assets/class_confusion_heatmap.png" in markdown
+    assert "Inference total: 1.200 s" in markdown
+    assert "Generation time: 0.900 s" in markdown
+    assert "TTFT: 0.200 s" in markdown
+    assert "TPS: 45.00 tok/s" in markdown
+    assert "latencia total es" in markdown
+    assert "### Siguiente paso sugerido" in markdown
     assert (run_dir / "report_assets" / "class_confusion_heatmap.png").exists()
     assert (run_dir / "report_assets" / "iou_distribution_histogram.png").exists()
     assert (run_dir / "report_assets" / "iou_class_summary_grouped_bars.png").exists()

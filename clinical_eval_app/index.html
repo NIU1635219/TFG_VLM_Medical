@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Validacion Clinica | Match / No Match</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Sans+3:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <h2 class="eyebrow-title">Herramienta de Evaluacion Cualitativa</h2>
+          <h1>Validacion Clinica IA: Match / No Match</h1>
+        </div>
+        <div class="progress-wrap" aria-live="polite">
+          <p id="progressText" class="progress-text">Caso 0 de 0</p>
+          <div class="progress-track" role="progressbar" aria-labelledby="progressText" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="progressBar" class="progress-fill"></div>
+          </div>
+            <div class="progress-actions" role="group" aria-label="Navegacion superior">
+              <button id="btnPrev" class="nav-btn" type="button">←</button>
+              <button id="btnNext" class="nav-btn" type="button">→</button>
+              <button id="btnOpenGallery" class="gallery-btn" type="button">🗂</button>
+              <button id="btnTheme" class="theme-btn" type="button" title="Cambiar tema">🌙</button>
+            </div>
+        </div>
+      </header>
+
+      <main id="evaluationView" class="layout" aria-live="polite">
+        <section class="image-panel">
+          <div class="image-frame">
+            <img id="caseImage" src="" alt="Imagen clinica del caso" />
+          </div>
+        </section>
+
+        <section class="detail-panel">
+          <div class="badge-row">
+            <span class="badge-label">Diagnostico Real:</span>
+            <strong id="trueClass" class="badge-value">-</strong>
+            <span id="currentVoteBadge" class="vote-state-badge hidden">-</span>
+          </div>
+
+          <article class="explanation-card">
+            <h2>Justificacion de la IA</h2>
+            <p id="aiExplanation"></p>
+          </article>
+
+          <label class="comment-label" for="commentBox">Comentarios del experto (Opcional)</label>
+          <textarea
+            id="commentBox"
+            rows="4"
+            maxlength="1500"
+            placeholder="Anota observaciones clinicas, dudas o contexto relevante..."
+          ></textarea>
+
+          <p id="statusLine" class="status-line" aria-live="polite"></p>
+        </section>
+      </main>
+
+      <section class="action-panel" aria-label="Acciones principales">
+        <div class="action-stack">
+          <div class="actions" role="group" aria-label="Votacion del experto">
+            <button id="btnMatch" class="vote-btn match" type="button">
+              👍 Match (Explicacion Util)
+            </button>
+            <button id="btnNoMatch" class="vote-btn no-match" type="button">
+              👎 No Match (Alucinacion/Error)
+            </button>
+          </div>
+          <div class="action-tools" role="group" aria-label="Herramientas de exportacion">
+            <button id="btnExportQuick" class="export-btn export-quick" type="button">
+              💾 Exportar CSV (Progreso)
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section id="localLoader" class="completion hidden" aria-live="polite">
+        <h2>Carga Local Requerida</h2>
+        <p>
+          Tu navegador bloquea fetch() en file:// por seguridad. Selecciona el archivo
+          <strong>data/cases.json</strong> manualmente para continuar.
+        </p>
+        <label class="comment-label" for="casesFileInput">Selecciona cases.json</label>
+        <input id="casesFileInput" type="file" accept=".json,application/json" title="Seleccionar archivo cases.json" />
+      </section>
+
+      <section id="completionView" class="completion hidden" aria-live="polite">
+        <h2>Evaluacion Completada</h2>
+        <p>Gracias por finalizar la revision. Puedes exportar resultados en cualquier momento.</p>
+        <div class="completion-stats" aria-label="Resumen de resultados">
+          <div class="completion-stat match">
+            <span class="stat-label">👍 Match</span>
+            <strong id="summaryMatch" class="stat-value">0</strong>
+          </div>
+          <div class="completion-stat no-match">
+            <span class="stat-label">👎 No Match</span>
+            <strong id="summaryNoMatch" class="stat-value">0</strong>
+          </div>
+          <div class="completion-stat pending">
+            <span class="stat-label">• Pendientes</span>
+            <strong id="summaryPending" class="stat-value">0</strong>
+          </div>
+          <div class="completion-stat comment">
+            <span class="stat-label">💬 Comentarios</span>
+            <strong id="summaryComments" class="stat-value">0</strong>
+          </div>
+        </div>
+        <p class="completion-hint">Descarga los resultados en CSV para cierre del proceso.</p>
+        <button id="btnExportFinal" class="export-btn completion-export" type="button">
+          💾 Descargar CSV Final
+        </button>
+      </section>
+
+        <section id="galleryModal" class="gallery-modal hidden" aria-live="polite" aria-label="Galeria de casos">
+          <div class="gallery-backdrop" id="galleryBackdrop"></div>
+          <div class="gallery-panel" role="dialog" aria-modal="true" aria-labelledby="galleryTitle">
+            <div class="gallery-header">
+              <h2 id="galleryTitle">Galeria de Navegacion</h2>
+              <button id="btnCloseGallery" class="gallery-close-btn" type="button" title="Cerrar galeria">✕</button>
+            </div>
+            <p class="gallery-subtitle">Haz clic en cualquier miniatura para ir directamente al caso.</p>
+            <div class="gallery-legend" aria-label="Leyenda de estados">
+              <span class="legend-chip match">👍 Match</span>
+              <span class="legend-chip no-match">👎 No Match</span>
+              <span class="legend-chip pending">• Pendiente</span>
+              <span class="legend-chip comment">💬 Con comentario</span>
+            </div>
+            <div id="galleryGrid" class="gallery-grid"></div>
+          </div>
+        </section>
+    </div>
+
+    <script src="app.js" defer></script>
+  </body>
+</html>

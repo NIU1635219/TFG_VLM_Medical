@@ -15,7 +15,11 @@ from typing import Any, Callable, TypeVar, cast
 import cv2
 import pandas as pd
 
-from src.inference.schemas import PolypDiagnosisAndGrounding, PolypDiagnosisClassificationOnly
+from src.inference.schemas import (
+    AssistedClinicalReport,
+    PolypDiagnosisAndGrounding,
+    PolypDiagnosisClassificationOnly,
+)
 from src.utils.tests_ui.metrics import calculate_iou, calculate_proximity_score
 
 from .report_aggregation import (
@@ -754,6 +758,7 @@ def generate_single_detection_markdown_report(
 
 
 __all__ = [
+    "AssistedClinicalReport",
     "DEFAULT_GROUND_TRUTH_CSV",
     "DEFAULT_SCENARIO_RESULTS_DIR",
     "CLASS_COLUMN_CANDIDATES",

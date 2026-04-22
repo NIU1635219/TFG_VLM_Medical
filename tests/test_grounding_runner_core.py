@@ -207,6 +207,8 @@ def test_generate_report_adds_global_accuracy_and_heatmap(tmp_path: Path) -> Non
     run_dir.mkdir(parents=True)
     jsonl_path = run_dir / "results.jsonl"
     jsonl_path.write_text("", encoding="utf-8")
+    case_image = run_dir / "case_1.jpg"
+    case_image.write_text("img", encoding="utf-8")
 
     records = [
         {
@@ -220,7 +222,20 @@ def test_generate_report_adds_global_accuracy_and_heatmap(tmp_path: Path) -> Non
             "generation_duration_seconds": 0.9,
             "total_duration_seconds": 1.2,
             "tokens_per_second": 45.0,
-            "annotated_path": None,
+            "model_response_fields": {
+                "final_diagnosis_class": "AD",
+                "bbox": {
+                    "ymin": 10,
+                    "xmin": 20,
+                    "ymax": 120,
+                    "xmax": 220,
+                },
+                "reasoning": {
+                    "confidence": 0.93,
+                    "notes": ["well_delimited", "benign_pattern"],
+                },
+            },
+            "annotated_path": str(case_image),
         },
         {
             "image_id": "img_2",
@@ -233,6 +248,15 @@ def test_generate_report_adds_global_accuracy_and_heatmap(tmp_path: Path) -> Non
             "generation_duration_seconds": 1.7,
             "total_duration_seconds": 2.4,
             "tokens_per_second": 33.0,
+            "model_response_fields": {
+                "final_diagnosis_class": "AD",
+                "bbox": {
+                    "ymin": 12,
+                    "xmin": 25,
+                    "ymax": 130,
+                    "xmax": 240,
+                },
+            },
             "annotated_path": None,
         },
     ]
@@ -292,6 +316,22 @@ def test_generate_report_adds_global_accuracy_and_heatmap(tmp_path: Path) -> Non
     assert "TPS: 45.00 tok/s" in markdown
     assert "latencia total es" in markdown
     assert "### Siguiente paso sugerido" in markdown
+    assert "<summary>Campos de respuesta del modelo</summary>" in markdown
+    assert "<details>" in markdown
+    assert "<summary>reasoning</summary>" in markdown
+    assert "<summary>notes</summary>" in markdown
+    assert "<summary>item_1</summary>" in markdown
+    assert "<summary>bbox</summary>" not in markdown
+    assert "<summary>final_diagnosis_class</summary>" not in markdown
+    assert "<summary>xmin</summary>" not in markdown
+    assert "<summary>ymin</summary>" not in markdown
+    assert "<summary>xmax</summary>" not in markdown
+    assert "<summary>ymax</summary>" not in markdown
+    visual_idx = markdown.find("### Visualización")
+    collapsible_idx = markdown.find("<summary>Campos de respuesta del modelo</summary>")
+    assert visual_idx != -1
+    assert collapsible_idx != -1
+    assert visual_idx < collapsible_idx
     assert (run_dir / "report_assets" / "class_confusion_heatmap.png").exists()
     assert (run_dir / "report_assets" / "iou_distribution_histogram.png").exists()
     assert (run_dir / "report_assets" / "iou_class_summary_grouped_bars.png").exists()

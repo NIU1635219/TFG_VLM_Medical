@@ -1,6 +1,6 @@
 """Selector de escenarios de grounding (stub) separado para mantener el menú principal limpio.
 
-Este módulo contiene la UI de selección de escenarios A/B/C/D/E y está pensado
+Este módulo contiene la UI de selección de escenarios A/B/C/D/E/F y está pensado
 para recibir un `make_header_fn` desde el menú principal para conservar
 consistencia en el renderizado de cabeceras.
 """
@@ -114,7 +114,7 @@ def _select_grounding_sample_size(kit: "UIKit") -> int | None:
 
 
 def _select_grounding_seed(kit: "UIKit", *, initial_value: int = 42) -> int | None:
-    """Solicita semilla común para muestreo reproducible en escenarios A/B/C/D."""
+    """Solicita semilla común para muestreo reproducible en escenarios A/B/C/D/E/F."""
 
     def _validate_seed(raw_value: str) -> str | None:
         if not raw_value:
@@ -128,7 +128,7 @@ def _select_grounding_seed(kit: "UIKit", *, initial_value: int = 42) -> int | No
         title="GROUNDING SCENARIOS · RANDOM SEED",
         intro_lines=[
             (
-                f"{kit.style.DIM}Usa la misma seed para que los escenarios A/B/C/D"
+                f"{kit.style.DIM}Usa la misma seed para que los escenarios A/B/C/D/E/F"
                 f" evalúen el mismo subconjunto de imágenes.{kit.style.ENDC}"
             ),
         ],
@@ -360,6 +360,32 @@ def _run_scenario_e_with_dashboards(
     )
 
 
+def _run_scenario_f_with_dashboards(
+    *,
+    kit: "UIKit",
+    app: "AppContext",
+    model_tag: str,
+    sample_size: int,
+    seed: int,
+    resume_mode: bool = False,
+    resume_output_path: Path | None = None,
+) -> int:
+    """Ejecuta Scenario F con dashboard en vivo y pantalla final."""
+    from src.scripts.grounding_experiments.run_scenario_F import main as run_scenario_f_main
+
+    return _run_scenario_with_dashboards(
+        kit=kit,
+        app=app,
+        scenario_code="F",
+        run_main=run_scenario_f_main,
+        model_tag=model_tag,
+        sample_size=sample_size,
+        seed=seed,
+        resume_mode=resume_mode,
+        resume_output_path=resume_output_path,
+    )
+
+
 def run_grounding_scenarios_selector_wrapper(
     kit: "UIKit",
     app: "AppContext",
@@ -367,11 +393,11 @@ def run_grounding_scenarios_selector_wrapper(
     make_header_fn: Callable[[str], Any],
     select_model: Callable[[str, str], str | None],
 ) -> None:
-    """Muestra selector stub de escenarios de grounding A/B/C/D.
+    """Muestra selector stub de escenarios de grounding A/B/C/D/E/F.
 
     Este stub mantiene la UX y el texto tal como estaba en el menú original.
     Más adelante se podrá reemplazar la acción de cada opción por el runner
-    correspondiente (A/B/C/D).
+    correspondiente (A/B/C/D/E/F).
     """
 
     scenario_options = [
@@ -401,6 +427,11 @@ def run_grounding_scenarios_selector_wrapper(
             description="Inferencia sobre recorte exacto con clase inyectada.",
         ),
         kit.MenuItem(
+            " Scenario F (Reporte Clínico Asistido)",
+            lambda: "F",
+            description="Grounding + informe clínico explicativo con diagnóstico GT inyectado.",
+        ),
+        kit.MenuItem(
             " Back",
             lambda: "BACK",
             description="Volver al menú de tests.",
@@ -424,7 +455,7 @@ def run_grounding_scenarios_selector_wrapper(
 
     if hasattr(selected, "action") and callable(selected.action):
         scenario_code = str(selected.action())
-        if scenario_code in {"A", "B", "C", "D", "E"}:
+        if scenario_code in {"A", "B", "C", "D", "E", "F"}:
             raw_outputs = kit.cursor_memory.get(_GROUNDING_LAST_OUTPUTS_CURSOR_KEY)
             known_outputs = cast(dict[str, str], raw_outputs) if isinstance(raw_outputs, dict) else {}
             last_output_path = None
@@ -526,6 +557,16 @@ def run_grounding_scenarios_selector_wrapper(
                     )
                 elif scenario_code == "E":
                     exit_code = _run_scenario_e_with_dashboards(
+                        kit=kit,
+                        app=app,
+                        model_tag=model_tag,
+                        sample_size=selected_sample_size,
+                        seed=selected_seed,
+                        resume_mode=resume_mode,
+                        resume_output_path=resume_output_path,
+                    )
+                elif scenario_code == "F":
+                    exit_code = _run_scenario_f_with_dashboards(
                         kit=kit,
                         app=app,
                         model_tag=model_tag,

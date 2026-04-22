@@ -641,6 +641,79 @@ class PolypDiagnosisAndGrounding(BaseModel):
         return self
 
 
+class AssistedClinicalReport(BaseModel):
+    """
+    Esquema para la generación de informes clínicos explicativos asistidos.
+
+    INSTRUCCIÓN DEL SISTEMA: Return their locations in the form of coordinates.
+    Mapea las coordenadas resultantes a las variables xmin, ymin, xmax, ymax.
+    """
+
+    DEFAULT_SYSTEM_PROMPT: ClassVar[str] = (
+        "Eres un experto gastroenterólogo adjunto especializado en endoscopia avanzada. "
+        "PREMISA ESTRICTA: El análisis anatomopatológico (Ground Truth) ya ha confirmado el tipo histológico de la lesión. "
+        "Tu tarea NO es diagnosticar, ni proponer tratamientos. Tu única tarea es la EXPLICABILIDAD CLÍNICA: "
+        "localizar la lesión y redactar un informe que justifique visualmente el diagnóstico proporcionado, "
+        "utilizando terminología médica estandarizada (Clasificación de Paris, patrones NICE/Kudo)."
+    )
+
+    # --- 1. LOCALIZACIÓN ---
+    detected_subject: str = Field(
+        ...,
+        min_length=100,
+        description="Localización espacial directa de la lesión y su relación con la anatomía visible.",
+    )
+    xmin: int = Field(..., ge=0, le=1000, description="Coordenada X mínima normalizada [0-1000].")
+    ymin: int = Field(..., ge=0, le=1000, description="Coordenada Y mínima normalizada [0-1000].")
+    xmax: int = Field(..., ge=0, le=1000, description="Coordenada X máxima normalizada [0-1000].")
+    ymax: int = Field(..., ge=0, le=1000, description="Coordenada Y máxima normalizada [0-1000].")
+
+    # --- 2. EXPLICABILIDAD CLÍNICA ---
+    lesion_morphology: str = Field(
+        ...,
+        min_length=150,
+        description=(
+            "Descripción objetiva de la morfología utilizando la clasificación de Paris "
+            "(ej. sésil, pediculada, plana) y definición de los márgenes (WASP)."
+        ),
+    )
+    surface_vascular_pattern: str = Field(
+        ...,
+        min_length=150,
+        description=(
+            "Análisis técnico de la superficie mucosa y el patrón vascular "
+            "(referenciando patrones NICE o Kudo, ej. vasos engrosados, disrupción vascular, criptas)."
+        ),
+    )
+    diagnostic_rationale: str = Field(
+        ...,
+        min_length=200,
+        description=(
+            "Razonamiento clínico profundo que conecte de forma lógica los hallazgos "
+            "morfológicos y vasculares descritos con el diagnóstico histológico específico "
+            "proporcionado en el prompt."
+        ),
+    )
+
+    # --- 3. DIAGNÓSTICO FINAL ---
+    final_diagnosis_class: Literal["AD", "HP", "ASS"] = Field(
+        ...,
+        description=(
+            "Veredicto histológico final: Adenoma (AD), Pólipo Hiperplásico (HP), "
+            "Adenoma Serrado Sésil (ASS)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_bbox_geometry(self) -> "AssistedClinicalReport":
+        """Garantiza geometría válida y área positiva de la bbox."""
+        if self.xmin >= self.xmax:
+            raise ValueError("BoundingBox inválida: `xmin` debe ser menor que `xmax`.")
+        if self.ymin >= self.ymax:
+            raise ValueError("BoundingBox inválida: `ymin` debe ser menor que `ymax`.")
+        return self
+
+
 class PolypDiagnosisClassificationOnly(BaseModel):
     """
     Variante de diagnóstico sin grounding para escenarios centrados en clasificación.
@@ -702,6 +775,7 @@ SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "ImageQualityAssessment": ImageQualityAssessment,
     "BoundingBox": BoundingBox,
     "PolypDiagnosisAndGrounding": PolypDiagnosisAndGrounding,
+    "AssistedClinicalReport": AssistedClinicalReport,
 }
 
 GenericObjectDetectionWithReasoning = _create_reasoning_schema(
@@ -823,6 +897,21 @@ PolypDiagnosisAndGroundingWithReasoning = _create_reasoning_schema(
     ),
 )
 
+
+AssistedClinicalReportWithReasoning = _create_reasoning_schema(
+    AssistedClinicalReport,
+    reasoning_description=(
+        "Proceso lógico paso a paso que conecta la localización visual de la lesión "
+        "(bbox) con la explicación clínica y la etiqueta final asistida por diagnóstico GT."
+    ),
+    docstring=(
+        "Variante con razonamiento explícito para informe clínico asistido.\n\n"
+        "El modelo debe exponer primero su razonamiento antes de emitir la "
+        "bounding box, la explicación clínica y la clase final."
+    ),
+)
+
+
 REASONING_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "GenericObjectDetection": GenericObjectDetectionWithReasoning,
     "PolypDetection": PolypDetectionWithReasoning,
@@ -833,6 +922,7 @@ REASONING_SCHEMA_REGISTRY: dict[str, type[BaseModel]] = {
     "ImageQualityAssessment": ImageQualityAssessmentWithReasoning,
     "BoundingBox": BoundingBoxWithReasoning,
     "PolypDiagnosisAndGrounding": PolypDiagnosisAndGroundingWithReasoning,
+    "AssistedClinicalReport": AssistedClinicalReportWithReasoning,
 }
 
 

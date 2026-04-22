@@ -20,7 +20,7 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - `UIKit` incluye API de tablas tipadas y reutilizables (`TableColumn`, `TableRow`, `TableCell`, `build_table_items`, `table_menu`) con anchos adaptativos al terminal.
 - Motor de tablas TUI ampliado con celdas avanzadas (`rowspan`/`colspan`) y control de truncado por líneas (`max_cell_lines`) para mejorar legibilidad en terminales estrechos.
 - `UIKit` añade `render_and_wait_responsive(...)` como helper común de espera reactiva, con repintado automático al redimensionar el terminal.
-- Dashboard de escenarios de grounding (A/B/C/D/E) en vivo desde Setup Tests UI:
+- Dashboard de escenarios de grounding (A/B/C/D/E/F) en vivo desde Setup Tests UI:
     - barra de progreso con clamp defensivo (`current` no excede `total`),
     - resumen de clase (match/mismatch),
     - línea de estado con bloque `Métricas` (Acc/IoU/Proximity) en tiempo real,
@@ -33,9 +33,9 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
   reforzado por compuerta geométrica:
     - sin contacto entre cajas => score cercano a 0,
     - con contacto => penalización/bonificación según contención (intersección respecto a la caja menor).
-- Registros JSONL de escenarios A/B/C/E ampliados con `proximity_score`, `proximity_center_score` y `proximity_size_score`.
+- Registros JSONL de escenarios A/B/C/E/F ampliados con `proximity_score`, `proximity_center_score` y `proximity_size_score`.
 - Resumen acumulado de escenarios ampliado con `avg_proximity`.
-- Reporte Markdown de escenarios A/B/C/E ampliado con sección `Análisis Proximity` y 5 gráficos en `report_assets`.
+- Reporte Markdown de escenarios A/B/C/E/F ampliado con sección `Análisis Proximity` y 5 gráficos en `report_assets`.
 - Schema Tester integrado en el manager: selección interactiva de modelo + esquema + inferencia por lotes.
 - Batch Runner CLI con exportado incremental en JSONL compartido por manifiesto+schema.
 - Batch Runner: enriquecimiento espacial opcional en JSONL para detecciones con `iou_score` (por bbox),
@@ -97,7 +97,8 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Batch Runner: borrado de manifiesto desde TUI con limpieza de outputs JSONL vinculados.
 - Convención UI: pantallas finales estructuradas migradas al helper común `render_and_wait_responsive(...)` para espera reactiva con repintado por redimensionado (manifest/schema/smoke/telemetry/response inspector/batch summary).
 - Setup Tests UI: nueva opción `Run A/B Prompting Experiment (AD)` con preview previo, confirmación y pantalla final reactiva.
-- Setup Tests UI: selector `Select Grounding Scenario (A/B/C/D/E)` integrado con ejecución real para escenarios A, B, C, D y E.
+- Setup Tests UI: selector `Select Grounding Scenario (A/B/C/D/E/F)` integrado con ejecución real para escenarios A, B, C, D, E y F.
+- Grounding: nuevo Scenario F para reporte clínico asistido (clase GT inyectada + bbox + explicación clínica estructurada).
 - Grounding scenarios: robustez de completitud/resume con skeleton JSONL (`pending`), upsert por `image_id` y detección de registros sin rellenar.
 - Grounding scenarios: registros con `status=error/failed/fail` se consideran incompletos para `resume`.
 - Dashboard live de grounding: heatmap clínico GT→Pred con porcentaje global y porcentaje por fila GT en cada celda.
@@ -107,7 +108,7 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Cobertura de pruebas ampliada para flujo A/B y renderizado reactivo de tablas en pantallas finales.
 - Nuevo script `src/preprocessing/extract_gt_bboxes.py` para extraer bounding boxes Ground Truth desde máscaras binarias (`.tif/.tiff`) y normalizarlas a escala 0-1000 (`[xmin, ymin, xmax, ymax]`).
 - Nuevo notebook `notebooks/03_ground_truth_bboxes.ipynb` para orquestar la ejecución del extractor y validar visualmente los BBoxes.
-- Grounding: integración de evaluación espacial combinada `IoU + Proximity` para escenarios A/B/C/E.
+- Grounding: integración de evaluación espacial combinada `IoU + Proximity` para escenarios A/B/C/E/F.
 - Grounding: persistencia de `proximity_score`, `proximity_center_score` y `proximity_size_score` por registro en JSONL.
 - Grounding reportes: nueva sección `Análisis Proximity` con distribución, resumen por clase, comparación por acierto/fallo, boxplot y curva por umbrales.
 - Grounding aggregation: resumen acumulado con `avg_proximity` además de `avg_iou`.
@@ -161,12 +162,13 @@ Dependencias declaradas en `pyproject.toml`.
 │   ├── scripts/
 │   │   ├── batch_runner.py             # Orquestador masivo con exportado incremental en JSONL compartido.
 │   │   ├── experiment_ab_text.py       # Experimento A/B zero-shot vs asistido con Ground Truth AD y reporte Markdown.
-│   │   ├── grounding_experiments/      # Escenarios de grounding A/B/C/D/E y módulos de reporte/agregación.
+│   │   ├── grounding_experiments/      # Escenarios de grounding A/B/C/D/E/F y módulos de reporte/agregación.
 │   │   │   ├── run_scenario_A.py       # Scenario A: zero-shot (bbox + clase) con reporte Markdown.
 │   │   │   ├── run_scenario_B.py       # Scenario B: asistido por clase GT (lookup split) con reporte Markdown.
 │   │   │   ├── run_scenario_C.py       # Scenario C: bbox GT superpuesto sobre imagen completa para guiar la localización.
 │   │   │   ├── run_scenario_D.py       # Scenario D: clasificación focalizada con recorte ROI y schema sin bbox/IoU.
 │   │   │   ├── run_scenario_E.py       # Scenario E: combinación de B+C (clase asistida + bbox GT dibujada sobre imagen completa).
+│   │   │   ├── run_scenario_F.py       # Scenario F: reporte clínico asistido (bbox + explicabilidad clínica con diagnóstico GT inyectado).
 │   │   │   ├── runner_core.py          # Fachada pública compartida usada por escenarios y UI (IoU + Proximity safe).
 │   │   │   ├── report_common.py        # Helpers comunes (normalización de clase, extracción de clase predicha, bbox [xmin,ymin,xmax,ymax]).
 │   │   │   ├── report_aggregation.py   # Persistencia y agregación JSONL (meta/summary/resume, avg_iou + avg_proximity).
@@ -201,7 +203,7 @@ Dependencias declaradas en `pyproject.toml`.
 │           ├── ab_experiment.py        # Flujo UI del experimento A/B con preview de variantes y resumen final.
 │           ├── batch.py                # Flujo UI del Batch Runner y selección de parámetros de ejecución.
 │           ├── cli_reporters.py        # Reportes CLI y helpers de render para dashboards y tests
-│           ├── grounding_scenarios.py  # Selector y orquestación de escenarios A/B/C/D/E desde la TUI.
+│           ├── grounding_scenarios.py  # Selector y orquestación de escenarios A/B/C/D/E/F desde la TUI.
 │           ├── grounding_scenarios_helpers.py # Helpers de validación y preparación de inputs para grounding.
 │           ├── grounding_scenarios_live_runner.py # Ejecución live desacoplada para dashboards de grounding.
 │           ├── manifest.py             # Gestión completa de manifests (crear/derivar/usar/eliminar) y limpieza de outputs.
@@ -698,7 +700,7 @@ Módulo dedicado a escenarios de visual grounding clínico con ejecución increm
 Arquitectura actual:
 
 - `runner_core.py` actúa como fachada única para escenarios y UI.
-- Todos los escenarios A/B/C/D/E importan utilidades compartidas exclusivamente desde `runner_core.py`.
+- Todos los escenarios A/B/C/D/E/F importan utilidades compartidas exclusivamente desde `runner_core.py`.
 - Persistencia/agregación JSONL en `report_aggregation.py`.
 - Helpers reutilizables transversales en `report_common.py` (sin duplicación de lógica de clase/bbox).
 - Serialización de registros por imagen en `report_serialization.py`.
@@ -706,7 +708,7 @@ Arquitectura actual:
 
 ### Evaluación espacial combinada: IoU + Proximity
 
-Para escenarios con localización (A/B/C/E), la evaluación espacial se interpreta en doble plano:
+Para escenarios con localización (A/B/C/E/F), la evaluación espacial se interpreta en doble plano:
 
 - `IoU` como medida base de solapamiento geométrico estricto.
 - `Proximity` como señal complementaria de cercanía clínica entre bbox predicha y bbox GT.
@@ -797,7 +799,16 @@ Escenario que combina B + C:
 - Mantiene una sola imagen de entrada para evitar multiimagen en esta fase.
 - Conserva el contrato común de salida: JSONL incremental + summary + Markdown.
 
-### Artefactos visuales de reporte (A/B/C/E)
+### Scenario F (`run_scenario_F.py`)
+
+Escenario de reporte clínico asistido:
+
+- Inyecta en prompt la clase histológica GT (AD/HP/ASS) y desactiva el diagnóstico libre.
+- Mantiene localización por bbox (`xmin`, `ymin`, `xmax`, `ymax`) para anclaje visual.
+- Exige explicabilidad clínica estructurada de alto detalle (morfología, patrón vascular y razonamiento diagnóstico).
+- Conserva contrato común: JSONL incremental + `__scenario_meta__` + `__scenario_summary__` + reporte Markdown.
+
+### Artefactos visuales de reporte (A/B/C/E/F)
 
 Además del heatmap de confusión (`class_confusion_heatmap.png`), el reporte genera:
 
@@ -820,9 +831,9 @@ Además del heatmap de confusión (`class_confusion_heatmap.png`), el reporte ge
 - Exportación recomendada de BBoxes por split operativo: `m_train` y `m_valid`.
 - `m_test` puede existir como partición de evaluación, pero no se cuenta en el flujo operativo por defecto cuando no dispone de máscaras.
 
-### UI live y completitud en escenarios A/B/C/D/E
+### UI live y completitud en escenarios A/B/C/D/E/F
 
-- Desde Setup Tests UI se ejecutan A/B/C/D/E con dashboard en vivo y cierre en pantalla final reactiva.
+- Desde Setup Tests UI se ejecutan A/B/C/D/E/F con dashboard en vivo y cierre en pantalla final reactiva.
 - El archivo de resultados usa skeleton inicial (`pending`) y actualización incremental por `image_id`.
 - Un run se considera incompleto si queda cualquier registro `pending` o `error/failed/fail`, incluso con `__scenario_summary__` presente.
 - En modo `resume`, el runner solo salta registros realmente completados (`ok` o `skip`) y vuelve a intentar pendientes/errores.
@@ -901,7 +912,7 @@ Tests más relevantes:
 - `tests/test_telemetry.py`: extracción de TTFT/TPS y resumen de telemetría.
 - `tests/test_batch_runner.py`: exportado incremental y persistencia de resultados por imagen.
 - `tests/test_experiment_ab_text.py`: detección de variantes y balanceo estratificado de muestras A/B.
-- `tests/test_grounding_runner_core.py`: completitud/resume, agregación acumulada y reportes para escenarios A/B/C/D/E.
+- `tests/test_grounding_runner_core.py`: completitud/resume, agregación acumulada y reportes para escenarios A/B/C/D/E/F.
 - `tests/test_grounding_report_iou_metrics.py`: agregaciones IoU usadas por el reporte (histograma, resumen por clase, cohorts y umbrales).
 - `tests/test_grounding_report_proximity_metrics.py`: agregaciones Proximity equivalentes a IoU para el reporte.
 - `tests/test_proximity_metrics.py`: validación de funciones base de proximidad (centro, tamaño y score combinado).

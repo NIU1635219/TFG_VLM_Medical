@@ -168,7 +168,7 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
         )
 
     def run_grounding_scenarios_selector_wrapper() -> None:
-        """Muestra selector stub de escenarios de grounding A/B/C/D/E."""
+        """Muestra selector stub de escenarios de grounding A/B/C/D/E/F."""
         run_grounding_scenarios_selector_screen(
             kit,
             app,
@@ -234,10 +234,10 @@ def run_tests_menu(kit: "UIKit", app: "AppContext") -> None:
             ),
         ),
         kit.MenuItem(
-            " Select Grounding Scenario (A/B/C/D/E)",
+            " Select Grounding Scenario (A/B/C/D/E/F)",
             run_grounding_scenarios_selector_wrapper,
             description=(
-                "Abre selector inicial de escenarios de grounding (A, B, C, D y E)."
+                "Abre selector inicial de escenarios de grounding (A, B, C, D, E y F)."
             ),
         ),
         kit.MenuItem(

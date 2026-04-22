@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from src.utils.tests_ui.markdown_report import (
+    CollapsibleSection,
     ImageGroupSection,
     ImageItem,
     ListSection,
@@ -136,6 +137,7 @@ def build_markdown_records_from_scenario_jsonl(*, output_path: Path, run_dir: Pa
             {
                 "image_id": image_id_value,
                 "image_path": image_path_text,
+                "model_response_fields": payload,
                 "ground_truth_cls": normalize_polyp_class(entry.get("ground_truth_cls") or ""),
                 "predicted_cls": predicted_cls,
                 "class_match": bool(entry.get("class_match")) if entry.get("class_match") is not None else None,
@@ -675,6 +677,12 @@ def generate_single_detection_markdown_report(
             f"TTFT: {_format_seconds(item_ttft_value)}",
             f"TPS: {_format_rate(item_tps_value)}",
         ]
+        raw_model_response_fields = item.get("model_response_fields")
+        model_response_fields: dict[str, Any]
+        if isinstance(raw_model_response_fields, dict):
+            model_response_fields = raw_model_response_fields
+        else:
+            model_response_fields = {}
 
         sections: list[Any] = [
             ListSection(items=summary_lines, heading="Resumen", ordered=False, heading_level=3),
@@ -713,6 +721,16 @@ def generate_single_detection_markdown_report(
             )
         if image_items:
             sections.append(ImageGroupSection(images=image_items, heading="Visualización", heading_level=3))
+
+        sections.append(
+            CollapsibleSection(
+                payload=model_response_fields,
+                root_summary="Campos de respuesta del modelo",
+                title_only_summary=True,
+                empty_text="No hay campos de respuesta para este caso.",
+                excluded_keys=("final_diagnosis_class", "xmin", "ymin", "xmax", "ymax"),
+            )
+        )
 
         report_sections.append(
             SectionGroup(

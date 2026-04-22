@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, Sequence
+import json
+from typing import Any, Protocol, Sequence
 
 
 class MarkdownSection(Protocol):
@@ -110,6 +111,198 @@ class CodeBlockSection:
         lines.append(self.code.rstrip())
         lines.append("```")
         return "\n".join(lines)
+
+
+def _build_collapsible_summary(*, field_name: str, value: Any, max_preview_chars: int) -> str:
+    if isinstance(value, dict):
+        return f"{field_name} (objeto, {len(value)} campos)"
+    if isinstance(value, list):
+        return f"{field_name} (lista, {len(value)} elementos)"
+
+    preview = json.dumps(value, ensure_ascii=False)
+    if len(preview) > max_preview_chars:
+        preview = f"{preview[: max_preview_chars - 3]}..."
+    return f"{field_name}: {preview}"
+
+
+_MISSING = object()
+
+
+def _filter_collapsible_payload(value: Any, *, excluded_keys: set[str]) -> Any:
+    if isinstance(value, dict):
+        filtered_dict: dict[str, Any] = {}
+        for key, child in value.items():
+            if str(key).strip().lower() in excluded_keys:
+                continue
+            filtered_child = _filter_collapsible_payload(child, excluded_keys=excluded_keys)
+            if filtered_child is _MISSING:
+                continue
+            filtered_dict[str(key)] = filtered_child
+        if not filtered_dict:
+            return _MISSING
+        return filtered_dict
+
+    if isinstance(value, list):
+        filtered_items: list[Any] = []
+        for child in value:
+            filtered_child = _filter_collapsible_payload(child, excluded_keys=excluded_keys)
+            if filtered_child is _MISSING:
+                continue
+            filtered_items.append(filtered_child)
+        if not filtered_items:
+            return _MISSING
+        return filtered_items
+
+    return value
+
+
+def _render_collapsible_field(
+    *,
+    field_name: str,
+    value: Any,
+    level: int,
+    max_preview_chars: int,
+    title_only: bool,
+) -> str:
+    indent = "  " * max(level, 0)
+    summary_text = (
+        field_name
+        if title_only
+        else _build_collapsible_summary(
+            field_name=field_name,
+            value=value,
+            max_preview_chars=max_preview_chars,
+        )
+    )
+    lines: list[str] = [
+        f"{indent}<details>",
+        f"{indent}<summary>{summary_text}</summary>",
+        "",
+    ]
+
+    if isinstance(value, dict):
+        if value:
+            for key, child in value.items():
+                lines.append(
+                    _render_collapsible_field(
+                        field_name=str(key),
+                        value=child,
+                        level=level + 1,
+                        max_preview_chars=max_preview_chars,
+                        title_only=title_only,
+                    )
+                )
+                lines.append("")
+        else:
+            lines.append(f"{indent}_(objeto vacio)_")
+    elif isinstance(value, list):
+        if value:
+            for index, child in enumerate(value, start=1):
+                lines.append(
+                    _render_collapsible_field(
+                        field_name=f"item_{index}",
+                        value=child,
+                        level=level + 1,
+                        max_preview_chars=max_preview_chars,
+                        title_only=title_only,
+                    )
+                )
+                lines.append("")
+        else:
+            lines.append(f"{indent}_(lista vacia)_")
+    else:
+        serialized = json.dumps(value, ensure_ascii=False, indent=2)
+        lines.append(f"{indent}```json")
+        lines.extend(f"{indent}{line}" for line in serialized.splitlines())
+        lines.append(f"{indent}```")
+
+    lines.append(f"{indent}</details>")
+    return "\n".join(lines).rstrip()
+
+
+@dataclass(slots=True)
+class CollapsibleSection:
+    """Seccion recursiva de bloques <details>/<summary> para datos JSON-like."""
+
+    payload: Any
+    heading: str | None = None
+    heading_level: int = 2
+    empty_text: str = "No hay campos para mostrar."
+    max_preview_chars: int = 80
+    title_only_summary: bool = False
+    root_summary: str | None = None
+    excluded_keys: Sequence[str] = field(default_factory=tuple)
+
+    def render(self, report_path: Path) -> str:
+        _ = report_path
+        lines: list[str] = []
+        if self.heading:
+            lines.append(_to_heading(self.heading_level, self.heading))
+            lines.append("")
+
+        excluded_keys_normalized = {str(key).strip().lower() for key in self.excluded_keys}
+        filtered_payload = _filter_collapsible_payload(
+            self.payload,
+            excluded_keys=excluded_keys_normalized,
+        )
+        if filtered_payload is _MISSING:
+            filtered_payload = None
+
+        if filtered_payload is None:
+            body_lines = [self.empty_text]
+        elif isinstance(filtered_payload, dict):
+            body_lines = []
+            for key, value in filtered_payload.items():
+                body_lines.append(
+                    _render_collapsible_field(
+                        field_name=str(key),
+                        value=value,
+                        level=0,
+                        max_preview_chars=max(self.max_preview_chars, 10),
+                        title_only=self.title_only_summary,
+                    )
+                )
+                body_lines.append("")
+        elif isinstance(filtered_payload, list):
+            body_lines = []
+            for index, value in enumerate(filtered_payload, start=1):
+                body_lines.append(
+                    _render_collapsible_field(
+                        field_name=f"item_{index}",
+                        value=value,
+                        level=0,
+                        max_preview_chars=max(self.max_preview_chars, 10),
+                        title_only=self.title_only_summary,
+                    )
+                )
+                body_lines.append("")
+        else:
+            body_lines = [
+                _render_collapsible_field(
+                    field_name="value",
+                    value=filtered_payload,
+                    level=0,
+                    max_preview_chars=max(self.max_preview_chars, 10),
+                    title_only=self.title_only_summary,
+                )
+            ]
+
+        if self.root_summary:
+            lines.append("<details>")
+            lines.append(f"<summary>{self.root_summary}</summary>")
+            lines.append("")
+            for body_line in body_lines:
+                if body_line:
+                    for raw_line in body_line.splitlines():
+                        lines.append(f"  {raw_line}")
+                else:
+                    lines.append("")
+            lines.append("")
+            lines.append("</details>")
+            return "\n".join(lines).rstrip()
+
+        lines.extend(body_lines)
+        return "\n".join(lines).rstrip()
 
 
 @dataclass(slots=True)

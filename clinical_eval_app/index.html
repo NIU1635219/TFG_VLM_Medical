@@ -27,7 +27,7 @@
             <div class="progress-actions" role="group" aria-label="Navegacion superior">
               <button id="btnPrev" class="nav-btn" type="button">←</button>
               <button id="btnNext" class="nav-btn" type="button">→</button>
-              <button id="btnOpenGallery" class="gallery-btn" type="button">🗂</button>
+              <button id="btnOpenGallery" class="gallery-btn" type="button" title="Abrir galeria de casos" aria-label="Abrir galeria de casos">🖼️</button>
               <button id="btnTheme" class="theme-btn" type="button" title="Cambiar tema">🌙</button>
             </div>
         </div>
@@ -78,18 +78,35 @@
             <button id="btnExportQuick" class="export-btn export-quick" type="button">
               💾 Exportar CSV (Progreso)
             </button>
+            <button id="btnOpenDataManager" class="export-btn data-manager-launch" type="button" title="Abrir gestor de data">
+              📁 Gestor de Data
+            </button>
           </div>
         </div>
       </section>
 
       <section id="localLoader" class="completion hidden" aria-live="polite">
-        <h2>Carga Local Requerida</h2>
+        <p class="loader-kicker">Sin Dataset Activo</p>
+        <h2>Carga de Data de Evaluacion</h2>
         <p>
-          Tu navegador bloquea fetch() en file:// por seguridad. Selecciona el archivo
-          <strong>data/cases.json</strong> manualmente para continuar.
+          Esta app funciona en modo local. Para evaluar, importa un archivo
+          <strong>cases.json</strong> con los casos de esta corrida.
         </p>
-        <label class="comment-label" for="casesFileInput">Selecciona cases.json</label>
-        <input id="casesFileInput" type="file" accept=".json,application/json" title="Seleccionar archivo cases.json" />
+        <div class="loader-highlights" aria-label="Resumen de pasos">
+          <div class="loader-highlight-card">
+            <h3>1) Prepara tu data</h3>
+            <p>Usa un JSON tipo lista con campos: <strong>id_imagen</strong>, <strong>image_path</strong>, <strong>ground_truth_class</strong>, <strong>id_modelo</strong>, <strong>clinical_justification</strong>.</p>
+          </div>
+          <div class="loader-highlight-card">
+            <h3>2) Importa y evalua</h3>
+            <p>Selecciona <strong>cases.json</strong>. La app reinicia progreso del dataset activo y continua desde el caso 1.</p>
+          </div>
+        </div>
+        <div class="loader-actions" role="group" aria-label="Acciones de carga de data">
+          <label class="comment-label" for="casesFileInput">Selecciona cases.json</label>
+          <input id="casesFileInput" type="file" accept=".json,application/json" title="Seleccionar archivo cases.json" />
+          <p class="loader-help">No hay un dataset activo en esta pantalla. El reinicio de data solo esta disponible dentro del Gestor de Data.</p>
+        </div>
       </section>
 
       <section id="completionView" class="completion hidden" aria-live="polite">
@@ -128,12 +145,40 @@
             </div>
             <p class="gallery-subtitle">Haz clic en cualquier miniatura para ir directamente al caso.</p>
             <div class="gallery-legend" aria-label="Leyenda de estados">
-              <span class="legend-chip match">👍 Match</span>
-              <span class="legend-chip no-match">👎 No Match</span>
-              <span class="legend-chip pending">• Pendiente</span>
-              <span class="legend-chip comment">💬 Con comentario</span>
+              <button id="filterMatch" class="legend-chip filter-chip match" type="button" aria-pressed="false">👍 Match</button>
+              <button id="filterNoMatch" class="legend-chip filter-chip no-match" type="button" aria-pressed="false">👎 No Match</button>
+              <button id="filterPending" class="legend-chip filter-chip pending" type="button" aria-pressed="false">• Pendiente</button>
+              <button id="filterComment" class="legend-chip filter-chip comment" type="button" aria-pressed="false">💬 Con comentario</button>
             </div>
             <div id="galleryGrid" class="gallery-grid"></div>
+          </div>
+        </section>
+
+        <section id="dataManagerModal" class="gallery-modal hidden" aria-live="polite" aria-label="Gestor de data">
+          <div class="gallery-backdrop" id="dataManagerBackdrop"></div>
+          <div class="gallery-panel data-manager-panel" role="dialog" aria-modal="true" aria-labelledby="dataManagerTitle">
+            <div class="gallery-header">
+              <h2 id="dataManagerTitle">Gestor de Data</h2>
+              <button id="btnCloseDataManager" class="gallery-close-btn" type="button" title="Cerrar gestor de data">✕</button>
+            </div>
+            <p class="gallery-subtitle">Carga datasets de evaluacion y gestiona el estado local de la sesion actual.</p>
+
+            <div class="data-instructions">
+              <h3>Instrucciones rapidas</h3>
+              <ol class="loader-steps compact">
+                <li>Verifica que cada caso tenga: <strong>id_imagen</strong>, <strong>image_path</strong>, <strong>ground_truth_class</strong>, <strong>id_modelo</strong>, <strong>clinical_justification</strong>.</li>
+                <li>Carga el archivo con <strong>Importar data</strong>. La app reinicia el progreso para evitar mezclar resultados.</li>
+                <li>Si necesitas limpiar todo el estado local, usa <strong>Borrar estado local</strong>.</li>
+              </ol>
+            </div>
+
+            <div class="data-manager-actions" role="group" aria-label="Acciones del gestor de data">
+              <label class="comment-label" for="casesFileInputManager">Importar data (cases.json)</label>
+              <input id="casesFileInputManager" type="file" accept=".json,application/json" title="Importar archivo cases.json" />
+              <button id="btnResetCurrentData" class="export-btn data-action-btn" type="button">
+                🗑️ Borrar estado local (desde cero)
+              </button>
+            </div>
           </div>
         </section>
     </div>

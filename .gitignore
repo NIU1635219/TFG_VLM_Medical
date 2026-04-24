@@ -32,7 +32,7 @@ weights/
 
 # --- PRIVACIDAD: Datos Médicos (CRÍTICO: GDPR) ---
 # Ignorar cualquier carpeta de datos
-data/
+data*/
 dataset/
 datasets/
 raw_data/

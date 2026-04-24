@@ -1,10 +1,10 @@
 # Clinical Eval App
 
-Aplicacion web estatica para validacion clinica de justificaciones de IA (Match / No Match).
+Aplicacion web estatica para validacion clinica de justificaciones de IA (Match / No Match), sin backend.
 
 ## Objetivo
 
-Permitir que evaluadores medicos revisen casos de forma local (sin backend), registren veredictos y exporten resultados en CSV para analisis posterior.
+Permitir que evaluadores medicos revisen casos en local, registren veredictos y exporten resultados en CSV para analisis posterior.
 
 ## Estructura esperada
 
@@ -13,6 +13,8 @@ Permitir que evaluadores medicos revisen casos de forma local (sin backend), reg
 - app.js
 - data/cases.json
 - data/images/
+
+Tambien puedes trabajar con datasets alternativos (por ejemplo exportados por escenario) cargandolos manualmente desde el Gestor de Data.
 
 ## Esquema de entrada (cases.json)
 
@@ -33,31 +35,62 @@ Cada caso debe seguir este formato:
 Notas:
 
 - id_modelo no se muestra en la UI (doble ciego), pero se usa en el CSV exportado.
-- image_path debe ser una ruta relativa valida desde index.html.
+- image_path debe ser una ruta valida desde index.html (normalmente relativa).
 
-## Funcionamiento
+## Flujo principal
 
-1. La app carga data/cases.json.
-2. Muestra un caso cada vez con su imagen, diagnostico real y justificacion.
+1. La app intenta cargar data/cases.json.
+2. Muestra un caso por pantalla con imagen, diagnostico real y justificacion.
 3. El evaluador vota Match o No Match y puede anadir comentario opcional.
-4. Se puede navegar con flechas (anterior/siguiente), incluida entrada manual a la pagina final desde el ultimo caso con la flecha de avance.
-5. Se guarda progreso en localStorage tras cada voto y al mover navegacion cuando hay comentario en curso.
-6. El CSV se puede exportar tanto durante la evaluacion (progreso) como en la pagina final.
+4. Se puede navegar con flechas y abrir galeria para saltar a cualquier caso.
+5. El progreso se guarda en localStorage.
+6. El CSV se puede exportar durante la evaluacion o al finalizar.
 
-## Interfaz y temas
+## Pantalla inicial y carga local
 
-- Incluye modo claro y modo oscuro con boton de cambio de tema en cabecera.
-- La preferencia de tema queda guardada en localStorage.
-- La galeria muestra miniaturas y estado por caso: `Match`, `No Match`, `Pendiente` y marca de comentario.
+Si no hay dataset activo, la app muestra la pantalla inicial de carga.
+
+- Desde ahi se importa cases.json manualmente.
+- Al importar, la app reemplaza el dataset en memoria/cache y reinicia el progreso para evitar mezclar sesiones.
+- En esa pantalla no se muestra accion de borrado porque aun no hay un dataset activo.
+
+## Gestor de Data
+
+El Gestor de Data (boton "Gestor de Data" en la barra inferior) permite:
+
+- Importar un nuevo cases.json.
+- Borrar estado local desde cero.
+
+Importante: "Borrar estado local" elimina cache de casos y progreso guardado localmente.
+
+## Galeria interactiva
+
+La galeria incluye filtros interactivos por estado:
+
+- Match, No Match y Pendiente: filtro exclusivo (solo uno activo a la vez).
+- Con comentario: filtro adicional combinable con cualquiera de los anteriores.
+
+Las etiquetas de filtro tienen tamano homogeneo para mejorar lectura y consistencia visual.
+
+## Manejo de data faltante o rota
+
+Si la app detecta que la data actual fue borrada o que faltan imagenes referenciadas:
+
+- limpia estado local,
+- vuelve a la pantalla inicial de carga,
+- muestra un mensaje de error explicando el problema.
+
+Esto evita quedarse en un estado intermedio sin informacion visible.
 
 ## Persistencia local
 
 Se guardan en localStorage:
 
-- resultados acumulados
-- indice del caso actual
+- resultados acumulados,
+- indice del caso actual,
+- cache del dataset cargado.
 
-Si se cierra y reabre la pagina, la evaluacion se reanuda donde se dejo.
+Si se cierra y reabre la pagina, la evaluacion se reanuda cuando existe data valida en cache.
 
 ## Exportacion CSV
 
@@ -73,19 +106,7 @@ Nombre de descarga:
 
 ## Uso rapido
 
-1. Coloca tus imagenes en data/images/.
+1. Coloca imagenes en data/images/.
 2. Genera o edita data/cases.json con el esquema correcto.
 3. Abre index.html en el navegador.
-4. Exporta el CSV cuando quieras (durante o al final de la evaluacion).
-
-## Nota sobre file:// y CORS
-
-Algunos navegadores bloquean `fetch("data/cases.json")` cuando se abre `index.html` con doble clic (`file://...`).
-
-La app incluye un fallback:
-
-1. En `file://`, la app muestra directamente una seccion "Carga Local Requerida".
-2. Selecciona manualmente `clinical_eval_app/data/cases.json`.
-3. La app cachea los casos en localStorage para futuras aperturas.
-
-Alternativa recomendada para evitar esta limitacion: abrir la app con un servidor local (`http://localhost`).
+4. Evalua casos y exporta CSV cuando quieras.

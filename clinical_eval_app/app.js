@@ -8,6 +8,10 @@ const state = {
   currentIndex: 0,
   resultsByImageId: new Map(),
   draftCommentsByImageId: new Map(),
+  galleryFilters: {
+    status: null, // null | "match" | "no-match" | "pending"
+    withComment: false,
+  },
 };
 
 const dom = {
@@ -15,10 +19,13 @@ const dom = {
   completionView: document.getElementById("completionView"),
   actionPanel: document.querySelector(".action-panel"),
   localLoader: document.getElementById("localLoader"),
+  dataManagerModal: document.getElementById("dataManagerModal"),
+  dataManagerBackdrop: document.getElementById("dataManagerBackdrop"),
   galleryModal: document.getElementById("galleryModal"),
   galleryBackdrop: document.getElementById("galleryBackdrop"),
   galleryGrid: document.getElementById("galleryGrid"),
   casesFileInput: document.getElementById("casesFileInput"),
+  casesFileInputManager: document.getElementById("casesFileInputManager"),
   progressText: document.getElementById("progressText"),
   progressBar: document.getElementById("progressBar"),
   caseImage: document.getElementById("caseImage"),
@@ -31,10 +38,17 @@ const dom = {
   btnPrev: document.getElementById("btnPrev"),
   btnNext: document.getElementById("btnNext"),
   btnOpenGallery: document.getElementById("btnOpenGallery"),
+  btnOpenDataManager: document.getElementById("btnOpenDataManager"),
   btnCloseGallery: document.getElementById("btnCloseGallery"),
+  btnCloseDataManager: document.getElementById("btnCloseDataManager"),
+  filterMatch: document.getElementById("filterMatch"),
+  filterNoMatch: document.getElementById("filterNoMatch"),
+  filterPending: document.getElementById("filterPending"),
+  filterComment: document.getElementById("filterComment"),
   btnTheme: document.getElementById("btnTheme"),
   btnExportQuick: document.getElementById("btnExportQuick"),
   btnExportFinal: document.getElementById("btnExportFinal"),
+  btnResetCurrentData: document.getElementById("btnResetCurrentData"),
   summaryMatch: document.getElementById("summaryMatch"),
   summaryNoMatch: document.getElementById("summaryNoMatch"),
   summaryPending: document.getElementById("summaryPending"),
@@ -54,12 +68,31 @@ function wireEvents() {
   dom.btnPrev.addEventListener("click", goToPreviousCase);
   dom.btnNext.addEventListener("click", goToNextCase);
   dom.btnOpenGallery.addEventListener("click", openGallery);
+  dom.btnOpenDataManager.addEventListener("click", openDataManager);
   dom.btnCloseGallery.addEventListener("click", closeGallery);
+  dom.btnCloseDataManager.addEventListener("click", closeDataManager);
   dom.galleryBackdrop.addEventListener("click", closeGallery);
+  dom.dataManagerBackdrop.addEventListener("click", closeDataManager);
+  if (dom.filterMatch) {
+    dom.filterMatch.addEventListener("click", () => toggleGalleryStatusFilter("match"));
+  }
+  if (dom.filterNoMatch) {
+    dom.filterNoMatch.addEventListener("click", () => toggleGalleryStatusFilter("no-match"));
+  }
+  if (dom.filterPending) {
+    dom.filterPending.addEventListener("click", () => toggleGalleryStatusFilter("pending"));
+  }
+  if (dom.filterComment) {
+    dom.filterComment.addEventListener("click", toggleGalleryCommentFilter);
+  }
   dom.btnTheme.addEventListener("click", toggleTheme);
   dom.btnExportQuick.addEventListener("click", exportCsv);
   dom.btnExportFinal.addEventListener("click", exportCsv);
+  if (dom.btnResetCurrentData) {
+    dom.btnResetCurrentData.addEventListener("click", resetCurrentDataFromZero);
+  }
   dom.casesFileInput.addEventListener("change", onCasesFileSelected);
+  dom.casesFileInputManager.addEventListener("change", onCasesFileSelected);
   document.addEventListener("keydown", onGlobalKeydown);
   updateActionAvailability();
 }
@@ -84,56 +117,27 @@ function toggleTheme() {
 function onGlobalKeydown(event) {
   if (event.key === "Escape" && !dom.galleryModal.classList.contains("hidden")) {
     closeGallery();
+    return;
+  }
+
+  if (event.key === "Escape" && !dom.dataManagerModal.classList.contains("hidden")) {
+    closeDataManager();
   }
 }
 
 async function loadCases() {
-  const isFileProtocol = window.location.protocol === "file:";
-
-  if (isFileProtocol) {
-    const cachedCases = readCachedCases();
-    if (cachedCases.length) {
-      state.cases = cachedCases;
-      restoreProgress();
-      hideLocalLoader();
-      render();
-      setStatus("Casos cargados desde cache local.");
-      return;
-    }
-
-    // En file://, fetch hacia data/cases.json suele ser bloqueado por CORS.
-    showLocalLoader();
-    setStatus(
-      "Carga manual requerida en file://. Selecciona data/cases.json para continuar.",
-      true
-    );
-    return;
-  }
-
-  try {
-    const response = await fetch("data/cases.json", { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`No se pudo cargar data/cases.json (HTTP ${response.status})`);
-    }
-
-    const payload = await response.json();
-    if (!Array.isArray(payload)) {
-      throw new Error("El contenido de data/cases.json no es un array JSON.");
-    }
-
-    state.cases = payload.map(normalizeCase).filter(Boolean);
-    if (!state.cases.length) {
-      throw new Error("No hay casos validos en data/cases.json.");
-    }
-
-    saveCasesCache(state.cases);
+  const cachedCases = readCachedCases();
+  if (cachedCases.length) {
+    state.cases = cachedCases;
     restoreProgress();
     hideLocalLoader();
     render();
-  } catch (error) {
-    setStatus("No se pudo cargar cases.json. Revisa la ruta data/cases.json.", true);
-    console.error(error);
+    setStatus("Casos cargados desde cache local.");
+    return;
   }
+
+  moveToInitialLoaderState();
+  setStatus("Carga manual requerida. Selecciona un cases.json para continuar.");
 }
 
 function restoreProgress() {
@@ -276,6 +280,12 @@ function render() {
 
 function showCurrentCase() {
   const currentCase = state.cases[state.currentIndex];
+  if (!currentCase) {
+    moveToInitialLoaderState();
+    setStatus("No hay casos disponibles. Carga data nuevamente.", true);
+    return;
+  }
+
   const answeredCount = state.resultsByImageId.size;
 
   dom.evaluationView.classList.remove("hidden");
@@ -312,6 +322,9 @@ function showCurrentCase() {
   dom.caseImage.onload = () => {
     dom.caseImage.classList.add("is-ready");
   };
+  dom.caseImage.onerror = () => {
+    handleMissingDatasetAssets(currentCase.image_path);
+  };
 
   updateActionAvailability();
   renderGallery();
@@ -328,6 +341,15 @@ function showCompletion() {
   updateActionAvailability();
   renderGallery();
   setStatus("Evaluacion finalizada. Exporta el CSV para cerrar el proceso.");
+}
+
+function handleMissingDatasetAssets(imagePath) {
+  clearAllRuntimeData();
+  showLocalLoader();
+  setStatus(
+    `La data actual parece incompleta o borrada (imagen no encontrada: ${String(imagePath ?? "")}). Carga un cases.json nuevo.`,
+    true
+  );
 }
 
 function renderCompletionSummary() {
@@ -364,6 +386,7 @@ function openGallery() {
     return;
   }
   syncCurrentCommentDraft();
+  closeDataManager();
   renderGallery();
   dom.galleryModal.classList.remove("hidden");
 }
@@ -372,35 +395,39 @@ function closeGallery() {
   dom.galleryModal.classList.add("hidden");
 }
 
+function openDataManager() {
+  closeGallery();
+  dom.dataManagerModal.classList.remove("hidden");
+}
+
+function closeDataManager() {
+  dom.dataManagerModal.classList.add("hidden");
+}
+
 function renderGallery() {
   if (!dom.galleryGrid) {
     return;
   }
 
+  updateGalleryLegendUI();
   dom.galleryGrid.innerHTML = "";
 
   for (let index = 0; index < state.cases.length; index += 1) {
     const item = state.cases[index];
-    const saved = state.resultsByImageId.get(item.id_imagen);
-    const draftComment = state.draftCommentsByImageId.get(item.id_imagen) ?? "";
-    const hasComment = Boolean((saved?.comentario_medico || draftComment || "").trim());
-    let statusLabel = "Pendiente";
-    let statusClass = "pending";
-    let statusIcon = "•";
-    if (saved?.veredicto === "Match") {
-      statusLabel = "Match";
-      statusClass = "match";
-      statusIcon = "👍";
-    } else if (saved?.veredicto === "No Match") {
-      statusLabel = "No Match";
-      statusClass = "no-match";
-      statusIcon = "👎";
+    const caseState = getCaseGalleryState(item);
+
+    if (state.galleryFilters.status && caseState.statusClass !== state.galleryFilters.status) {
+      continue;
+    }
+
+    if (state.galleryFilters.withComment && !caseState.hasComment) {
+      continue;
     }
 
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = `gallery-item${index === state.currentIndex ? " current" : ""}`;
-    btn.setAttribute("aria-label", `Ir al caso ${index + 1} (${statusLabel})`);
+    btn.setAttribute("aria-label", `Ir al caso ${index + 1} (${caseState.statusLabel})`);
     btn.addEventListener("click", () => jumpToCase(index));
 
     btn.innerHTML = `
@@ -408,14 +435,76 @@ function renderGallery() {
       <div class="gallery-meta">
         <div class="gallery-title">Caso ${index + 1}: ${escapeHtml(item.id_imagen)}</div>
         <div class="gallery-flags">
-          <span class="gallery-status ${statusClass}" title="${statusLabel}">${statusIcon}<span class="status-text">${statusLabel}</span></span>
-          ${hasComment ? '<span class="gallery-comment-flag" title="Con comentario" aria-label="Con comentario">💬</span>' : ''}
+          <span class="gallery-status ${caseState.statusClass}" title="${caseState.statusLabel}">${caseState.statusIcon}<span class="status-text">${caseState.statusLabel}</span></span>
+          ${caseState.hasComment ? '<span class="gallery-comment-flag" title="Con comentario" aria-label="Con comentario">💬</span>' : ''}
         </div>
       </div>
     `;
 
     dom.galleryGrid.appendChild(btn);
   }
+}
+
+function getCaseGalleryState(item) {
+  const saved = state.resultsByImageId.get(item.id_imagen);
+  const draftComment = state.draftCommentsByImageId.get(item.id_imagen) ?? "";
+  const hasComment = Boolean((saved?.comentario_medico || draftComment || "").trim());
+
+  if (saved?.veredicto === "Match") {
+    return {
+      statusClass: "match",
+      statusLabel: "Match",
+      statusIcon: "👍",
+      hasComment,
+    };
+  }
+
+  if (saved?.veredicto === "No Match") {
+    return {
+      statusClass: "no-match",
+      statusLabel: "No Match",
+      statusIcon: "👎",
+      hasComment,
+    };
+  }
+
+  return {
+    statusClass: "pending",
+    statusLabel: "Pendiente",
+    statusIcon: "•",
+    hasComment,
+  };
+}
+
+function toggleGalleryStatusFilter(targetStatus) {
+  if (state.galleryFilters.status === targetStatus) {
+    state.galleryFilters.status = null;
+  } else {
+    state.galleryFilters.status = targetStatus;
+  }
+  renderGallery();
+}
+
+function toggleGalleryCommentFilter() {
+  state.galleryFilters.withComment = !state.galleryFilters.withComment;
+  renderGallery();
+}
+
+function updateGalleryLegendUI() {
+  if (!dom.filterMatch || !dom.filterNoMatch || !dom.filterPending || !dom.filterComment) {
+    return;
+  }
+
+  const activeStatus = state.galleryFilters.status;
+  setFilterChipState(dom.filterMatch, activeStatus === "match");
+  setFilterChipState(dom.filterNoMatch, activeStatus === "no-match");
+  setFilterChipState(dom.filterPending, activeStatus === "pending");
+  setFilterChipState(dom.filterComment, state.galleryFilters.withComment);
+}
+
+function setFilterChipState(element, isActive) {
+  element.classList.toggle("active", Boolean(isActive));
+  element.setAttribute("aria-pressed", isActive ? "true" : "false");
 }
 
 function jumpToCase(index) {
@@ -510,7 +599,9 @@ function showLocalLoader() {
   dom.actionPanel.classList.add("hidden");
   dom.completionView.classList.add("hidden");
   dom.localLoader.classList.remove("hidden");
+  updateProgress(0, 0);
   closeGallery();
+  closeDataManager();
   updateActionAvailability();
 }
 
@@ -537,6 +628,26 @@ function readCachedCases() {
 
 function saveCasesCache(casesList) {
   localStorage.setItem(STORAGE_CASES_CACHE_KEY, JSON.stringify(casesList));
+}
+
+function clearAllRuntimeData() {
+  state.cases = [];
+  state.currentIndex = 0;
+  state.resultsByImageId = new Map();
+  state.draftCommentsByImageId = new Map();
+
+  localStorage.removeItem(STORAGE_CASES_CACHE_KEY);
+  localStorage.removeItem(STORAGE_RESULTS_KEY);
+  localStorage.removeItem(STORAGE_INDEX_KEY);
+}
+
+function moveToInitialLoaderState() {
+  clearAllRuntimeData();
+  closeGallery();
+  closeDataManager();
+  showLocalLoader();
+  updateProgress(0, 0);
+  updateActionAvailability();
 }
 
 function updateActionAvailability() {
@@ -579,16 +690,39 @@ async function onCasesFileSelected(event) {
       throw new Error("No hay casos validos en el archivo seleccionado.");
     }
 
-    state.cases = normalized;
-    saveCasesCache(state.cases);
-    restoreProgress();
-    hideLocalLoader();
-    render();
-    setStatus("Casos cargados correctamente desde archivo local.");
+    applyImportedCases(normalized, file.name);
   } catch (error) {
     setStatus("No se pudo leer el archivo seleccionado. Verifica el formato JSON.", true);
     console.error(error);
+  } finally {
+    if (event.target) {
+      event.target.value = "";
+    }
   }
+}
+
+function clearEvaluationProgress() {
+  state.resultsByImageId = new Map();
+  state.draftCommentsByImageId = new Map();
+  state.currentIndex = 0;
+  localStorage.removeItem(STORAGE_RESULTS_KEY);
+  localStorage.removeItem(STORAGE_INDEX_KEY);
+}
+
+function applyImportedCases(casesList, fileName = "") {
+  state.cases = casesList;
+  saveCasesCache(state.cases);
+  clearEvaluationProgress();
+  hideLocalLoader();
+  closeDataManager();
+  render();
+  const nameHint = fileName ? ` (${fileName})` : "";
+  setStatus(`Data cargada correctamente${nameHint}. Progreso reiniciado para este dataset.`);
+}
+
+function resetCurrentDataFromZero() {
+  moveToInitialLoaderState();
+  setStatus("Estado local borrado desde cero. Carga un nuevo cases.json para continuar.");
 }
 
 function normalizeCase(rawCase) {

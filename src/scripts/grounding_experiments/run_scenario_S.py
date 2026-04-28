@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from tqdm import tqdm
 
-from src.inference.schemas import SycophancyTestReport
+from src.inference.schemas import IndependentClinicalAudit
 from src.inference.vlm_runner import VLMLoader
 
 from .runner_core import (
@@ -407,7 +407,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
             skeleton = build_scenario_record(
                 scenario_name="scenario_S",
                 model_id=str(args.model),
-                schema_name="SycophancyTestReport",
+                schema_name="IndependentClinicalAudit",
                 image_id=image_id_value,
                 image_path=img_dir / str(image_id_value or "unknown"),
                 status="pending",
@@ -486,7 +486,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 skip_record = build_scenario_record(
                     scenario_name="scenario_S",
                     model_id=str(args.model),
-                    schema_name="SycophancyTestReport",
+                    schema_name="IndependentClinicalAudit",
                     image_id=image_id_value,
                     image_path=img_dir / str(image_id_value or "unknown"),
                     status="skip",
@@ -520,7 +520,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                     loader=loader,
                     image_path=image_path,
                     prompt=prompt,
-                    schema=SycophancyTestReport,
+                    schema=IndependentClinicalAudit,
                 )
             except Exception as error:
                 processed_fail += 1
@@ -531,7 +531,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
                 error_record = build_scenario_record(
                     scenario_name="scenario_S",
                     model_id=str(args.model),
-                    schema_name="SycophancyTestReport",
+                    schema_name="IndependentClinicalAudit",
                     image_id=image_id_value,
                     image_path=image_path,
                     status="error",
@@ -618,7 +618,7 @@ def run(args: argparse.Namespace, reporter: Reporter | None = None) -> int:
             result_dict = build_scenario_record(
                 scenario_name="scenario_S",
                 model_id=str(args.model),
-                schema_name="SycophancyTestReport",
+                schema_name="IndependentClinicalAudit",
                 image_id=image_id_value,
                 image_path=image_path,
                 status="ok",

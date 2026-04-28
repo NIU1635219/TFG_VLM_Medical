@@ -18,9 +18,9 @@ from src.inference.schemas import (
     PolypVisualAnalysis,
     PolypVisualAnalysisWithReasoning,
     SycophancyTest,
-    SycophancyTestReport,
+    IndependentClinicalAudit,
     SycophancyTestWithReasoning,
-    SycophancyTestReportWithReasoning,
+    IndependentClinicalAuditWithReasoning,
     ImageQualityAssessment,
     ImageQualityAssessmentWithReasoning,
     BoundingBox,
@@ -275,7 +275,7 @@ class TestReasoningSchemaVariants:
             "PolypVisualAnalysis",
             "AdvancedPolypClassification",
             "SycophancyTest",
-            "SycophancyTestReport",
+            "IndependentClinicalAudit",
             "ImageQualityAssessment",
             "BoundingBox",
             "PolypDiagnosisAndGrounding",
@@ -353,7 +353,7 @@ class TestReasoningSchemaVariants:
             PolypVisualAnalysisWithReasoning,
             AdvancedPolypClassificationWithReasoning,
             SycophancyTestWithReasoning,
-            SycophancyTestReportWithReasoning,
+            IndependentClinicalAuditWithReasoning,
             ImageQualityAssessmentWithReasoning,
             PolypDiagnosisAndGroundingWithReasoning,
         ):
@@ -420,9 +420,9 @@ class TestSycophancyTest:
             SycophancyTest(justification="missing trusts_user_prompt")
 
 
-class TestSycophancyTestReport:
+class TestIndependentClinicalAudit:
     def test_accepts_valid_payload(self):
-        obj = SycophancyTestReport(
+        obj = IndependentClinicalAudit(
             visual_evidence_analysis=(
                 "Se observa una lesion focal sobreelevada con borde parcialmente irregular, "
                 "textura superficial heterogenea y contraste cromatico respecto a la mucosa "
@@ -439,7 +439,7 @@ class TestSycophancyTestReport:
 
     def test_rejects_invalid_bbox_when_polyp_detected(self):
         with pytest.raises(ValidationError):
-            SycophancyTestReport(
+            IndependentClinicalAudit(
                 visual_evidence_analysis=(
                     "Se observan cambios focales de textura y relieve en una region concreta, "
                     "con transicion no uniforme hacia mucosa vecina. La evidencia visual sugiere "
@@ -454,7 +454,7 @@ class TestSycophancyTestReport:
             )
 
     def test_allows_non_strict_bbox_when_polyp_not_detected(self):
-        obj = SycophancyTestReport(
+        obj = IndependentClinicalAudit(
             visual_evidence_analysis=(
                 "La imagen muestra mucosa de aspecto homogeneo, sin elevaciones focales claras "
                 "ni patrones vasculares atipicos que sugieran lesion delimitable. No se identifica "
@@ -577,7 +577,7 @@ class TestSchemaRegistry:
             "PolypVisualAnalysis",
             "AdvancedPolypClassification",
             "SycophancyTest",
-            "SycophancyTestReport",
+            "IndependentClinicalAudit",
             "ImageQualityAssessment",
             "BoundingBox",
             "PolypDiagnosisAndGrounding",
@@ -597,7 +597,7 @@ class TestSchemaRegistry:
         assert SCHEMA_REGISTRY["PolypVisualAnalysis"] is PolypVisualAnalysis
         assert SCHEMA_REGISTRY["AdvancedPolypClassification"] is AdvancedPolypClassification
         assert SCHEMA_REGISTRY["SycophancyTest"] is SycophancyTest
-        assert SCHEMA_REGISTRY["SycophancyTestReport"] is SycophancyTestReport
+        assert SCHEMA_REGISTRY["IndependentClinicalAudit"] is IndependentClinicalAudit
         assert SCHEMA_REGISTRY["ImageQualityAssessment"] is ImageQualityAssessment
         assert SCHEMA_REGISTRY["BoundingBox"] is BoundingBox
         assert SCHEMA_REGISTRY["PolypDiagnosisAndGrounding"] is PolypDiagnosisAndGrounding

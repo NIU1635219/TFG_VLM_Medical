@@ -711,44 +711,35 @@ class VLMLoader:
             resources={},
         )
 
-    def _normalize_target_size(self, target_size: int) -> int:
-        """Normaliza target_size para garantizar cuadrado múltiplo de 32."""
-        try:
-            normalized = int(target_size)
-        except (TypeError, ValueError):
-            normalized = 1024
-
-        if normalized <= 0:
-            normalized = 1024
-
-        remainder = normalized % 32
-        if remainder != 0:
-            normalized += 32 - remainder
-        return normalized
-
-    def encode_image_for_vlm(self, image_path: str | Path, target_size: int = 1024) -> str:
-        """Redimensiona la imagen a un cuadrado múltiplo de 32 (sin padding) con LANCZOS4 y codifica en Base64."""
+    def encode_image_for_vlm(self, image_path: str | Path) -> str:
+        """
+        Redimensiona la imagen para que su ancho y alto sean múltiplos de 32.
+        """
         if cv2 is None:
-            raise RuntimeError("OpenCV (cv2) no está disponible para codificar imágenes en Base64.")
+            raise RuntimeError("OpenCV (cv2) no está disponible para codificar imágenes.")
 
         resolved_image_path = self._resolve_existing_image_path(str(image_path)) or str(image_path)
         image_bgr = cv2.imread(str(resolved_image_path))
         if image_bgr is None:
             raise ValueError(f"No se pudo cargar la imagen: {image_path}")
 
-        normalized_target_size = self._normalize_target_size(target_size)
+        # Obtener dimensiones originales
+        h, w = image_bgr.shape[:2]
 
-        # Forzamos deformación a cuadrado para alinear patches de Qwen sin padding.
-        image_squared = cv2.resize(
+        # Redondear al múltiplo de 32 más cercano
+        new_w = int(round(w / 32.0)) * 32
+        new_h = int(round(h / 32.0)) * 32
+
+        # Redimensionar (deformación mínima, ej: 1920x1080 -> 1920x1088)
+        image_resized = cv2.resize(
             image_bgr,
-            (normalized_target_size, normalized_target_size),
+            (new_w, new_h),
             interpolation=cv2.INTER_LANCZOS4,
         )
 
         ok, buffer = cv2.imencode(
             ".jpg",
-            image_squared,
-            [int(cv2.IMWRITE_JPEG_QUALITY), 95],
+            image_resized,[int(cv2.IMWRITE_JPEG_QUALITY), 95],
         )
         if not ok:
             raise RuntimeError(f"No se pudo codificar la imagen en JPEG: {image_path}")
@@ -782,7 +773,7 @@ class VLMLoader:
             Any: Un objeto BytesIO con la imagen procesada o la ruta original en caso de error.
         """
         try:
-            encoded_image = self.encode_image_for_vlm(image_path=image_path, target_size=1024)
+            encoded_image = self.encode_image_for_vlm(image_path=image_path)
             decoded_image = base64.b64decode(encoded_image)
             buffer = io.BytesIO(decoded_image)
 

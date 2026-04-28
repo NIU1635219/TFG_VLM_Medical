@@ -1,7 +1,7 @@
-"""Selector de escenarios de grounding (stub) separado para mantener el menú principal limpio.
+"""Selector de escenarios de grounding (stub) separado para mantener el menu principal limpio.
 
-Este módulo contiene la UI de selección de escenarios A/B/C/D/E/F y está pensado
-para recibir un `make_header_fn` desde el menú principal para conservar
+Este modulo contiene la UI de seleccion de escenarios A/B/C/D/E/F/S y esta pensado
+para recibir un `make_header_fn` desde el menu principal para conservar
 consistencia en el renderizado de cabeceras.
 """
 
@@ -13,7 +13,9 @@ from typing import TYPE_CHECKING, Any, Callable, cast
 from ..setup_ui_io import ask_text
 from .grounding_scenarios_helpers import (
     build_live_confusion_heatmap_lines as _build_live_confusion_heatmap_lines,
+    build_live_sycophancy_heatmap_lines as _build_live_sycophancy_heatmap_lines,
     empty_live_confusion_counts as _empty_live_confusion_counts,
+    empty_sycophancy_by_class_counts as _empty_sycophancy_by_class_counts,
     heatmap_cell_style as _heatmap_cell_style,
     heatmap_rgb_from_percentage as _heatmap_rgb_from_percentage,
     resolve_existing_dir as _resolve_existing_dir,
@@ -30,19 +32,35 @@ _GROUNDING_SEED_CURSOR_KEY = "grounding_scenarios_seed"
 _GROUNDING_LAST_OUTPUTS_CURSOR_KEY = "grounding_scenarios_last_outputs"
 
 
-def _discover_last_scenario_output_from_meta(*, scenario_code: str) -> Path | None:
+def _build_output_cache_key(*, scenario_code: str, level: int | None = None) -> str:
+    """Build cache key for last outputs, separating Scenario S by level."""
+    if str(scenario_code).upper() == "S" and isinstance(level, int):
+        return f"S_level_{int(level)}"
+    return str(scenario_code).upper()
+
+
+def _discover_last_scenario_output_from_meta(
+    *,
+    scenario_code: str,
+    level: int | None = None,
+) -> Path | None:
     """Descubre el último JSONL válido de un escenario usando cabecera __scenario_meta__."""
-    scenario_dir = _resolve_existing_dir(
-        Path("data/processed/scenario_results") / f"scenario_{scenario_code}"
-    )
+    if str(scenario_code).upper() == "S" and isinstance(level, int):
+        scenario_dir = _resolve_existing_dir(
+            Path("data/processed/scenario_results") / "scenario_S" / f"level_{int(level)}"
+        )
+    else:
+        scenario_dir = _resolve_existing_dir(
+            Path("data/processed/scenario_results") / f"scenario_{scenario_code}"
+        )
     if scenario_dir is None:
         return None
 
-    candidates = sorted(
-        scenario_dir.glob("run_*/results.jsonl"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
+    candidate_paths: list[Path] = []
+    candidate_paths.extend(scenario_dir.glob("run_*/results.jsonl"))
+    if not (str(scenario_code).upper() == "S" and isinstance(level, int)):
+        candidate_paths.extend(scenario_dir.glob("level_*/run_*/results.jsonl"))
+    candidates = sorted(candidate_paths, key=lambda path: path.stat().st_mtime, reverse=True)
     if not candidates:
         return None
 
@@ -114,7 +132,7 @@ def _select_grounding_sample_size(kit: "UIKit") -> int | None:
 
 
 def _select_grounding_seed(kit: "UIKit", *, initial_value: int = 42) -> int | None:
-    """Solicita semilla común para muestreo reproducible en escenarios A/B/C/D/E/F."""
+    """Solicita semilla comun para muestreo reproducible en escenarios A/B/C/D/E/F/S."""
 
     def _validate_seed(raw_value: str) -> str | None:
         if not raw_value:
@@ -128,7 +146,7 @@ def _select_grounding_seed(kit: "UIKit", *, initial_value: int = 42) -> int | No
         title="GROUNDING SCENARIOS · RANDOM SEED",
         intro_lines=[
             (
-                f"{kit.style.DIM}Usa la misma seed para que los escenarios A/B/C/D/E/F"
+                f"{kit.style.DIM}Usa la misma seed para que los escenarios A/B/C/D/E/F/S"
                 f" evalúen el mismo subconjunto de imágenes.{kit.style.ENDC}"
             ),
         ],
@@ -212,6 +230,8 @@ def _run_scenario_with_dashboards(
     model_tag: str,
     sample_size: int,
     seed: int,
+    extra_argv: list[str] | None = None,
+    output_cache_key: str | None = None,
     resume_mode: bool = False,
     resume_output_path: Path | None = None,
 ) -> int:
@@ -225,6 +245,8 @@ def _run_scenario_with_dashboards(
         sample_size=sample_size,
         seed=seed,
         outputs_cursor_key=_GROUNDING_LAST_OUTPUTS_CURSOR_KEY,
+        output_cache_key=output_cache_key,
+        extra_argv=extra_argv,
         resume_mode=resume_mode,
         resume_output_path=resume_output_path,
     )
@@ -386,6 +408,89 @@ def _run_scenario_f_with_dashboards(
     )
 
 
+def _select_sycophancy_level(kit: "UIKit", *, initial_value: int = 1) -> int | None:
+    """Solicita nivel de dureza de prompt enganoso para Scenario S (1-3)."""
+    valid_levels = {1, 2, 3}
+    default_level = int(initial_value) if int(initial_value) in valid_levels else 1
+
+    options = [
+        kit.MenuItem(
+            " Nivel 1 (duda suave)",
+            lambda: 1,
+            description="Presion baja: peticion insegura y abierta a correccion.",
+        ),
+        kit.MenuItem(
+            " Nivel 2 (autoridad documental)",
+            lambda: 2,
+            description="Presion media: referencia a informe previo supuestamente correcto.",
+        ),
+        kit.MenuItem(
+            " Nivel 3 (autoridad jerarquica)",
+            lambda: 3,
+            description="Presion alta: instruccion imperativa de una figura de autoridad.",
+        ),
+        kit.MenuItem(
+            " Back",
+            lambda: "BACK",
+            description="Cancelar seleccion de nivel.",
+        ),
+    ]
+
+    selected = kit.menu(
+        options,
+        header_func=None,
+        multi_select=False,
+        menu_id="grounding_scenario_s_level_selector",
+        nav_hint_text=f"Nivel actual sugerido: {default_level} · ↑/↓ navegar · ENTER seleccionar · ESC volver",
+    )
+    if not selected or selected == "BACK":
+        return None
+
+    if isinstance(selected, list):
+        selected = selected[0] if len(selected) > 0 else None
+    if not selected:
+        return None
+
+    if hasattr(selected, "action") and callable(selected.action):
+        selected_value = selected.action()
+        if selected_value == "BACK":
+            return None
+        if isinstance(selected_value, int) and selected_value in valid_levels:
+            return selected_value
+
+    return None
+
+
+def _run_scenario_s_with_dashboards(
+    *,
+    kit: "UIKit",
+    app: "AppContext",
+    model_tag: str,
+    sample_size: int,
+    seed: int,
+    level: int,
+    output_cache_key: str,
+    resume_mode: bool = False,
+    resume_output_path: Path | None = None,
+) -> int:
+    """Ejecuta Scenario S con dashboard en vivo y pantalla final."""
+    from src.scripts.grounding_experiments.run_scenario_S import main as run_scenario_s_main
+
+    return _run_scenario_with_dashboards(
+        kit=kit,
+        app=app,
+        scenario_code="S",
+        run_main=run_scenario_s_main,
+        model_tag=model_tag,
+        sample_size=sample_size,
+        seed=seed,
+        output_cache_key=output_cache_key,
+        extra_argv=["--level", str(int(level))],
+        resume_mode=resume_mode,
+        resume_output_path=resume_output_path,
+    )
+
+
 def run_grounding_scenarios_selector_wrapper(
     kit: "UIKit",
     app: "AppContext",
@@ -393,11 +498,11 @@ def run_grounding_scenarios_selector_wrapper(
     make_header_fn: Callable[[str], Any],
     select_model: Callable[[str, str], str | None],
 ) -> None:
-    """Muestra selector stub de escenarios de grounding A/B/C/D/E/F.
+    """Muestra selector stub de escenarios de grounding A/B/C/D/E/F/S.
 
     Este stub mantiene la UX y el texto tal como estaba en el menú original.
     Más adelante se podrá reemplazar la acción de cada opción por el runner
-    correspondiente (A/B/C/D/E/F).
+    correspondiente (A/B/C/D/E/F/S).
     """
 
     scenario_options = [
@@ -432,6 +537,11 @@ def run_grounding_scenarios_selector_wrapper(
             description="Grounding + informe clínico explicativo con diagnóstico GT inyectado.",
         ),
         kit.MenuItem(
+            " Scenario S (Sycophancy Stress Test)",
+            lambda: "S",
+            description="Evalua complacencia ante prompts enganosos por niveles de autoridad (1/2/3).",
+        ),
+        kit.MenuItem(
             " Back",
             lambda: "BACK",
             description="Volver al menú de tests.",
@@ -455,15 +565,28 @@ def run_grounding_scenarios_selector_wrapper(
 
     if hasattr(selected, "action") and callable(selected.action):
         scenario_code = str(selected.action())
-        if scenario_code in {"A", "B", "C", "D", "E", "F"}:
+        if scenario_code in {"A", "B", "C", "D", "E", "F", "S"}:
+            selected_level: int | None = None
+            if scenario_code == "S":
+                selected_level = _select_sycophancy_level(kit, initial_value=1)
+                if selected_level is None:
+                    return
+
             raw_outputs = kit.cursor_memory.get(_GROUNDING_LAST_OUTPUTS_CURSOR_KEY)
             known_outputs = cast(dict[str, str], raw_outputs) if isinstance(raw_outputs, dict) else {}
+            output_cache_key = _build_output_cache_key(
+                scenario_code=scenario_code,
+                level=selected_level,
+            )
             last_output_path = None
-            last_output_raw = known_outputs.get(scenario_code)
+            last_output_raw = known_outputs.get(output_cache_key)
             if last_output_raw:
                 last_output_path = _resolve_existing_file(str(last_output_raw))
             if last_output_path is None:
-                last_output_path = _discover_last_scenario_output_from_meta(scenario_code=scenario_code)
+                last_output_path = _discover_last_scenario_output_from_meta(
+                    scenario_code=scenario_code,
+                    level=selected_level,
+                )
 
             run_mode = _select_grounding_run_mode(
                 kit,
@@ -492,6 +615,19 @@ def run_grounding_scenarios_selector_wrapper(
                 raw_limit = meta.get("requested_limit")
                 if isinstance(raw_limit, int) and raw_limit > 0:
                     selected_sample_size = raw_limit
+
+                raw_level = meta.get("level")
+                if isinstance(raw_level, int) and raw_level in {1, 2, 3}:
+                    if scenario_code == "S" and selected_level is not None and raw_level != selected_level:
+                        kit.log(
+                            (
+                                "Resume bloqueado: el run seleccionado pertenece a "
+                                f"level={raw_level}, pero seleccionaste level={selected_level}."
+                            ),
+                            "warning",
+                        )
+                        return
+                    selected_level = raw_level
 
             if model_tag is None:
                 model_tag = select_model(
@@ -572,6 +708,21 @@ def run_grounding_scenarios_selector_wrapper(
                         model_tag=model_tag,
                         sample_size=selected_sample_size,
                         seed=selected_seed,
+                        resume_mode=resume_mode,
+                        resume_output_path=resume_output_path,
+                    )
+                elif scenario_code == "S":
+                    if selected_level is None:
+                        kit.log("Debes seleccionar un nivel valido para Scenario S.", "warning")
+                        return
+                    exit_code = _run_scenario_s_with_dashboards(
+                        kit=kit,
+                        app=app,
+                        model_tag=model_tag,
+                        sample_size=selected_sample_size,
+                        seed=selected_seed,
+                        level=selected_level,
+                        output_cache_key=output_cache_key,
                         resume_mode=resume_mode,
                         resume_output_path=resume_output_path,
                     )

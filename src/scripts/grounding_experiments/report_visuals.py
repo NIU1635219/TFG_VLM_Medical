@@ -599,3 +599,114 @@ def write_proximity_threshold_cumulative_curve(
         return output_path
     except Exception:
         return None
+
+
+def write_scenario_s_kpi_charts(*, run_dir: Path, kpis: dict[str, Any], level: int) -> dict[str, Path]:
+    """Generate Scenario S-specific KPI charts in report_assets."""
+    assets_dir = run_dir / "report_assets"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    output_paths: dict[str, Path] = {}
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        return output_paths
+
+    contradiction_rate = kpis.get("contradiction_rate")
+    obedience_rate = kpis.get("obedience_rate")
+    polyp_detected_rate = kpis.get("polyp_detected_rate")
+
+    rate_labels: list[str] = []
+    rate_values: list[float] = []
+    for label, value in (
+        ("Contradiction", contradiction_rate),
+        ("Obedience", obedience_rate),
+        ("Polyp detected", polyp_detected_rate),
+    ):
+        if isinstance(value, (int, float)):
+            rate_labels.append(label)
+            rate_values.append(max(0.0, min(1.0, float(value))))
+
+    if rate_labels:
+        rates_path = assets_dir / "scenario_s_kpi_rates.png"
+        try:
+            fig, axis = plt.subplots(figsize=(7.2, 4.6))
+            bars = axis.bar(
+                rate_labels,
+                [value * 100.0 for value in rate_values],
+                color=["#2E8B57", "#B22222", "#2878B5"],
+            )
+            axis.set_ylim(0.0, 100.0)
+            axis.set_ylabel("Rate (%)")
+            axis.set_title(f"Scenario S L{level} · KPI rates")
+            axis.grid(axis="y", linestyle="--", alpha=0.35)
+            for index, bar in enumerate(bars):
+                axis.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    bar.get_height() + 1.0,
+                    f"{rate_values[index] * 100.0:.1f}%",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                )
+            fig.tight_layout()
+            fig.savefig(rates_path, dpi=160)
+            plt.close(fig)
+            output_paths["kpi_rates"] = rates_path
+        except Exception:
+            plt.close("all")
+
+    by_gt_class = kpis.get("by_gt_class")
+    if isinstance(by_gt_class, dict):
+        labels = ["AD", "HP", "ASS", "OTHER"]
+        true_counts = [
+            int((by_gt_class.get(label) or {}).get("TRUE") or 0)
+            if isinstance(by_gt_class.get(label), dict)
+            else 0
+            for label in labels
+        ]
+        false_counts = [
+            int((by_gt_class.get(label) or {}).get("FALSE") or 0)
+            if isinstance(by_gt_class.get(label), dict)
+            else 0
+            for label in labels
+        ]
+
+        if any(value > 0 for value in true_counts + false_counts):
+            by_class_path = assets_dir / "scenario_s_contradiction_by_gt_class.png"
+            try:
+                positions = list(range(len(labels)))
+                width = 0.36
+                fig, axis = plt.subplots(figsize=(8.0, 4.8))
+                axis.bar(
+                    [position - width / 2.0 for position in positions],
+                    true_counts,
+                    width=width,
+                    label="TRUE (contradiction)",
+                    color="#2E8B57",
+                )
+                axis.bar(
+                    [position + width / 2.0 for position in positions],
+                    false_counts,
+                    width=width,
+                    label="FALSE (obedience)",
+                    color="#B22222",
+                )
+                axis.set_xticks(positions)
+                axis.set_xticklabels(labels)
+                axis.set_ylabel("Count")
+                axis.set_xlabel("GT class")
+                axis.set_title(f"Scenario S L{level} · Contradiction by GT class")
+                axis.legend(loc="upper right")
+                axis.grid(axis="y", linestyle="--", alpha=0.35)
+                fig.tight_layout()
+                fig.savefig(by_class_path, dpi=160)
+                plt.close(fig)
+                output_paths["by_gt_class"] = by_class_path
+            except Exception:
+                plt.close("all")
+
+    return output_paths

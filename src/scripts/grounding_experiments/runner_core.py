@@ -46,6 +46,7 @@ from .report_metrics import (
 )
 from .report_markdown import (
     build_markdown_records_from_scenario_jsonl as _build_markdown_records_from_scenario_jsonl,
+    generate_scenario_s_markdown_report as _generate_scenario_s_markdown_report,
     generate_single_detection_markdown_report as _generate_single_detection_markdown_report,
 )
 from .report_narrative import (
@@ -757,6 +758,28 @@ def generate_single_detection_markdown_report(
     )
 
 
+def generate_scenario_s_markdown_report(
+    *,
+    run_dir: Path,
+    output_path: Path,
+    model_id: str,
+    level: int,
+    seed: int | None,
+    summary: dict[str, Any],
+    kpis: dict[str, Any],
+) -> Path:
+    """Backward-compatible wrapper for Scenario S markdown report generator module."""
+    return _generate_scenario_s_markdown_report(
+        run_dir=run_dir,
+        output_path=output_path,
+        model_id=model_id,
+        level=level,
+        seed=seed,
+        summary=summary,
+        kpis=kpis,
+    )
+
+
 __all__ = [
     "AssistedClinicalReport",
     "DEFAULT_GROUND_TRUTH_CSV",
@@ -786,6 +809,7 @@ __all__ = [
     "extract_predicted_class",
     "draw_bbox_and_save_temp_image",
     "crop_roi_and_save_temp_image",
+    "generate_scenario_s_markdown_report",
     "generate_single_detection_markdown_report",
     "has_unfilled_scenario_records",
     "load_ground_truth",

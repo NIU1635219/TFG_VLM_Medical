@@ -308,27 +308,6 @@ def test_inference_does_not_send_native_thinking_config(mock_lms_sdk):
 
 
 @pytest.mark.skipif(PILImage is None, reason="Pillow no está disponible")
-def test_prepare_image_source_for_lms_resizes_to_square_lanczos_for_qwen(tmp_path):
-    """Aplica resize cuadrado 1024x1024 para grounding, evitando drift espacial."""
-    image_path = tmp_path / "large_input.jpg"
-    source_image = PILImage.new("RGB", (3000, 1000), color="white")
-    source_image.save(image_path)
-
-    loader = VLMLoader(model_path=FAKE_MODEL_TAG)
-    prepared = loader._prepare_image_source_for_lms(str(image_path))
-
-    prepared_image = PILImage.open(prepared)
-    width, height = prepared_image.size
-
-    if vlm_module.cv2 is not None:
-        assert width == 1024
-        assert height == 1024
-    else:
-        # Fallback legacy si OpenCV no está disponible.
-        assert width * height <= 1_800_000
-
-
-@pytest.mark.skipif(PILImage is None, reason="Pillow no está disponible")
 def test_prepare_image_source_for_lms_handles_windows_style_name_on_posix(tmp_path):
     """Genera nombre PNG correcto aunque la ruta entrante tenga separadores Windows."""
     image_path = tmp_path / "sample_input.jpg"

@@ -13,6 +13,8 @@ from .metrics import calculate_iou, calculate_proximity_score, summarize_numeric
 from .test_dashboards_ui import _render_table_lines
 
 HEATMAP_CLASS_ORDER: tuple[str, ...] = ("AD", "HP", "ASS")
+SYCOPHANCY_CLASS_ORDER: tuple[str, ...] = ("AD", "HP", "ASS", "OTHER")
+SYCOPHANCY_TRUE_FALSE_ORDER: tuple[str, ...] = ("TRUE", "FALSE")
 
 
 def normalize_heatmap_class(value: Any) -> str | None:
@@ -28,6 +30,22 @@ def empty_live_confusion_counts() -> dict[str, dict[str, int]]:
     return {
         gt_label: {pred_label: 0 for pred_label in HEATMAP_CLASS_ORDER}
         for gt_label in HEATMAP_CLASS_ORDER
+    }
+
+
+def normalize_sycophancy_gt_class(value: Any) -> str:
+    """Normaliza la clase GT para matriz de sycophancy por clase."""
+    label = str(value or "").strip().upper()
+    if label in {"AD", "HP", "ASS"}:
+        return label
+    return "OTHER"
+
+
+def empty_sycophancy_by_class_counts() -> dict[str, dict[str, int]]:
+    """Inicializa conteos por clase GT para contradicción true/false."""
+    return {
+        gt_label: {bucket: 0 for bucket in SYCOPHANCY_TRUE_FALSE_ORDER}
+        for gt_label in SYCOPHANCY_CLASS_ORDER
     }
 
 
@@ -177,6 +195,124 @@ def build_live_confusion_heatmap_lines(
         "Heatmap GT→Pred (live):",
         *table_lines,
         "Leyenda: celda = conteo / %global / %filaGT · color = %global (blanco→amarillo→naranja→escarlata)",
+    ]
+
+
+def build_live_sycophancy_heatmap_lines(
+    kit: Any,
+    by_class_counts: dict[str, dict[str, int]],
+    *,
+    ui_width: int | None = None,
+) -> list[str]:
+    """Construye tabla live para Scenario S: clase GT vs contradicción true/false."""
+    total_true = 0
+    total_false = 0
+    for gt_label in SYCOPHANCY_CLASS_ORDER:
+        row = by_class_counts.get(gt_label) or {}
+        total_true += int(row.get("TRUE") or 0)
+        total_false += int(row.get("FALSE") or 0)
+
+    global_total = total_true + total_false
+    rows: list[list[str]] = []
+    colored_rows: list[Any] = []
+
+    for gt_label in SYCOPHANCY_CLASS_ORDER:
+        row = by_class_counts.get(gt_label) or {}
+        true_count = int(row.get("TRUE") or 0)
+        false_count = int(row.get("FALSE") or 0)
+        row_total = true_count + false_count
+        true_pct_global = (float(true_count) / float(global_total) * 100.0) if global_total > 0 else 0.0
+        false_pct_global = (float(false_count) / float(global_total) * 100.0) if global_total > 0 else 0.0
+        contradiction_rate = (float(true_count) / float(row_total) * 100.0) if row_total > 0 else None
+
+        true_cell = f"{true_count:>3} {true_pct_global:>4.1f}%"
+        false_cell = f"{false_count:>3} {false_pct_global:>4.1f}%"
+        total_cell = f"{row_total:>3}"
+        rate_cell = f"{contradiction_rate:>4.1f}%" if isinstance(contradiction_rate, float) else "  N/D"
+
+        rows.append([f"GT {gt_label}", true_cell, false_cell, total_cell, rate_cell])
+        colored_rows.append(
+            {
+                "cells": [f"GT {gt_label}", true_cell, false_cell, total_cell, rate_cell],
+                "colors": [
+                    "DIM",
+                    _heatmap_cell_style(percentage=true_pct_global),
+                    _heatmap_cell_style(percentage=false_pct_global),
+                    _heatmap_cell_style(percentage=(float(row_total) / float(global_total) * 100.0) if global_total > 0 else 0.0),
+                    _heatmap_cell_style(percentage=contradiction_rate if isinstance(contradiction_rate, float) else 0.0),
+                ],
+            }
+        )
+
+    total_true_pct = (float(total_true) / float(global_total) * 100.0) if global_total > 0 else 0.0
+    total_false_pct = (float(total_false) / float(global_total) * 100.0) if global_total > 0 else 0.0
+    total_contradiction_rate = (float(total_true) / float(global_total) * 100.0) if global_total > 0 else None
+    total_row = [
+        "Total",
+        f"{total_true:>3} {total_true_pct:>4.1f}%",
+        f"{total_false:>3} {total_false_pct:>4.1f}%",
+        f"{global_total:>3}",
+        f"{total_contradiction_rate:>4.1f}%" if isinstance(total_contradiction_rate, float) else "  N/D",
+    ]
+    rows.append(total_row)
+    colored_rows.append(
+        {
+            "cells": total_row,
+            "colors": [
+                _heatmap_cell_style(percentage=100.0),
+                _heatmap_cell_style(percentage=total_true_pct),
+                _heatmap_cell_style(percentage=total_false_pct),
+                _heatmap_cell_style(percentage=100.0),
+                _heatmap_cell_style(percentage=total_contradiction_rate if isinstance(total_contradiction_rate, float) else 0.0),
+            ],
+        }
+    )
+
+    table_menu_fn = getattr(kit, "table_menu", None)
+    table_column_cls = getattr(kit, "TableColumn", None)
+    table_row_cls = getattr(kit, "TableRow", None)
+    if callable(table_menu_fn) and table_column_cls is not None and table_row_cls is not None:
+        width = kit.width() if ui_width is None else int(ui_width)
+        columns = [
+            table_column_cls(label="GT class", width_ratio=0.25, min_width=12),
+            table_column_cls(label="Contradict=True", width_ratio=0.2, min_width=14),
+            table_column_cls(label="Contradict=False", width_ratio=0.2, min_width=14),
+            table_column_cls(label="Total", width_ratio=0.15, min_width=8),
+            table_column_cls(label="Contr%", width_ratio=0.2, min_width=10),
+        ]
+        table_rows = [
+            table_row_cls(cells=list(item["cells"]), cell_colors=list(item["colors"]))
+            for item in colored_rows
+        ]
+        rendered = table_menu_fn(
+            columns,
+            table_rows,
+            interactive=False,
+            return_lines=True,
+            width=width,
+            max_cell_lines=False,
+        )
+        if isinstance(rendered, list):
+            table_lines = [str(line) for line in rendered]
+        else:
+            table_lines = _render_table_lines(
+                kit,
+                ["GT class", "Contradict=True", "Contradict=False", "Total", "Contr%"],
+                rows,
+                ui_width=ui_width,
+            )
+    else:
+        table_lines = _render_table_lines(
+            kit,
+            ["GT class", "Contradict=True", "Contradict=False", "Total", "Contr%"],
+            rows,
+            ui_width=ui_width,
+        )
+
+    return [
+        "Heatmap Scenario S (GT clase vs contradicción):",
+        *table_lines,
+        "Leyenda: cada celda muestra conteo y %global; Contr% es %TRUE dentro de la clase GT.",
     ]
 
 
@@ -433,6 +569,9 @@ def summarize_existing_scenario_records(records: list[dict[str, Any]]) -> dict[s
     gt_class_counts: dict[str, int] = {"AD": 0, "HP": 0, "ASS": 0, "OTHER": 0}
     pred_class_counts: dict[str, int] = {"AD": 0, "HP": 0, "ASS": 0, "OTHER": 0}
     confusion_counts = empty_live_confusion_counts()
+    sycophancy_by_class_counts = empty_sycophancy_by_class_counts()
+    contradiction_count = 0
+    obedience_count = 0
 
     def _bucket_class(target: dict[str, int], value: Any) -> None:
         label = str(value or "").strip().upper()
@@ -478,6 +617,19 @@ def summarize_existing_scenario_records(records: list[dict[str, Any]]) -> dict[s
         if gt_conf is not None and pred_conf is not None:
             confusion_counts[gt_conf][pred_conf] = int(confusion_counts[gt_conf].get(pred_conf) or 0) + 1
 
+        payload = entry.get("payload")
+        if isinstance(payload, dict):
+            contradicts_prompt = payload.get("contradicts_prompt")
+            if isinstance(contradicts_prompt, bool):
+                gt_sycophancy = normalize_sycophancy_gt_class(entry.get("ground_truth_cls"))
+                bucket = "TRUE" if contradicts_prompt else "FALSE"
+                row_bucket = sycophancy_by_class_counts.setdefault(gt_sycophancy, {"TRUE": 0, "FALSE": 0})
+                row_bucket[bucket] = int(row_bucket.get(bucket) or 0) + 1
+                if contradicts_prompt:
+                    contradiction_count += 1
+                else:
+                    obedience_count += 1
+
         ttft_value = entry.get("ttft_seconds")
         if isinstance(ttft_value, (int, float)):
             ttft_sum += float(ttft_value)
@@ -517,6 +669,8 @@ def summarize_existing_scenario_records(records: list[dict[str, Any]]) -> dict[s
         "skip": skip,
         "matched": matched,
         "mismatched": mismatched,
+        "contradiction_count": contradiction_count,
+        "obedience_count": obedience_count,
         "avg_ttft": avg_ttft,
         "avg_tps": avg_tps,
         "avg_duration": avg_duration,
@@ -535,4 +689,5 @@ def summarize_existing_scenario_records(records: list[dict[str, Any]]) -> dict[s
         "gt_class_counts": gt_class_counts,
         "pred_class_counts": pred_class_counts,
         "confusion_counts": confusion_counts,
+        "sycophancy_by_class_counts": sycophancy_by_class_counts,
     }

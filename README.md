@@ -20,7 +20,7 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - `UIKit` incluye API de tablas tipadas y reutilizables (`TableColumn`, `TableRow`, `TableCell`, `build_table_items`, `table_menu`) con anchos adaptativos al terminal.
 - Motor de tablas TUI ampliado con celdas avanzadas (`rowspan`/`colspan`) y control de truncado por líneas (`max_cell_lines`) para mejorar legibilidad en terminales estrechos.
 - `UIKit` añade `render_and_wait_responsive(...)` como helper común de espera reactiva, con repintado automático al redimensionar el terminal.
-- Dashboard de escenarios de grounding (A/B/C/D/E/F) en vivo desde Setup Tests UI:
+- Dashboard de escenarios de grounding (A/B/C/D/E/F/S) en vivo desde Setup Tests UI:
     - barra de progreso con clamp defensivo (`current` no excede `total`),
     - resumen de clase (match/mismatch),
     - línea de estado con bloque `Métricas` (Acc/IoU/Proximity) en tiempo real,
@@ -36,6 +36,7 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Registros JSONL de escenarios A/B/C/E/F ampliados con `proximity_score`, `proximity_center_score` y `proximity_size_score`.
 - Resumen acumulado de escenarios ampliado con `avg_proximity`.
 - Reporte Markdown de escenarios A/B/C/E/F ampliado con sección `Análisis Proximity` y 5 gráficos en `report_assets`.
+- Reporte Markdown de Scenario S con KPIs de sycophancy (contradicción/obediencia/detección), desglose por clase GT y gráficos en `report_assets`.
 - Schema Tester integrado en el manager: selección interactiva de modelo + esquema + inferencia por lotes.
 - Batch Runner CLI con exportado incremental en JSONL compartido por manifiesto+schema.
 - Batch Runner: enriquecimiento espacial opcional en JSONL para detecciones con `iou_score` (por bbox),
@@ -97,12 +98,14 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - Batch Runner: borrado de manifiesto desde TUI con limpieza de outputs JSONL vinculados.
 - Convención UI: pantallas finales estructuradas migradas al helper común `render_and_wait_responsive(...)` para espera reactiva con repintado por redimensionado (manifest/schema/smoke/telemetry/response inspector/batch summary).
 - Setup Tests UI: nueva opción `Run A/B Prompting Experiment (AD)` con preview previo, confirmación y pantalla final reactiva.
-- Setup Tests UI: selector `Select Grounding Scenario (A/B/C/D/E/F)` integrado con ejecución real para escenarios A, B, C, D, E y F.
+- Setup Tests UI: selector `Select Grounding Scenario (A/B/C/D/E/F/S)` integrado con ejecución real para escenarios A, B, C, D, E, F y S.
 - Grounding: nuevo Scenario F para reporte clínico asistido (clase GT inyectada + bbox + explicación clínica estructurada).
+- Grounding: nuevo Scenario S para stress test de sycophancy con niveles de autoridad (level 1/2/3).
 - Grounding scenarios: robustez de completitud/resume con skeleton JSONL (`pending`), upsert por `image_id` y detección de registros sin rellenar.
 - Grounding scenarios: registros con `status=error/failed/fail` se consideran incompletos para `resume`.
 - Dashboard live de grounding: heatmap clínico GT→Pred con porcentaje global y porcentaje por fila GT en cada celda.
 - Dashboard live de grounding: leyenda compacta en una línea y panel reordenado (tabla heatmap arriba, ruta de salida JSONL debajo).
+- Dashboard live de grounding: en Scenario S se renderiza heatmap de contradicción (`TRUE`/`FALSE`) por clase GT.
 - Nuevo script `src/scripts/experiment_ab_text.py` para detección automática de variantes desde JSONL (`__batch_meta__`) y comparación cualitativa A/B sobre muestras AD estratificadas.
 - Motor visual/TUI: tablas estáticas y dashboards migrados al render unificado de `table_menu(..., interactive=False, return_lines=True)` con mejor reparto de columnas y truncado controlado.
 - Cobertura de pruebas ampliada para flujo A/B y renderizado reactivo de tablas en pantallas finales.
@@ -162,13 +165,14 @@ Dependencias declaradas en `pyproject.toml`.
 │   ├── scripts/
 │   │   ├── batch_runner.py             # Orquestador masivo con exportado incremental en JSONL compartido.
 │   │   ├── experiment_ab_text.py       # Experimento A/B zero-shot vs asistido con Ground Truth AD y reporte Markdown.
-│   │   ├── grounding_experiments/      # Escenarios de grounding A/B/C/D/E/F y módulos de reporte/agregación.
+│   │   ├── grounding_experiments/      # Escenarios de grounding A/B/C/D/E/F/S y módulos de reporte/agregación.
 │   │   │   ├── run_scenario_A.py       # Scenario A: zero-shot (bbox + clase) con reporte Markdown.
 │   │   │   ├── run_scenario_B.py       # Scenario B: asistido por clase GT (lookup split) con reporte Markdown.
 │   │   │   ├── run_scenario_C.py       # Scenario C: bbox GT superpuesto sobre imagen completa para guiar la localización.
 │   │   │   ├── run_scenario_D.py       # Scenario D: clasificación focalizada con recorte ROI y schema sin bbox/IoU.
 │   │   │   ├── run_scenario_E.py       # Scenario E: combinación de B+C (clase asistida + bbox GT dibujada sobre imagen completa).
 │   │   │   ├── run_scenario_F.py       # Scenario F: reporte clínico asistido (bbox + explicabilidad clínica con diagnóstico GT inyectado).
+│   │   │   ├── run_scenario_S.py       # Scenario S: stress test de sycophancy con prompts de autoridad por nivel (1/2/3).
 │   │   │   ├── runner_core.py          # Fachada pública compartida usada por escenarios y UI (IoU + Proximity safe).
 │   │   │   ├── report_common.py        # Helpers comunes (normalización de clase, extracción de clase predicha, bbox [xmin,ymin,xmax,ymax]).
 │   │   │   ├── report_aggregation.py   # Persistencia y agregación JSONL (meta/summary/resume, avg_iou + avg_proximity).
@@ -203,7 +207,7 @@ Dependencias declaradas en `pyproject.toml`.
 │           ├── ab_experiment.py        # Flujo UI del experimento A/B con preview de variantes y resumen final.
 │           ├── batch.py                # Flujo UI del Batch Runner y selección de parámetros de ejecución.
 │           ├── cli_reporters.py        # Reportes CLI y helpers de render para dashboards y tests
-│           ├── grounding_scenarios.py  # Selector y orquestación de escenarios A/B/C/D/E/F desde la TUI.
+│           ├── grounding_scenarios.py  # Selector y orquestación de escenarios A/B/C/D/E/F/S desde la TUI.
 │           ├── grounding_scenarios_helpers.py # Helpers de validación y preparación de inputs para grounding.
 │           ├── grounding_scenarios_live_runner.py # Ejecución live desacoplada para dashboards de grounding.
 │           ├── manifest.py             # Gestión completa de manifests (crear/derivar/usar/eliminar) y limpieza de outputs.
@@ -695,12 +699,12 @@ Nota de reporte PoC BBox (`src/scripts/poc_bbox.py`):
 
 ## Grounding Scenarios (`src/scripts/grounding_experiments/`)
 
-Módulo dedicado a escenarios de visual grounding clínico con ejecución incremental en JSONL, modo `resume`, generación de artefactos visuales y reporte Markdown enriquecido.
+Módulo dedicado a escenarios de visual grounding clínico y robustez de razonamiento (Scenario S) con ejecución incremental en JSONL, modo `resume`, generación de artefactos visuales y reporte Markdown enriquecido.
 
 Arquitectura actual:
 
 - `runner_core.py` actúa como fachada única para escenarios y UI.
-- Todos los escenarios A/B/C/D/E/F importan utilidades compartidas exclusivamente desde `runner_core.py`.
+- Todos los escenarios A/B/C/D/E/F/S importan utilidades compartidas exclusivamente desde `runner_core.py`.
 - Persistencia/agregación JSONL en `report_aggregation.py`.
 - Helpers reutilizables transversales en `report_common.py` (sin duplicación de lógica de clase/bbox).
 - Serialización de registros por imagen en `report_serialization.py`.
@@ -808,7 +812,20 @@ Escenario de reporte clínico asistido:
 - Exige explicabilidad clínica estructurada de alto detalle (morfología, patrón vascular y razonamiento diagnóstico).
 - Conserva contrato común: JSONL incremental + `__scenario_meta__` + `__scenario_summary__` + reporte Markdown.
 
-### Artefactos visuales de reporte (A/B/C/E/F)
+### Scenario S (`run_scenario_S.py`)
+
+Escenario de stress test de sycophancy con presión de autoridad:
+
+- Ejecuta prompts engañosos con tres niveles de intensidad (`--level 1|2|3`).
+- Evalúa si el modelo mantiene criterio visual frente a la instrucción autoritaria.
+- KPIs específicos:
+    - `prompt_contradiction_rate`
+    - `prompt_obedience_rate`
+    - `polyp_detected_rate`
+    - desglose `TRUE/FALSE` de contradicción por clase GT.
+- Conserva contrato común: JSONL incremental + `__scenario_meta__` + `__scenario_summary__` + reporte Markdown.
+
+### Artefactos visuales de reporte (A/B/C/E/F/S)
 
 Además del heatmap de confusión (`class_confusion_heatmap.png`), el reporte genera:
 
@@ -824,6 +841,9 @@ Además del heatmap de confusión (`class_confusion_heatmap.png`), el reporte ge
     - `proximity_correctness_comparison.png`
     - `proximity_boxplot_class_correctness.png`
     - `proximity_threshold_cumulative_curve.png`
+- Scenario S:
+    - `scenario_s_kpi_rates.png`
+    - `scenario_s_contradiction_by_gt_class.png`
 
 ### Convenciones de datos para escenarios
 
@@ -831,9 +851,9 @@ Además del heatmap de confusión (`class_confusion_heatmap.png`), el reporte ge
 - Exportación recomendada de BBoxes por split operativo: `m_train` y `m_valid`.
 - `m_test` puede existir como partición de evaluación, pero no se cuenta en el flujo operativo por defecto cuando no dispone de máscaras.
 
-### UI live y completitud en escenarios A/B/C/D/E/F
+### UI live y completitud en escenarios A/B/C/D/E/F/S
 
-- Desde Setup Tests UI se ejecutan A/B/C/D/E/F con dashboard en vivo y cierre en pantalla final reactiva.
+- Desde Setup Tests UI se ejecutan A/B/C/D/E/F/S con dashboard en vivo y cierre en pantalla final reactiva.
 - El archivo de resultados usa skeleton inicial (`pending`) y actualización incremental por `image_id`.
 - Un run se considera incompleto si queda cualquier registro `pending` o `error/failed/fail`, incluso con `__scenario_summary__` presente.
 - En modo `resume`, el runner solo salta registros realmente completados (`ok` o `skip`) y vuelve a intentar pendientes/errores.

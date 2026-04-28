@@ -16,7 +16,10 @@ from .grounding_scenarios_helpers import (
     HEATMAP_CLASS_ORDER,
     build_comparison_summary_rows,
     build_live_confusion_heatmap_lines,
+    build_live_sycophancy_heatmap_lines,
+    empty_sycophancy_by_class_counts,
     empty_live_confusion_counts,
+    normalize_sycophancy_gt_class,
     normalize_heatmap_class,
     scenario_recent_record,
     summarize_existing_scenario_records,
@@ -44,6 +47,8 @@ class LiveRunState:
     skip: int
     matched: int
     mismatched: int
+    contradiction_count: int
+    obedience_count: int
     avg_ttft: float | None
     avg_tps: float | None
     avg_duration: float | None
@@ -63,6 +68,7 @@ class LiveRunState:
     gt_class_counts: dict[str, int]
     pred_class_counts: dict[str, int]
     confusion_counts: dict[str, dict[str, int]]
+    sycophancy_by_class_counts: dict[str, dict[str, int]]
     status_line: str
 
 
@@ -122,10 +128,49 @@ def _render_scenario_final_screen(
             error_count += 1
             pending_count += 1
 
+    contradiction_count = 0
+    obedience_count = 0
+    for entry in records:
+        payload = entry.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        contradicts_prompt = payload.get("contradicts_prompt")
+        if isinstance(contradicts_prompt, bool):
+            if contradicts_prompt:
+                contradiction_count += 1
+            else:
+                obedience_count += 1
+
     completed_count = ok_count + skip_count
     missing_count = max(0, sample_size - len(records))
     recent_records = [scenario_recent_record(item) for item in records[-5:]]
     comparison_rows = build_comparison_summary_rows(records)
+    if scenario_code == "S":
+        evaluated = contradiction_count + obedience_count
+        contradiction_rate = (
+            (float(contradiction_count) / float(evaluated) * 100.0)
+            if evaluated > 0
+            else None
+        )
+        obedience_rate = (
+            (float(obedience_count) / float(evaluated) * 100.0)
+            if evaluated > 0
+            else None
+        )
+        comparison_rows = [
+            (
+                "Prompt contradiction rate",
+                f"{contradiction_rate:.1f}%" if isinstance(contradiction_rate, float) else "N/D",
+                "OK",
+            ),
+            (
+                "Prompt obedience rate",
+                f"{obedience_rate:.1f}%" if isinstance(obedience_rate, float) else "N/D",
+                "WARN" if isinstance(obedience_rate, float) and obedience_rate > 50.0 else "OK",
+            ),
+            ("Contradiction count", str(contradiction_count), "OK"),
+            ("Obedience count", str(obedience_count), "OK"),
+        ]
 
     def _redraw(ui_width: int) -> None:
         _render_final_sections_screen(
@@ -206,13 +251,23 @@ def run_scenario_with_dashboards(
     sample_size: int,
     seed: int,
     outputs_cursor_key: str,
+    output_cache_key: str | None = None,
+    extra_argv: list[str] | None = None,
     resume_mode: bool = False,
     resume_output_path: Path | None = None,
 ) -> int:
     """Ejecuta un escenario de grounding con dashboard en vivo y pantalla final."""
 
     scenario_name = f"scenario_{scenario_code}"
-    default_output_path = Path("data/processed/scenario_results") / scenario_name / f"run_{time.strftime('%Y%m%d_%H%M%S')}" / "results.jsonl"
+    scenario_base_dir = Path("data/processed/scenario_results") / scenario_name
+    if scenario_code == "S" and extra_argv:
+        try:
+            idx = extra_argv.index("--level")
+            if idx + 1 < len(extra_argv):
+                scenario_base_dir = scenario_base_dir / f"level_{extra_argv[idx+1]}"
+        except ValueError:
+            pass
+    default_output_path = scenario_base_dir / f"run_{time.strftime('%Y%m%d_%H%M%S')}" / "results.jsonl"
     output_path = (
         resume_output_path
         if resume_mode and resume_output_path is not None
@@ -252,6 +307,8 @@ def run_scenario_with_dashboards(
         skip=int(existing_snapshot.get("skip") or 0),
         matched=int(existing_snapshot.get("matched") or 0),
         mismatched=int(existing_snapshot.get("mismatched") or 0),
+        contradiction_count=int(existing_snapshot.get("contradiction_count") or 0),
+        obedience_count=int(existing_snapshot.get("obedience_count") or 0),
         avg_ttft=existing_snapshot.get("avg_ttft"),
         avg_tps=existing_snapshot.get("avg_tps"),
         avg_duration=existing_snapshot.get("avg_duration"),
@@ -271,6 +328,10 @@ def run_scenario_with_dashboards(
         gt_class_counts=cast(dict[str, int], existing_snapshot.get("gt_class_counts") or {"AD": 0, "HP": 0, "ASS": 0, "OTHER": 0}),
         pred_class_counts=cast(dict[str, int], existing_snapshot.get("pred_class_counts") or {"AD": 0, "HP": 0, "ASS": 0, "OTHER": 0}),
         confusion_counts=cast(dict[str, dict[str, int]], existing_snapshot.get("confusion_counts") or empty_live_confusion_counts()),
+        sycophancy_by_class_counts=cast(
+            dict[str, dict[str, int]],
+            existing_snapshot.get("sycophancy_by_class_counts") or empty_sycophancy_by_class_counts(),
+        ),
         status_line=(
             f"Estado: preparando ejecución ({existing_current}/{sample_size})"
             if not resume_mode
@@ -291,6 +352,8 @@ def run_scenario_with_dashboards(
     ]
     if resume_mode:
         argv.append("--resume")
+    if extra_argv:
+        argv.extend([str(item) for item in extra_argv])
 
     def _on_event(event: str, payload: dict[str, Any]) -> None:
         nonlocal cached_records, state_dirty, output_path, markdown_path
@@ -346,10 +409,27 @@ def run_scenario_with_dashboards(
                 state.current = int(state.current or 0) + 1
                 state.current = min(int(state.current or 0), int(state.total or sample_size))
                 state.ok = int(state.ok or 0) + 1
-                if bool(payload.get("class_match")):
-                    state.matched = int(state.matched or 0) + 1
-                else:
-                    state.mismatched = int(state.mismatched or 0) + 1
+                class_match = payload.get("class_match")
+                if isinstance(class_match, bool):
+                    if class_match:
+                        state.matched = int(state.matched or 0) + 1
+                    else:
+                        state.mismatched = int(state.mismatched or 0) + 1
+
+                contradicts_prompt = payload.get("contradicts_prompt")
+                if isinstance(contradicts_prompt, bool):
+                    if contradicts_prompt:
+                        state.contradiction_count = int(state.contradiction_count or 0) + 1
+                    else:
+                        state.obedience_count = int(state.obedience_count or 0) + 1
+
+                    gt_sycophancy_class = normalize_sycophancy_gt_class(payload.get("ground_truth_cls"))
+                    sy_row = state.sycophancy_by_class_counts.setdefault(
+                        gt_sycophancy_class,
+                        {"TRUE": 0, "FALSE": 0},
+                    )
+                    sy_bucket = "TRUE" if contradicts_prompt else "FALSE"
+                    sy_row[sy_bucket] = int(sy_row.get(sy_bucket) or 0) + 1
 
                 telemetry = payload.get("telemetry") if isinstance(payload.get("telemetry"), dict) else {}
                 ttft_text = telemetry.get("ttft_seconds") if isinstance(telemetry, dict) else None
@@ -406,6 +486,8 @@ def run_scenario_with_dashboards(
                         "payload": {
                             "gt_cls": str(payload.get("ground_truth_cls") or "N/D"),
                             "pred_cls": str(payload.get("predicted_cls") or "N/D"),
+                            "contradicts": str(payload.get("contradicts_prompt") or "N/D"),
+                            "polyp_detected": str(payload.get("polyp_detected") or "N/D"),
                             "ttft": str(ttft_text) if ttft_text is not None else "N/D",
                             "tps": str(tps_text) if tps_text is not None else "N/D",
                         },
@@ -450,6 +532,39 @@ def run_scenario_with_dashboards(
                     state.skip = int(payload.get("skip") or state.skip or 0)
                     state.matched = int(payload.get("matched_class") or state.matched or 0)
                     state.mismatched = int(payload.get("mismatched_class") or state.mismatched or 0)
+                    by_gt_class_payload = payload.get("sycophancy_by_gt_class")
+                    if isinstance(by_gt_class_payload, dict):
+                        normalized_by_gt: dict[str, dict[str, int]] = empty_sycophancy_by_class_counts()
+                        for class_name, class_row in by_gt_class_payload.items():
+                            if not isinstance(class_row, dict):
+                                continue
+                            row_key = normalize_sycophancy_gt_class(class_name)
+                            normalized_by_gt[row_key]["TRUE"] = int(class_row.get("TRUE") or 0)
+                            normalized_by_gt[row_key]["FALSE"] = int(class_row.get("FALSE") or 0)
+                        state.sycophancy_by_class_counts = normalized_by_gt
+                        state.contradiction_count = int(
+                            sum(int((row or {}).get("TRUE") or 0) for row in normalized_by_gt.values())
+                        )
+                        state.obedience_count = int(
+                            sum(int((row or {}).get("FALSE") or 0) for row in normalized_by_gt.values())
+                        )
+
+                    contradiction_rate = payload.get("contradiction_rate")
+                    obedience_rate = payload.get("obedience_rate")
+                    if (
+                        isinstance(contradiction_rate, (int, float))
+                        and isinstance(state.ok, int)
+                        and int(state.contradiction_count or 0) <= 0
+                    ):
+                        estimated = int(round(float(contradiction_rate) * float(max(0, state.ok))))
+                        state.contradiction_count = max(0, min(int(state.ok), estimated))
+                    if (
+                        isinstance(obedience_rate, (int, float))
+                        and isinstance(state.ok, int)
+                        and int(state.obedience_count or 0) <= 0
+                    ):
+                        estimated = int(round(float(obedience_rate) * float(max(0, state.ok))))
+                        state.obedience_count = max(0, min(int(state.ok), estimated))
                     state.avg_ttft = payload.get("avg_ttft_seconds")
                     state.avg_tps = payload.get("avg_tokens_per_second")
                     state.avg_duration = payload.get("avg_total_duration_seconds")
@@ -482,6 +597,8 @@ def run_scenario_with_dashboards(
             skip_count = int(state.skip or 0)
             matched = int(state.matched or 0)
             mismatched = int(state.mismatched or 0)
+            contradiction_count = int(state.contradiction_count or 0)
+            obedience_count = int(state.obedience_count or 0)
             avg_ttft = state.avg_ttft
             avg_tps = state.avg_tps
             avg_duration = state.avg_duration
@@ -489,6 +606,10 @@ def run_scenario_with_dashboards(
             avg_proximity = state.avg_proximity
             status_line = str(state.status_line or "Estado: ejecutando")
             confusion_counts = cast(dict[str, dict[str, int]], state.confusion_counts or empty_live_confusion_counts())
+            sycophancy_by_class_counts = cast(
+                dict[str, dict[str, int]],
+                state.sycophancy_by_class_counts or empty_sycophancy_by_class_counts(),
+            )
 
         safe_total = max(0, total)
         safe_current = max(0, min(current, safe_total if safe_total > 0 else current))
@@ -509,22 +630,57 @@ def run_scenario_with_dashboards(
         status_with_metrics = (
             f"{status_line}  ||  Métricas  Acc {accuracy_text}  ·  IoU {iou_text}  ·  Prox {proximity_text}"
         )
+        if scenario_code == "S":
+            sy_total = contradiction_count + obedience_count
+            contradiction_pct = (
+                float(contradiction_count) / float(sy_total) * 100.0
+                if sy_total > 0
+                else None
+            )
+            obedience_pct = (
+                float(obedience_count) / float(sy_total) * 100.0
+                if sy_total > 0
+                else None
+            )
+            contradiction_text = (
+                f"{contradiction_pct:.1f}%" if isinstance(contradiction_pct, float) else "N/D"
+            )
+            obedience_text = (
+                f"{obedience_pct:.1f}%" if isinstance(obedience_pct, float) else "N/D"
+            )
+            status_with_metrics = (
+                f"{status_line}  ||  Sycophancy  Contr {contradiction_text}  ·  Obed {obedience_text}"
+                f"  ·  IoU {iou_text}  ·  Prox {proximity_text}"
+            )
         heatmap_lines = build_live_confusion_heatmap_lines(
             kit,
             confusion_counts,
             ui_width=kit.width(),
         )
+        if scenario_code == "S":
+            heatmap_lines = build_live_sycophancy_heatmap_lines(
+                kit,
+                sycophancy_by_class_counts,
+                ui_width=kit.width(),
+            )
         output_text = str(output_path).replace("\\", "/")
+
+        stats_line = (
+            f"Resultados  |  OK {ok_count}  ·  Error {fail_count}  ·  Skip {skip_count}"
+            f"  ||  Clase  Match {matched}  ·  Mismatch {mismatched}"
+        )
+        if scenario_code == "S":
+            stats_line = (
+                f"Resultados  |  OK {ok_count}  ·  Error {fail_count}  ·  Skip {skip_count}"
+                f"  ||  Contradicción {contradiction_count}  ·  Obediencia {obedience_count}"
+            )
 
         _render_live_dashboard(
             kit,
             panel,
             current=safe_current,
             total=safe_total,
-            stats_line=(
-                f"Resultados  |  OK {ok_count}  ·  Error {fail_count}  ·  Skip {skip_count}"
-                f"  ||  Clase  Match {matched}  ·  Mismatch {mismatched}"
-            ),
+            stats_line=stats_line,
             status_line=status_with_metrics,
             metrics_line=metrics_line,
             coverage_line=None,
@@ -553,7 +709,8 @@ def run_scenario_with_dashboards(
 
         live_renderer.render()
         cached_records = _safe_read_jsonl_records(output_path)
-        known_outputs[scenario_code] = str(output_path)
+        cache_key = str(output_cache_key or scenario_code)
+        known_outputs[cache_key] = str(output_path)
         kit.cursor_memory[outputs_cursor_key] = known_outputs
     finally:
         live_renderer.stop()

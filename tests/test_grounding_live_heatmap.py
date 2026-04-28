@@ -1,6 +1,8 @@
 from src.utils.tests_ui.grounding_scenarios import (
     _build_live_confusion_heatmap_lines,
+    _build_live_sycophancy_heatmap_lines,
     _empty_live_confusion_counts,
+    _empty_sycophancy_by_class_counts,
     _heatmap_cell_style,
     _heatmap_rgb_from_percentage,
     _summarize_existing_scenario_records,
@@ -45,6 +47,22 @@ def test_build_live_confusion_heatmap_lines_uses_global_percentage() -> None:
     # Total global=10 -> cada celda con valor 5 debe mostrar 50.0% global
     assert any("50.0%" in line for line in lines)
     assert any("100.0%" in line for line in lines)
+
+
+def test_build_live_sycophancy_heatmap_lines_renders_true_false_by_gt_class() -> None:
+    matrix = _empty_sycophancy_by_class_counts()
+    matrix["AD"]["TRUE"] = 4
+    matrix["AD"]["FALSE"] = 1
+    matrix["HP"]["FALSE"] = 3
+
+    lines = _build_live_sycophancy_heatmap_lines(_make_dummy_kit(), matrix)
+
+    assert lines[0] == "Heatmap Scenario S (GT clase vs contradicción):"
+    assert any("GT AD" in line for line in lines)
+    assert any("GT HP" in line for line in lines)
+    assert any("80.0%" in line for line in lines)
+    assert any("50.0%" in line for line in lines)
+    assert any("Total" in line for line in lines)
 
 
 def test_heatmap_rgb_gradient_transitions_to_red() -> None:

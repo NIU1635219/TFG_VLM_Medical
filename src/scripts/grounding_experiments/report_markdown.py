@@ -38,6 +38,7 @@ from .report_narrative import (
 )
 from .report_visuals import (
     build_annotated_comparison_filename,
+    write_scenario_s_kpi_charts,
     write_class_confusion_heatmap,
     write_iou_boxplot_by_class_and_correctness,
     write_iou_class_summary_grouped_bars,
@@ -771,3 +772,187 @@ def generate_single_detection_markdown_report(
         sections=report_sections,
     )
     return report_path
+
+
+def generate_scenario_s_markdown_report(
+    *,
+    run_dir: Path,
+    output_path: Path,
+    model_id: str,
+    level: int,
+    seed: int | None,
+    summary: dict[str, Any],
+    kpis: dict[str, Any],
+) -> Path:
+    """Generate markdown report for Scenario S (sycophancy by authority level)."""
+
+    def _fmt_rate(value: Any) -> str:
+        if isinstance(value, (int, float)):
+            return f"{float(value) * 100.0:.2f}%"
+        return "N/D"
+
+    contradiction_rate = kpis.get("contradiction_rate")
+    obedience_rate = kpis.get("obedience_rate")
+    polyp_detected_rate = kpis.get("polyp_detected_rate")
+    by_gt_class = kpis.get("by_gt_class")
+
+    chart_paths = write_scenario_s_kpi_charts(run_dir=run_dir, kpis=kpis, level=level)
+    chart_images: list[ImageItem] = []
+    rates_path = chart_paths.get("kpi_rates")
+    if isinstance(rates_path, Path):
+        chart_images.append(
+            ImageItem(
+                path=str(rates_path),
+                alt_text="scenario_s_kpi_rates",
+                caption="Tasas de contradicción, obediencia y detección de pólipo.",
+            )
+        )
+    by_class_path = chart_paths.get("by_gt_class")
+    if isinstance(by_class_path, Path):
+        chart_images.append(
+            ImageItem(
+                path=str(by_class_path),
+                alt_text="scenario_s_contradiction_by_gt_class",
+                caption="Frecuencia TRUE/FALSE de contradicción por clase GT.",
+            )
+        )
+
+    by_class_lines: list[str] = []
+    if isinstance(by_gt_class, dict):
+        for label in ("AD", "HP", "ASS", "OTHER"):
+            row = by_gt_class.get(label)
+            if isinstance(row, dict):
+                true_count = int(row.get("TRUE") or 0)
+                false_count = int(row.get("FALSE") or 0)
+            else:
+                true_count = 0
+                false_count = 0
+            by_class_lines.append(f"{label}: TRUE={true_count} | FALSE={false_count}")
+
+    sections: list[SectionGroup] = [
+        SectionGroup(
+            heading="Execution",
+            heading_level=2,
+            sections=[
+                ListSection(
+                    ordered=False,
+                    heading_level=3,
+                    items=[
+                        f"model_id: {model_id}",
+                        f"level: {int(level)}",
+                        f"seed: {seed if seed is not None else 'N/D'}",
+                        f"output_jsonl: {output_path}",
+                    ],
+                )
+            ],
+        ),
+        SectionGroup(
+            heading="Sycophancy KPIs",
+            heading_level=2,
+            sections=[
+                ListSection(
+                    ordered=False,
+                    heading_level=3,
+                    items=[
+                        f"prompt_contradiction_rate: {_fmt_rate(contradiction_rate)}",
+                        f"prompt_obedience_rate: {_fmt_rate(obedience_rate)}",
+                        f"polyp_detected_rate: {_fmt_rate(polyp_detected_rate)}",
+                        f"contradiction_count: {int(kpis.get('contradiction_count') or 0)}",
+                        f"obedience_count: {int(kpis.get('obedience_count') or 0)}",
+                        f"detected_polyp_count: {int(kpis.get('detected_polyp_count') or 0)}",
+                    ],
+                ),
+                ListSection(
+                    heading="Contradiction by GT class",
+                    heading_level=3,
+                    ordered=False,
+                    items=by_class_lines or ["N/D"],
+                ),
+            ],
+        ),
+    ]
+
+    if chart_images:
+        sections.append(
+            SectionGroup(
+                heading="Charts",
+                heading_level=2,
+                sections=[
+                    ImageGroupSection(
+                        heading="Scenario S visualizations",
+                        heading_level=3,
+                        images=chart_images,
+                    )
+                ],
+            )
+        )
+    else:
+        sections.append(
+            SectionGroup(
+                heading="Charts",
+                heading_level=2,
+                sections=[
+                    ListSection(
+                        ordered=False,
+                        heading_level=3,
+                        items=["No se pudieron generar gráficos (matplotlib no disponible o sin datos)."],
+                    )
+                ],
+            )
+        )
+
+    sections.append(
+        SectionGroup(
+            heading="Aggregated Metrics",
+            heading_level=2,
+            sections=[
+                ListSection(
+                    ordered=False,
+                    heading_level=3,
+                    items=[
+                        f"total: {int(summary.get('total') or 0)}",
+                        f"ok: {int(summary.get('ok') or 0)}",
+                        f"fail: {int(summary.get('fail') or 0)}",
+                        f"skip: {int(summary.get('skip') or 0)}",
+                        f"avg_iou: {summary.get('avg_iou')}",
+                        f"avg_proximity: {summary.get('avg_proximity')}",
+                        f"avg_ttft_seconds: {summary.get('avg_ttft_seconds')}",
+                        f"avg_tokens_per_second: {summary.get('avg_tokens_per_second')}",
+                        f"avg_total_duration_seconds: {summary.get('avg_total_duration_seconds')}",
+                    ],
+                )
+            ],
+        )
+    )
+
+    sections.append(
+        SectionGroup(
+            heading="Notes",
+            heading_level=2,
+            sections=[
+                ListSection(
+                    ordered=False,
+                    heading_level=3,
+                    items=[
+                        "Scenario S uses authority-pressure prompts by level.",
+                        "Class-match metrics from scenarios A-F are not primary KPIs for this scenario.",
+                    ],
+                )
+            ],
+        )
+    )
+
+    markdown_path = run_dir / "scenario_S_report.md"
+    write_markdown_report(
+        report_path=markdown_path,
+        title="Scenario S Report",
+        metadata={
+            "Scenario": "scenario_S",
+            "Model": model_id,
+            "Level": str(int(level)),
+            "Seed": str(seed) if seed is not None else "N/D",
+            "JSONL": output_path.name,
+        },
+        sections=sections,
+    )
+    return markdown_path

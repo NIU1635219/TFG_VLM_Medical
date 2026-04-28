@@ -845,7 +845,7 @@ def test_setup_tests_ui_grounding_scenario_selector_runs_scenario_a(monkeypatch)
             menu_calls["tests"] += 1
             if menu_calls["tests"] == 1:
                 return next(
-                    item for item in options if item.label == " Select Grounding Scenario (A/B/C/D/E/F)"
+                    item for item in options if item.label == " Select Grounding Scenario (A/B/C/D/E/F/S)"
                 )
             return None
         if menu_id == "grounding_scenarios_selector":
@@ -932,7 +932,7 @@ def test_setup_tests_ui_grounding_scenario_selector_runs_scenario_b(monkeypatch)
             menu_calls["tests"] += 1
             if menu_calls["tests"] == 1:
                 return next(
-                    item for item in options if item.label == " Select Grounding Scenario (A/B/C/D/E/F)"
+                    item for item in options if item.label == " Select Grounding Scenario (A/B/C/D/E/F/S)"
                 )
             return None
         if menu_id == "grounding_scenarios_selector":
@@ -965,6 +965,116 @@ def test_setup_tests_ui_grounding_scenario_selector_runs_scenario_b(monkeypatch)
     assert menu_calls["scenarios"] == 1
     assert menu_calls["scenario_b_model"] == 1
     assert scenario_calls == [["model-a", 8, 11, False, None]]
+    assert any(level == "success" for _, level in logs)
+
+
+def test_setup_tests_ui_grounding_scenario_selector_runs_scenario_s(monkeypatch):
+    """Valida que el selector ejecute Scenario S propagando el nivel elegido."""
+    logs = []
+    menu_calls = {"tests": 0, "scenarios": 0, "scenario_s_model": 0, "scenario_s_level": 0}
+    scenario_calls = []
+
+    from src.utils.tests_ui import grounding_scenarios
+
+    def fake_select_sample_size(_kit):
+        return 6
+
+    def fake_select_seed(_kit, *, initial_value=42):
+        _ = initial_value
+        return 13
+
+    def fake_select_level(_kit, *, initial_value=1):
+        _ = initial_value
+        menu_calls["scenario_s_level"] += 1
+        return 3
+
+    def fake_run_with_dashboards(
+        *,
+        kit,
+        app,
+        model_tag,
+        sample_size,
+        seed,
+        level,
+        output_cache_key,
+        resume_mode=False,
+        resume_output_path=None,
+    ):
+        _ = (kit, app)
+        scenario_calls.append(
+            [
+                model_tag,
+                sample_size,
+                seed,
+                level,
+                output_cache_key,
+                bool(resume_mode),
+                resume_output_path,
+            ]
+        )
+        return 0
+
+    monkeypatch.setattr(
+        grounding_scenarios,
+        "_select_grounding_sample_size",
+        fake_select_sample_size,
+    )
+    monkeypatch.setattr(
+        grounding_scenarios,
+        "_run_scenario_s_with_dashboards",
+        fake_run_with_dashboards,
+    )
+    monkeypatch.setattr(
+        grounding_scenarios,
+        "_select_grounding_seed",
+        fake_select_seed,
+    )
+    monkeypatch.setattr(
+        grounding_scenarios,
+        "_select_sycophancy_level",
+        fake_select_level,
+    )
+
+    def interactive_menu(options, **kwargs):
+        menu_id = kwargs.get("menu_id")
+        if menu_id == "tests_manager_menu":
+            menu_calls["tests"] += 1
+            if menu_calls["tests"] == 1:
+                return next(
+                    item for item in options if item.label == " Select Grounding Scenario (A/B/C/D/E/F/S)"
+                )
+            return None
+        if menu_id == "grounding_scenarios_selector":
+            menu_calls["scenarios"] += 1
+            return next(item for item in options if item.label == " Scenario S (Sycophancy Stress Test)")
+        if menu_id == "grounding_scenario_s_model_selector":
+            menu_calls["scenario_s_model"] += 1
+            return next(item for item in options if item.label == "model-a")
+        if menu_id == "grounding_scenario_s_run_mode_selector":
+            return next(item for item in options if item.label == " Nuevo run")
+        raise AssertionError(f"Unexpected menu_id: {menu_id}")
+
+    ctx = {
+        "Style": _DummyStyle,
+        "MenuItem": _MenuItem,
+        "print_banner": lambda: None,
+        "log": lambda msg, level="info": logs.append((msg, level)),
+        "run_cmd": lambda *_: None,
+        "wait_for_any_key": lambda *args, **kwargs: None,
+        "interactive_menu": interactive_menu,
+        "list_test_files": lambda: [],
+        "get_installed_lms_models": lambda: ["model-a"],
+        "clear_screen_ansi": lambda: None,
+        "manage_models_menu_ui": lambda: None,
+        "time": SimpleNamespace(sleep=lambda *_: None),
+    }
+
+    setup_tests_ui.run_tests_menu(*_make_kit_app(ctx))
+
+    assert menu_calls["scenarios"] == 1
+    assert menu_calls["scenario_s_model"] == 1
+    assert menu_calls["scenario_s_level"] == 1
+    assert scenario_calls == [["model-a", 6, 13, 3, "S_level_3", False, None]]
     assert any(level == "success" for _, level in logs)
 
 

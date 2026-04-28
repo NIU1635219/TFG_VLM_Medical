@@ -18,7 +18,9 @@ from src.inference.schemas import (
     PolypVisualAnalysis,
     PolypVisualAnalysisWithReasoning,
     SycophancyTest,
+    SycophancyTestReport,
     SycophancyTestWithReasoning,
+    SycophancyTestReportWithReasoning,
     ImageQualityAssessment,
     ImageQualityAssessmentWithReasoning,
     BoundingBox,
@@ -273,9 +275,11 @@ class TestReasoningSchemaVariants:
             "PolypVisualAnalysis",
             "AdvancedPolypClassification",
             "SycophancyTest",
+            "SycophancyTestReport",
             "ImageQualityAssessment",
             "BoundingBox",
             "PolypDiagnosisAndGrounding",
+            "AssistedClinicalReport",
         }
         assert expected == set(REASONING_SCHEMA_REGISTRY.keys())
 
@@ -349,6 +353,7 @@ class TestReasoningSchemaVariants:
             PolypVisualAnalysisWithReasoning,
             AdvancedPolypClassificationWithReasoning,
             SycophancyTestWithReasoning,
+            SycophancyTestReportWithReasoning,
             ImageQualityAssessmentWithReasoning,
             PolypDiagnosisAndGroundingWithReasoning,
         ):
@@ -416,6 +421,60 @@ class TestSycophancyTest:
     def test_missing_field_raises(self):
         with pytest.raises(ValidationError):
             SycophancyTest(agrees_with_user=True, justification="missing polyp_detected")
+
+
+class TestSycophancyTestReport:
+    def test_accepts_valid_payload(self):
+        obj = SycophancyTestReport(
+            visual_evidence_analysis=(
+                "Se observa una lesion focal sobreelevada con borde parcialmente irregular, "
+                "textura superficial heterogenea y contraste cromatico respecto a la mucosa "
+                "adyacente. La forma no corresponde a un patron uniforme de tejido sano y "
+                "aparecen rasgos compatibles con anomalia estructural localizada."
+            ),
+            polyp_detected=True,
+            contradicts_prompt=True,
+            xmin=120,
+            ymin=180,
+            xmax=620,
+            ymax=780,
+        )
+        assert obj.polyp_detected is True
+        assert obj.contradicts_prompt is True
+
+    def test_rejects_invalid_bbox_when_polyp_detected(self):
+        with pytest.raises(ValidationError):
+            SycophancyTestReport(
+                visual_evidence_analysis=(
+                    "Se observan cambios focales de textura y relieve en una region concreta, "
+                    "con transicion no uniforme hacia mucosa vecina. La evidencia visual sugiere "
+                    "lesion y no tejido completamente sano segun los criterios morfologicos usados "
+                    "en evaluacion endoscopica estructurada."
+                ),
+                polyp_detected=True,
+                contradicts_prompt=True,
+                xmin=700,
+                ymin=120,
+                xmax=300,
+                ymax=550,
+            )
+
+    def test_allows_non_strict_bbox_when_polyp_not_detected(self):
+        obj = SycophancyTestReport(
+            visual_evidence_analysis=(
+                "La imagen muestra mucosa de aspecto homogeneo, sin elevaciones focales claras "
+                "ni patrones vasculares atipicos que sugieran lesion delimitable. No se identifica "
+                "un objetivo anatomico patologico concreto para trazar una caja de localizacion "
+                "con geometria clinicamente util."
+            ),
+            polyp_detected=False,
+            contradicts_prompt=False,
+            xmin=0,
+            ymin=0,
+            xmax=0,
+            ymax=0,
+        )
+        assert obj.polyp_detected is False
 
 
 # ---------------------------------------------------------------------------
@@ -525,9 +584,11 @@ class TestSchemaRegistry:
             "PolypVisualAnalysis",
             "AdvancedPolypClassification",
             "SycophancyTest",
+            "SycophancyTestReport",
             "ImageQualityAssessment",
             "BoundingBox",
             "PolypDiagnosisAndGrounding",
+            "AssistedClinicalReport",
         }
         assert expected == set(SCHEMA_REGISTRY.keys())
 
@@ -543,6 +604,7 @@ class TestSchemaRegistry:
         assert SCHEMA_REGISTRY["PolypVisualAnalysis"] is PolypVisualAnalysis
         assert SCHEMA_REGISTRY["AdvancedPolypClassification"] is AdvancedPolypClassification
         assert SCHEMA_REGISTRY["SycophancyTest"] is SycophancyTest
+        assert SCHEMA_REGISTRY["SycophancyTestReport"] is SycophancyTestReport
         assert SCHEMA_REGISTRY["ImageQualityAssessment"] is ImageQualityAssessment
         assert SCHEMA_REGISTRY["BoundingBox"] is BoundingBox
         assert SCHEMA_REGISTRY["PolypDiagnosisAndGrounding"] is PolypDiagnosisAndGrounding

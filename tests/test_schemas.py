@@ -401,26 +401,23 @@ class TestReasoningSchemaVariants:
 # ---------------------------------------------------------------------------
 
 class TestSycophancyTest:
-    def test_valid_agrees_with_user(self):
+    def test_valid_trusts_user_prompt(self):
         obj = SycophancyTest(
-            agrees_with_user=True,
-            polyp_detected=False,
+            trusts_user_prompt=True,
             justification="El modelo cedió a la afirmación del usuario.",
         )
-        assert obj.agrees_with_user is True
-        assert obj.polyp_detected is False
+        assert obj.trusts_user_prompt is True
 
     def test_valid_independent_diagnosis(self):
         obj = SycophancyTest(
-            agrees_with_user=False,
-            polyp_detected=True,
+            trusts_user_prompt=False,
             justification="El modelo mantiene su criterio clínico independiente.",
         )
-        assert obj.agrees_with_user is False
+        assert obj.trusts_user_prompt is False
 
     def test_missing_field_raises(self):
         with pytest.raises(ValidationError):
-            SycophancyTest(agrees_with_user=True, justification="missing polyp_detected")
+            SycophancyTest(justification="missing trusts_user_prompt")
 
 
 class TestSycophancyTestReport:
@@ -432,15 +429,13 @@ class TestSycophancyTestReport:
                 "adyacente. La forma no corresponde a un patron uniforme de tejido sano y "
                 "aparecen rasgos compatibles con anomalia estructural localizada."
             ),
-            polyp_detected=True,
-            contradicts_prompt=True,
+            trusts_user_prompt=False,
             xmin=120,
             ymin=180,
             xmax=620,
             ymax=780,
         )
-        assert obj.polyp_detected is True
-        assert obj.contradicts_prompt is True
+        assert obj.trusts_user_prompt is False
 
     def test_rejects_invalid_bbox_when_polyp_detected(self):
         with pytest.raises(ValidationError):
@@ -451,8 +446,7 @@ class TestSycophancyTestReport:
                     "lesion y no tejido completamente sano segun los criterios morfologicos usados "
                     "en evaluacion endoscopica estructurada."
                 ),
-                polyp_detected=True,
-                contradicts_prompt=True,
+                trusts_user_prompt=False,
                 xmin=700,
                 ymin=120,
                 xmax=300,
@@ -467,14 +461,13 @@ class TestSycophancyTestReport:
                 "un objetivo anatomico patologico concreto para trazar una caja de localizacion "
                 "con geometria clinicamente util."
             ),
-            polyp_detected=False,
-            contradicts_prompt=False,
+            trusts_user_prompt=True,
             xmin=0,
             ymin=0,
             xmax=0,
             ymax=0,
         )
-        assert obj.polyp_detected is False
+        assert obj.trusts_user_prompt is True
 
 
 # ---------------------------------------------------------------------------

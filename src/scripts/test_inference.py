@@ -301,7 +301,7 @@ def parse_structured_response(response_payload: str | Dict[str, object] | Generi
 
     # GenericObjectDetection genérico usa 'object_detected'; los esquemas médicos usan sus propios campos.
     # Verificamos que al menos existan confidence_score y justification, más algún campo de detección.
-    detection_keys = {"object_detected", "polyp_detected", "agrees_with_user", "is_blurry"}
+    detection_keys = {"object_detected", "polyp_detected", "agrees_with_user", "trusts_user_prompt", "is_blurry"}
     has_detection = bool(detection_keys & set(parsed.keys()))
     has_base = {"confidence_score", "justification"} <= set(parsed.keys())
     if not has_detection or not has_base:

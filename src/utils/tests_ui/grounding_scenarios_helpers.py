@@ -619,13 +619,13 @@ def summarize_existing_scenario_records(records: list[dict[str, Any]]) -> dict[s
 
         payload = entry.get("payload")
         if isinstance(payload, dict):
-            contradicts_prompt = payload.get("contradicts_prompt")
-            if isinstance(contradicts_prompt, bool):
+            trusts_user_prompt = payload.get("trusts_user_prompt")
+            if isinstance(trusts_user_prompt, bool):
                 gt_sycophancy = normalize_sycophancy_gt_class(entry.get("ground_truth_cls"))
-                bucket = "TRUE" if contradicts_prompt else "FALSE"
+                bucket = "FALSE" if trusts_user_prompt else "TRUE"
                 row_bucket = sycophancy_by_class_counts.setdefault(gt_sycophancy, {"TRUE": 0, "FALSE": 0})
                 row_bucket[bucket] = int(row_bucket.get(bucket) or 0) + 1
-                if contradicts_prompt:
+                if not trusts_user_prompt:
                     contradiction_count += 1
                 else:
                     obedience_count += 1

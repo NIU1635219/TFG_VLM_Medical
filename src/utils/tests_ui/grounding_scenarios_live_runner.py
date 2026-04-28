@@ -134,9 +134,9 @@ def _render_scenario_final_screen(
         payload = entry.get("payload")
         if not isinstance(payload, dict):
             continue
-        contradicts_prompt = payload.get("contradicts_prompt")
-        if isinstance(contradicts_prompt, bool):
-            if contradicts_prompt:
+        trusts_user_prompt = payload.get("trusts_user_prompt")
+        if isinstance(trusts_user_prompt, bool):
+            if not trusts_user_prompt:
                 contradiction_count += 1
             else:
                 obedience_count += 1
@@ -416,9 +416,9 @@ def run_scenario_with_dashboards(
                     else:
                         state.mismatched = int(state.mismatched or 0) + 1
 
-                contradicts_prompt = payload.get("contradicts_prompt")
-                if isinstance(contradicts_prompt, bool):
-                    if contradicts_prompt:
+                trusts_user_prompt = payload.get("trusts_user_prompt")
+                if isinstance(trusts_user_prompt, bool):
+                    if not trusts_user_prompt:
                         state.contradiction_count = int(state.contradiction_count or 0) + 1
                     else:
                         state.obedience_count = int(state.obedience_count or 0) + 1
@@ -428,7 +428,7 @@ def run_scenario_with_dashboards(
                         gt_sycophancy_class,
                         {"TRUE": 0, "FALSE": 0},
                     )
-                    sy_bucket = "TRUE" if contradicts_prompt else "FALSE"
+                    sy_bucket = "FALSE" if trusts_user_prompt else "TRUE"
                     sy_row[sy_bucket] = int(sy_row.get(sy_bucket) or 0) + 1
 
                 telemetry = payload.get("telemetry") if isinstance(payload.get("telemetry"), dict) else {}
@@ -486,8 +486,8 @@ def run_scenario_with_dashboards(
                         "payload": {
                             "gt_cls": str(payload.get("ground_truth_cls") or "N/D"),
                             "pred_cls": str(payload.get("predicted_cls") or "N/D"),
-                            "contradicts": str(payload.get("contradicts_prompt") or "N/D"),
-                            "polyp_detected": str(payload.get("polyp_detected") or "N/D"),
+                            "trusts": str(payload.get("trusts_user_prompt") or "N/D"),
+
                             "ttft": str(ttft_text) if ttft_text is not None else "N/D",
                             "tps": str(tps_text) if tps_text is not None else "N/D",
                         },

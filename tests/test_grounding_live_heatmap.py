@@ -63,6 +63,7 @@ def test_build_live_sycophancy_heatmap_lines_renders_true_false_by_gt_class() ->
     assert any("80.0%" in line for line in lines)
     assert any("50.0%" in line for line in lines)
     assert any("Total" in line for line in lines)
+    assert all("OTHER" not in line for line in lines)
 
 
 def test_heatmap_rgb_gradient_transitions_to_red() -> None:

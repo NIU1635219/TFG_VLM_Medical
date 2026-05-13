@@ -53,6 +53,53 @@ from .report_visuals import (
 )
 
 
+def _build_scenario_s_failure_image_items(*, output_path: Path, run_dir: Path) -> list[ImageItem]:
+    """Build a stable list of annotated images for the sycophancy failures."""
+    from .runner_core import load_jsonl_records
+
+    annotated_dir = run_dir / "annotated"
+    failure_items: list[ImageItem] = []
+
+    for entry in load_jsonl_records(output_path):
+        if not isinstance(entry, dict):
+            continue
+
+        status = str(entry.get("status") or "ok").strip().lower()
+        if status not in {"ok", "success"}:
+            continue
+
+        payload = entry.get("payload")
+        if not isinstance(payload, dict):
+            raw_result = entry.get("result")
+            payload = raw_result if isinstance(raw_result, dict) else {}
+
+        if payload.get("trusts_user_prompt") is not True:
+            continue
+
+        image_id_value = entry.get("image_id")
+        image_path_text = str(entry.get("image_path") or "")
+        image_path_obj = Path(image_path_text) if image_path_text else Path(str(image_id_value or "image"))
+        annotated_name = build_annotated_comparison_filename(
+            image_id=image_id_value,
+            image_path=image_path_obj,
+        )
+        annotated_path = annotated_dir / annotated_name
+        if not annotated_path.exists():
+            continue
+
+        gt_class = normalize_polyp_class(entry.get("ground_truth_cls") or "") or "N/D"
+        failure_items.append(
+            ImageItem(
+                path=annotated_path,
+                alt_text=f"scenario_s_failure_{image_id_value or 'unknown'}",
+                caption=f"GT {gt_class} · image_id {image_id_value if image_id_value is not None else 'N/D'} · obedeció el prompt",
+            )
+        )
+
+    failure_items.sort(key=lambda item: str(item.caption or "").lower())
+    return failure_items
+
+
 def _as_float_or_none(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
@@ -816,10 +863,29 @@ def generate_scenario_s_markdown_report(
                 caption="Frecuencia TRUE/FALSE de contradicción por clase GT.",
             )
         )
+    by_class_percent_path = chart_paths.get("by_gt_class_percent")
+    if isinstance(by_class_percent_path, Path):
+        chart_images.append(
+            ImageItem(
+                path=str(by_class_percent_path),
+                alt_text="scenario_s_contradiction_by_gt_class_percent",
+                caption="Porcentajes dentro de cada clase GT: % contradicción vs obediencia.",
+            )
+        )
+    heatmap_path = chart_paths.get("polyp_type_heatmap")
+    if isinstance(heatmap_path, Path):
+        chart_images.append(
+            ImageItem(
+                path=str(heatmap_path),
+                alt_text="scenario_s_polyp_type_heatmap",
+                caption="Mapa de calor por tipo de pólipo y resultado frente al prompt.",
+            )
+        )
 
     by_class_lines: list[str] = []
+    failure_lines: list[str] = []
     if isinstance(by_gt_class, dict):
-        for label in ("AD", "HP", "ASS", "OTHER"):
+        for label in ("AD", "HP", "ASS"):
             row = by_gt_class.get(label)
             if isinstance(row, dict):
                 true_count = int(row.get("TRUE") or 0)
@@ -827,7 +893,15 @@ def generate_scenario_s_markdown_report(
             else:
                 true_count = 0
                 false_count = 0
-            by_class_lines.append(f"{label}: TRUE={true_count} | FALSE={false_count}")
+            total = float(true_count + false_count) if (true_count + false_count) > 0 else 0.0
+            true_pct = (float(true_count) / total * 100.0) if total > 0 else 0.0
+            false_pct = (float(false_count) / total * 100.0) if total > 0 else 0.0
+            by_class_lines.append(
+                f"{label}: TRUE={true_count} ({true_pct:.1f}%) | FALSE={false_count} ({false_pct:.1f}%) | ContrRate={true_pct:.1f}%"
+            )
+            failure_lines.append(f"{label}: {false_count}")
+
+    failure_images = _build_scenario_s_failure_image_items(output_path=output_path, run_dir=run_dir)
 
     sections: list[SectionGroup] = [
         SectionGroup(
@@ -867,6 +941,36 @@ def generate_scenario_s_markdown_report(
                     heading_level=3,
                     ordered=False,
                     items=by_class_lines or ["N/D"],
+                ),
+            ],
+        ),
+        SectionGroup(
+            heading="Failure cases",
+            heading_level=2,
+            sections=[
+                ListSection(
+                    ordered=False,
+                    heading_level=3,
+                    items=[
+                        f"failure_count: {int(kpis.get('obedience_count') or 0)}",
+                        f"failures_by_gt_class: {', '.join(failure_lines) if failure_lines else 'N/D'}",
+                    ],
+                ),
+                ImageGroupSection(
+                    heading="Imágenes donde el modelo cedió al prompt",
+                    heading_level=3,
+                    images=failure_images or [
+                        ImageItem(
+                            path=run_dir / "annotated" / "placeholder.png",
+                            alt_text="scenario_s_no_failures",
+                            caption="No se encontraron imágenes de fallo para mostrar.",
+                        )
+                    ],
+                    layout="grid" if failure_images else "vertical",
+                ) if failure_images else TextSection(
+                    heading="Imágenes donde el modelo cedió al prompt",
+                    heading_level=3,
+                    text="No se encontraron imágenes de fallo para mostrar.",
                 ),
             ],
         ),

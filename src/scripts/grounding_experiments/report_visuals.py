@@ -661,7 +661,7 @@ def write_scenario_s_kpi_charts(*, run_dir: Path, kpis: dict[str, Any], level: i
 
     by_gt_class = kpis.get("by_gt_class")
     if isinstance(by_gt_class, dict):
-        labels = ["AD", "HP", "ASS", "OTHER"]
+        labels = ["AD", "HP", "ASS"]
         true_counts = [
             int((by_gt_class.get(label) or {}).get("TRUE") or 0)
             if isinstance(by_gt_class.get(label), dict)
@@ -706,6 +706,66 @@ def write_scenario_s_kpi_charts(*, run_dir: Path, kpis: dict[str, Any], level: i
                 fig.savefig(by_class_path, dpi=160)
                 plt.close(fig)
                 output_paths["by_gt_class"] = by_class_path
+            except Exception:
+                plt.close("all")
+
+        # Also create a percentage-stacked bar per GT class (TRUE vs FALSE % within class)
+        try:
+            percent_path = assets_dir / "scenario_s_contradiction_by_gt_class_percent.png"
+            fig, axis = plt.subplots(figsize=(8.0, 4.8))
+            class_perc_true = []
+            class_perc_false = []
+            for t, f in zip(true_counts, false_counts):
+                total = float(t + f) if (t + f) > 0 else 0.0
+                class_perc_true.append((float(t) / total * 100.0) if total > 0 else 0.0)
+                class_perc_false.append((float(f) / total * 100.0) if total > 0 else 0.0)
+
+            positions = list(range(len(labels)))
+            axis.bar(positions, class_perc_true, width=0.6, label="TRUE % (contradiction)", color="#2E8B57")
+            axis.bar(positions, class_perc_false, width=0.6, bottom=class_perc_true, label="FALSE % (obedience)", color="#B22222")
+            axis.set_xticks(positions)
+            axis.set_xticklabels(labels)
+            axis.set_ylim(0.0, 100.0)
+            axis.set_ylabel("% within GT class")
+            axis.set_xlabel("GT class")
+            axis.set_title(f"Scenario S L{level} · % Contradiction vs Obedience by GT class")
+            axis.legend(loc="upper right")
+            for idx, (t_pct, f_pct) in enumerate(zip(class_perc_true, class_perc_false)):
+                axis.text(idx, t_pct / 2.0, f"{t_pct:.1f}%", ha="center", va="center", color="white", fontsize=9)
+                axis.text(idx, t_pct + f_pct / 2.0, f"{f_pct:.1f}%", ha="center", va="center", color="white", fontsize=9)
+            fig.tight_layout()
+            fig.savefig(percent_path, dpi=160)
+            plt.close(fig)
+            output_paths["by_gt_class_percent"] = percent_path
+        except Exception:
+            plt.close("all")
+
+        if any(value > 0 for value in true_counts + false_counts):
+            heatmap_path = assets_dir / "scenario_s_polyp_type_heatmap.png"
+            try:
+                import seaborn as sns
+
+                matrix = [[true_counts[index], false_counts[index]] for index in range(len(labels))]
+                fig, axis = plt.subplots(figsize=(7.6, 4.9))
+                sns.heatmap(
+                    matrix,
+                    annot=True,
+                    fmt="d",
+                    cmap="YlGnBu",
+                    xticklabels=["Contradicción", "Obediencia"],
+                    yticklabels=labels,
+                    cbar=True,
+                    linewidths=0.5,
+                    linecolor="#F0F0F0",
+                    ax=axis,
+                )
+                axis.set_xlabel("Resultado frente al prompt")
+                axis.set_ylabel("Tipo de pólipo (GT)")
+                axis.set_title(f"Scenario S L{level} · Heatmap por tipo de pólipo")
+                fig.tight_layout()
+                fig.savefig(heatmap_path, dpi=160)
+                plt.close(fig)
+                output_paths["polyp_type_heatmap"] = heatmap_path
             except Exception:
                 plt.close("all")
 

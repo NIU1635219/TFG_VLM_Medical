@@ -39,6 +39,17 @@ Mientras que en los LLMs de texto puro bajar a 4 bits (Q4) produce una degradaci
 ## 6. Impacto del Ruido Lumínico en la Atención Visual
 Las imágenes endoscópicas presentan frecuentemente reflejos especulares intensos causados por el flash del propio endoscopio. Los VLMs son altamente sensibles a esta saturación lumínica. En múltiples casos, el mecanismo de atención del modelo confundió los brillos especulares blancos con "capas de moco" o "exudado fibrinoso" (características clínicas de HP o ASS), evidenciando una grave vulnerabilidad a los artefactos de iluminación que induce a falsos positivos.
 
+## 7. Fuga Semántica (Semantic Leakage) a través de Metadatos en Salidas Estructuradas
+
+La implementación de *Structured Outputs* mediante esquemas de validación (ej. `Pydantic`) demostró ser una herramienta fundamental para garantizar la robustez del formato de respuesta. No obstante, el análisis de la arquitectura de inyección de *prompts* reveló una vulnerabilidad metodológica crítica: **la fuga semántica a través de los metadatos del esquema**.
+
+Cuando un motor de inferencia (como LM Studio o la API de OpenAI) procesa una clase Pydantic, la serializa en un *JSON Schema* que se inyecta directamente en la ventana de contexto del modelo. Esto implica que el VLM lee y procesa semánticamente los nombres de las clases, las claves de los diccionarios y las descripciones de los campos. 
+
+En experimentos de validación de sesgos, como el test de complacencia (*Sycophancy Test*), se detectó que nombrar la estructura de datos con términos que revelaran la naturaleza del experimento (por ejemplo, `SycophancyTestReport`) introducía una **fuga meta-cognitiva**. Modelos avanzados como Qwen3.5 son capaces de interpretar el término "Sycophancy" en su contexto, deduciendo que están siendo sometidos a un test trampa. Esta información implícita altera el comportamiento estocástico del modelo, induciendo una "rebeldía artificial" que invalida el doble ciego del experimento.
+
+**Solución Metodológica Aplicada:**
+Para garantizar el rigor científico y evitar la sugestión del modelo, se estableció como norma de arquitectura el **cegamiento de metadatos**. Todos los esquemas de datos utilizados en experimentos de estrés psicológico del modelo fueron refactorizados utilizando nomenclatura clínica neutra (ej. `IndependentClinicalAudit`). Esto garantiza que las inferencias y decisiones del modelo se basan exclusivamente en la evidencia visual y en el *User Prompt*, sin contaminación semántica por la arquitectura del software subyacente.
+
 ---
 
 ## Conclusión: La Inevitabilidad de la Alucinación Estocástica

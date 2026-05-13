@@ -207,7 +207,7 @@ def build_live_sycophancy_heatmap_lines(
     """Construye tabla live para Scenario S: clase GT vs contradicción true/false."""
     total_true = 0
     total_false = 0
-    for gt_label in SYCOPHANCY_CLASS_ORDER:
+    for gt_label in HEATMAP_CLASS_ORDER:
         row = by_class_counts.get(gt_label) or {}
         total_true += int(row.get("TRUE") or 0)
         total_false += int(row.get("FALSE") or 0)
@@ -216,7 +216,7 @@ def build_live_sycophancy_heatmap_lines(
     rows: list[list[str]] = []
     colored_rows: list[Any] = []
 
-    for gt_label in SYCOPHANCY_CLASS_ORDER:
+    for gt_label in HEATMAP_CLASS_ORDER:
         row = by_class_counts.get(gt_label) or {}
         true_count = int(row.get("TRUE") or 0)
         false_count = int(row.get("FALSE") or 0)

@@ -20,6 +20,11 @@ Proyecto de TFG centrado en inferencia local con modelos VLM (Vision-Language Mo
 - `UIKit` incluye API de tablas tipadas y reutilizables (`TableColumn`, `TableRow`, `TableCell`, `build_table_items`, `table_menu`) con anchos adaptativos al terminal.
 - Motor de tablas TUI ampliado con celdas avanzadas (`rowspan`/`colspan`) y control de truncado por líneas (`max_cell_lines`) para mejorar legibilidad en terminales estrechos.
 - `UIKit` añade `render_and_wait_responsive(...)` como helper común de espera reactiva, con repintado automático al redimensionar el terminal.
+- Benchmark de pólipos separado en dos flujos independientes:
+    - clasificación clásica con entrenamiento/validación/test sobre features tabulares,
+    - segmentación por píxel para predecir máscaras.
+- Los helpers compartidos de ambos benchmarks viven en `src/preprocessing/polyp_benchmark_utils.py`, `src/preprocessing/polyp_classification_benchmark_utils.py` y `src/preprocessing/polyp_segmentation_benchmark_utils.py`.
+- Los notebooks `05` y `06` muestran todos los modelos evaluados, la matriz de confusión de cada modelo en clasificación y tres ejemplos por modelo en segmentación.
 - Dashboard de escenarios de grounding (A/B/C/D/E/F/S) en vivo desde Setup Tests UI:
     - barra de progreso con clamp defensivo (`current` no excede `total`),
     - resumen de clase (match/mismatch),
@@ -154,7 +159,10 @@ Dependencias declaradas en `pyproject.toml`.
 ├── notebooks/
 │   ├── 01_eda_polypsegm.ipynb          # EDA, extracción y comparativas visuales del dataset.
 │   ├── 02_zeroshot_analysis.ipynb      # Análisis de batch_results zero-shot, métricas y export bundle JSONL/ZIP.
-│   └── 03_ground_truth_bboxes.ipynb    # Orquestación del extractor de BBoxes GT y sanity check visual sobre máscaras.
+│   ├── 03_ground_truth_bboxes.ipynb    # Orquestación del extractor de BBoxes GT y sanity check visual sobre máscaras.
+│   ├── 04_export_clinical_eval_app.ipynb # Exportación de la app de evaluación clínica.
+│   ├── 05_polyp_classification_classic.ipynb # Benchmark clásico de clasificación de pólipos.
+│   └── 06_polyp_segmentation_prediction.ipynb # Benchmark de segmentación y predicción de máscaras.
 ├── src/
 │   ├── inference/
 │   │   ├── schemas.py                  # Esquemas Pydantic base y variantes WithReasoning.
@@ -162,6 +170,9 @@ Dependencias declaradas en `pyproject.toml`.
 │   ├── preprocessing/
 │   │   ├── preprocess.py               # CLI de recorte de bordes negros y copia de CSV.
 │   │   └── extract_gt_bboxes.py        # CLI para extraer BBoxes GT desde máscaras y exportar CSV normalizado (escala 1000).
+│   │   ├── polyp_benchmark_utils.py     # Helpers compartidos para splits, rutas y carga de imágenes/máscaras.
+│   │   ├── polyp_classification_benchmark_utils.py # Benchmark clásico de clasificación de pólipos.
+│   │   └── polyp_segmentation_benchmark_utils.py   # Benchmark por píxel para segmentación de pólipos.
 │   ├── scripts/
 │   │   ├── batch_runner.py             # Orquestador masivo con exportado incremental en JSONL compartido.
 │   │   ├── experiment_ab_text.py       # Experimento A/B zero-shot vs asistido con Ground Truth AD y reporte Markdown.
@@ -250,6 +261,9 @@ Dependencias declaradas en `pyproject.toml`.
 - `notebooks/01_eda_polypsegm.ipynb`: libreta principal de EDA y preparación de datos.
 - `notebooks/02_zeroshot_analysis.ipynb`: análisis de resultados zero-shot desde `batch_results` JSONL.
 - `notebooks/03_ground_truth_bboxes.ipynb`: ejecución del extractor de Ground Truth espacial y sanity check visual de BBoxes.
+- `notebooks/04_export_clinical_eval_app.ipynb`: exportación de la app de evaluación clínica.
+- `notebooks/05_polyp_classification_classic.ipynb`: benchmark clásico de clasificación de pólipos.
+- `notebooks/06_polyp_segmentation_prediction.ipynb`: benchmark de segmentación de pólipos y predicción de máscaras.
 
 Incluye:
 

@@ -1,6 +1,7 @@
-const STORAGE_RESULTS_KEY = "clinical_eval_results_v2";
-const STORAGE_INDEX_KEY = "clinical_eval_current_index_v2";
-const STORAGE_CASES_CACHE_KEY = "clinical_eval_cases_cache_v1";
+const STORAGE_RESULTS_KEY = "clinical_eval_results_v3";
+const STORAGE_INDEX_KEY = "clinical_eval_current_index_v3";
+const STORAGE_CASES_CACHE_KEY = "clinical_eval_cases_cache_v3";
+const STORAGE_CASES_CACHE_LEGACY_KEY = "clinical_eval_cases_cache_v2";
 const STORAGE_THEME_KEY = "clinical_eval_theme_v1";
 
 const state = {
@@ -8,6 +9,9 @@ const state = {
   currentIndex: 0,
   resultsByImageId: new Map(),
   draftCommentsByImageId: new Map(),
+  datasetLibrary: [],
+  activeDatasetId: "",
+  activeDatasetLabel: "",
   galleryFilters: {
     status: null, // null | "match" | "no-match" | "pending"
     withComment: false,
@@ -30,6 +34,7 @@ const dom = {
   progressBar: document.getElementById("progressBar"),
   caseImage: document.getElementById("caseImage"),
   trueClass: document.getElementById("trueClass"),
+  aiPredictedClass: document.getElementById("aiPredictedClass"),
   currentVoteBadge: document.getElementById("currentVoteBadge"),
   aiExplanation: document.getElementById("aiExplanation"),
   commentBox: document.getElementById("commentBox"),
@@ -41,6 +46,7 @@ const dom = {
   btnOpenDataManager: document.getElementById("btnOpenDataManager"),
   btnCloseGallery: document.getElementById("btnCloseGallery"),
   btnCloseDataManager: document.getElementById("btnCloseDataManager"),
+  datasetSelector: document.getElementById("datasetSelector"),
   filterMatch: document.getElementById("filterMatch"),
   filterNoMatch: document.getElementById("filterNoMatch"),
   filterPending: document.getElementById("filterPending"),
@@ -89,10 +95,13 @@ function wireEvents() {
   dom.btnExportQuick.addEventListener("click", exportCsv);
   dom.btnExportFinal.addEventListener("click", exportCsv);
   if (dom.btnResetCurrentData) {
-    dom.btnResetCurrentData.addEventListener("click", resetCurrentDataFromZero);
+    dom.btnResetCurrentData.addEventListener("click", deleteActiveDataset);
   }
   dom.casesFileInput.addEventListener("change", onCasesFileSelected);
   dom.casesFileInputManager.addEventListener("change", onCasesFileSelected);
+  if (dom.datasetSelector) {
+    dom.datasetSelector.addEventListener("change", onDatasetSelected);
+  }
   document.addEventListener("keydown", onGlobalKeydown);
   updateActionAvailability();
 }
@@ -101,6 +110,7 @@ function applyStoredTheme() {
   const savedTheme = localStorage.getItem(STORAGE_THEME_KEY);
   const theme = savedTheme === "dark" ? "dark" : "light";
   document.body.setAttribute("data-theme", theme);
+  document.documentElement.style.colorScheme = theme;
   dom.btnTheme.textContent = theme === "dark" ? "☀️" : "🌙";
   dom.btnTheme.title = theme === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro";
 }
@@ -109,6 +119,7 @@ function toggleTheme() {
   const current = document.body.getAttribute("data-theme") === "dark" ? "dark" : "light";
   const next = current === "dark" ? "light" : "dark";
   document.body.setAttribute("data-theme", next);
+  document.documentElement.style.colorScheme = next;
   localStorage.setItem(STORAGE_THEME_KEY, next);
   dom.btnTheme.textContent = next === "dark" ? "☀️" : "🌙";
   dom.btnTheme.title = next === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro";
@@ -125,28 +136,362 @@ function onGlobalKeydown(event) {
   }
 }
 
-async function loadCases() {
-  const cachedCases = readCachedCases();
-  if (cachedCases.length) {
-    state.cases = cachedCases;
-    restoreProgress();
-    hideLocalLoader();
-    render();
-    setStatus("Casos cargados desde cache local.");
+function createEmptyLibrary() {
+  return {
+    activeDatasetId: "",
+    datasets: [],
+  };
+}
+
+function buildDatasetId(sourceName = "dataset") {
+  const slug = String(sourceName)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 24) || "dataset";
+  return `${slug}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function formatDatasetTimestamp(timestamp = new Date()) {
+  const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+  if (Number.isNaN(date.getTime())) {
+    return "sin fecha";
+  }
+
+  const parts = new Intl.DateTimeFormat("es-ES", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).formatToParts(date);
+
+  const lookup = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${lookup.day}/${lookup.month} ${lookup.hour}:${lookup.minute}`;
+}
+
+function buildDatasetLabel(sourceName = "cases.json", caseCount = 0, importedAt = new Date()) {
+  const safeName = String(sourceName).trim() || "cases.json";
+  return `${safeName} · ${caseCount} casos · ${formatDatasetTimestamp(importedAt)}`;
+}
+
+function formatDatasetSummary(dataset) {
+  if (!dataset) {
+    return "dataset desconocido";
+  }
+
+  return `${dataset.label || dataset.sourceName || "dataset"}`;
+}
+
+function formatDatasetOptionLabel(dataset, index = 0) {
+  return `${index + 1}. ${dataset.label || dataset.sourceName || "dataset"}`;
+}
+
+function normalizeDatasetRecord(rawDataset, fallbackIndex = 0) {
+  if (!rawDataset || typeof rawDataset !== "object") {
+    return null;
+  }
+
+  const cases = Array.isArray(rawDataset.cases) ? rawDataset.cases.map(normalizeCase).filter(Boolean) : [];
+  const labelBase = String(rawDataset.label ?? rawDataset.sourceName ?? `Case ${fallbackIndex + 1}`).trim();
+  const sourceName = String(rawDataset.sourceName ?? rawDataset.fileName ?? labelBase ?? "cases.json").trim() || "cases.json";
+  const importedAt = String(rawDataset.importedAt ?? new Date().toISOString());
+  const id = String(rawDataset.id ?? buildDatasetId(sourceName)).trim() || buildDatasetId(sourceName);
+  const currentIndexRaw = Number.parseInt(String(rawDataset.currentIndex ?? 0), 10);
+  const currentIndex = Number.isFinite(currentIndexRaw) ? Math.min(Math.max(currentIndexRaw, 0), cases.length) : 0;
+  const results = Array.isArray(rawDataset.results) ? rawDataset.results : [];
+  const draftComments = Array.isArray(rawDataset.draftComments) ? rawDataset.draftComments : [];
+
+  return {
+    id,
+    label: labelBase || buildDatasetLabel(sourceName, cases.length, importedAt),
+    sourceName,
+    importedAt,
+    cases,
+    currentIndex,
+    results,
+    draftComments,
+  };
+}
+
+function normalizeLegacyLibrary(casesArray) {
+  const normalizedCases = Array.isArray(casesArray) ? casesArray.map(normalizeCase).filter(Boolean) : [];
+  const legacyResults = readLegacyResultsFromStorage();
+  const legacyIndex = readLegacyIndexFromStorage();
+  const dataset = {
+    id: buildDatasetId("legacy-cases"),
+    label: buildDatasetLabel("cases.json", normalizedCases.length, new Date()),
+    sourceName: "cases.json",
+    importedAt: new Date().toISOString(),
+    cases: normalizedCases,
+    currentIndex: legacyIndex,
+    results: legacyResults,
+    draftComments: [],
+  };
+
+  return {
+    activeDatasetId: dataset.id,
+    datasets: [dataset],
+  };
+}
+
+function normalizeStoredLibrary(rawLibrary) {
+  if (Array.isArray(rawLibrary)) {
+    return normalizeLegacyLibrary(rawLibrary);
+  }
+
+  if (!rawLibrary || typeof rawLibrary !== "object") {
+    return createEmptyLibrary();
+  }
+
+  const datasets = Array.isArray(rawLibrary.datasets)
+    ? rawLibrary.datasets.map((dataset, index) => normalizeDatasetRecord(dataset, index)).filter(Boolean)
+    : [];
+
+  const activeDatasetIdRaw = String(rawLibrary.activeDatasetId ?? "").trim();
+  const activeDatasetId = datasets.some((dataset) => dataset.id === activeDatasetIdRaw)
+    ? activeDatasetIdRaw
+    : datasets[0]?.id ?? "";
+
+  return {
+    activeDatasetId,
+    datasets,
+  };
+}
+
+function readLegacyIndexFromStorage() {
+  const savedIndexRaw = localStorage.getItem(STORAGE_INDEX_KEY);
+  const savedIndex = Number.parseInt(savedIndexRaw ?? "0", 10);
+  return Number.isFinite(savedIndex) && savedIndex >= 0 ? savedIndex : 0;
+}
+
+function readLegacyResultsFromStorage() {
+  const raw = localStorage.getItem(STORAGE_RESULTS_KEY);
+  if (!raw) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function readCasesLibrary() {
+  const raw = localStorage.getItem(STORAGE_CASES_CACHE_KEY);
+  if (raw) {
+    try {
+      return normalizeStoredLibrary(JSON.parse(raw));
+    } catch (error) {
+      console.warn("No se pudo leer la biblioteca de cases guardada. Se intentara migrar o reiniciar.", error);
+    }
+  }
+
+  const legacyRaw = localStorage.getItem(STORAGE_CASES_CACHE_LEGACY_KEY);
+  if (legacyRaw) {
+    try {
+      return normalizeStoredLibrary(JSON.parse(legacyRaw));
+    } catch (error) {
+      console.warn("No se pudo leer la cache legacy de cases. Se ignorara.", error);
+    }
+  }
+
+  return createEmptyLibrary();
+}
+
+function saveCasesLibrary(library) {
+  localStorage.setItem(STORAGE_CASES_CACHE_KEY, JSON.stringify(normalizeStoredLibrary(library)));
+}
+
+function getActiveDatasetFromLibrary(library = readCasesLibrary()) {
+  if (!library.datasets.length) {
+    return null;
+  }
+
+  return library.datasets.find((dataset) => dataset.id === library.activeDatasetId) ?? library.datasets[0] ?? null;
+}
+
+function loadDatasetIntoState(dataset) {
+  const normalizedDataset = normalizeDatasetRecord(dataset);
+  if (!normalizedDataset) {
+    return false;
+  }
+
+  state.cases = normalizedDataset.cases;
+  state.currentIndex = normalizedDataset.currentIndex;
+  state.resultsByImageId = readStoredResults(normalizedDataset.results);
+  state.draftCommentsByImageId = readStoredDrafts(normalizedDataset.draftComments);
+  state.activeDatasetId = normalizedDataset.id;
+  state.activeDatasetLabel = normalizedDataset.label;
+  state.datasetLibrary = state.datasetLibrary.map((item) => (item.id === normalizedDataset.id ? normalizedDataset : item));
+  renderDatasetSelector();
+  return true;
+}
+
+function renderDatasetSelector() {
+  if (!dom.datasetSelector) {
     return;
   }
 
-  moveToInitialLoaderState();
+  const datasets = Array.isArray(state.datasetLibrary) ? state.datasetLibrary : [];
+  dom.datasetSelector.innerHTML = "";
+
+  if (!datasets.length) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "Sin cases guardados";
+    dom.datasetSelector.appendChild(option);
+    dom.datasetSelector.disabled = true;
+    return;
+  }
+
+  dom.datasetSelector.disabled = false;
+  datasets.forEach((dataset, index) => {
+    const option = document.createElement("option");
+    option.value = dataset.id;
+    option.textContent = formatDatasetOptionLabel(dataset, index);
+    if (dataset.id === state.activeDatasetId) {
+      option.selected = true;
+    }
+    dom.datasetSelector.appendChild(option);
+  });
+
+  if (dom.datasetSelector.value !== state.activeDatasetId && state.activeDatasetId) {
+    dom.datasetSelector.value = state.activeDatasetId;
+  }
+}
+
+function onDatasetSelected(event) {
+  const selectedDatasetId = String(event.target.value ?? "").trim();
+  if (!selectedDatasetId || selectedDatasetId === state.activeDatasetId) {
+    return;
+  }
+
+  switchActiveDataset(selectedDatasetId);
+}
+
+function switchActiveDataset(datasetId) {
+  const library = readCasesLibrary();
+  const currentDataset = library.datasets.find((dataset) => dataset.id === state.activeDatasetId);
+  if (currentDataset) {
+    currentDataset.cases = state.cases.map((item) => ({ ...item }));
+    currentDataset.currentIndex = state.currentIndex;
+    currentDataset.results = buildOrderedResults();
+    currentDataset.draftComments = Array.from(state.draftCommentsByImageId.entries()).map(([caseKey, comment]) => ({ case_key: caseKey, comment }));
+    currentDataset.label = state.activeDatasetLabel || currentDataset.label;
+  }
+
+  const targetDataset = library.datasets.find((dataset) => dataset.id === datasetId);
+  if (!targetDataset) {
+    renderDatasetSelector();
+    return;
+  }
+
+  library.activeDatasetId = targetDataset.id;
+  saveCasesLibrary(library);
+  state.datasetLibrary = library.datasets;
+  loadDatasetIntoState(targetDataset);
+  hideLocalLoader();
+  render();
+  setStatus(`Caso activo cambiado a ${formatDatasetSummary(targetDataset)}.`);
+}
+
+function deleteActiveDataset() {
+  const library = readCasesLibrary();
+  if (!library.datasets.length || !state.activeDatasetId) {
+    setStatus("No hay case activo para borrar.", true);
+    return;
+  }
+
+  const removedIndex = library.datasets.findIndex((dataset) => dataset.id === state.activeDatasetId);
+  if (removedIndex === -1) {
+    setStatus("No se encontró el case activo en la lista guardada.", true);
+    return;
+  }
+
+  const [removedDataset] = library.datasets.splice(removedIndex, 1);
+  if (library.datasets.length) {
+    const nextDataset = library.datasets[Math.min(removedIndex, library.datasets.length - 1)];
+    library.activeDatasetId = nextDataset.id;
+    saveCasesLibrary(library);
+    state.datasetLibrary = library.datasets;
+    loadDatasetIntoState(nextDataset);
+    hideLocalLoader();
+    closeDataManager();
+    render();
+    setStatus(`Case eliminado: ${removedDataset.label}. Ahora queda activo ${formatDatasetSummary(nextDataset)}.`);
+    return;
+  }
+
+  clearAllRuntimeData();
+  state.datasetLibrary = [];
+  showLocalLoader();
+  renderDatasetSelector();
+  updateProgress(0, 0);
+  closeDataManager();
+  setStatus(`Case eliminado: ${removedDataset.label}. No quedan cases guardados.`);
+}
+
+function createDatasetRecord(casesList, sourceName = "cases.json") {
+  const normalizedCases = casesList.map(normalizeCase).filter(Boolean);
+  const importedAt = new Date().toISOString();
+  const displayName = buildDatasetLabel(sourceName, normalizedCases.length, importedAt);
+
+  return {
+    id: buildDatasetId(sourceName),
+    label: displayName,
+    sourceName: String(sourceName || "cases.json").trim() || "cases.json",
+    importedAt,
+    cases: normalizedCases,
+    currentIndex: 0,
+    results: [],
+    draftComments: [],
+  };
+}
+
+async function loadCases() {
+  const library = readCasesLibrary();
+  state.datasetLibrary = library.datasets;
+
+  if (library.datasets.length) {
+    const activeDataset = getActiveDatasetFromLibrary(library) ?? library.datasets[0];
+    if (activeDataset) {
+      library.activeDatasetId = activeDataset.id;
+      saveCasesLibrary(library);
+      state.datasetLibrary = library.datasets;
+      loadDatasetIntoState(activeDataset);
+      renderDatasetSelector();
+      restoreProgress();
+      hideLocalLoader();
+      render();
+      setStatus(`Dataset activo cargado: ${formatDatasetSummary(activeDataset)}.`);
+      return;
+    }
+  }
+
+  resetRuntimeState();
+  renderDatasetSelector();
+  showLocalLoader();
+  updateProgress(0, 0);
   setStatus("Carga manual requerida. Selecciona un cases.json para continuar.");
 }
 
 function restoreProgress() {
-  state.resultsByImageId = readStoredResults();
+  if (!state.activeDatasetId) {
+    return;
+  }
 
-  const savedIndexRaw = localStorage.getItem(STORAGE_INDEX_KEY);
-  const savedIndex = Number.parseInt(savedIndexRaw ?? "0", 10);
+  const currentDataset = state.datasetLibrary.find((dataset) => dataset.id === state.activeDatasetId);
+  if (!currentDataset) {
+    return;
+  }
+
+  state.resultsByImageId = readStoredResults(currentDataset.results);
+  state.draftCommentsByImageId = readStoredDrafts(currentDataset.draftComments);
+
+  const savedIndex = Number.parseInt(String(currentDataset.currentIndex ?? "0"), 10);
   const maxIndex = state.cases.length;
-
   if (Number.isFinite(savedIndex) && savedIndex >= 0 && savedIndex <= maxIndex) {
     state.currentIndex = savedIndex;
   }
@@ -156,43 +501,103 @@ function restoreProgress() {
   }
 }
 
-function readStoredResults() {
-  const raw = localStorage.getItem(STORAGE_RESULTS_KEY);
-  if (!raw) {
+function readStoredResults(resultsSource = []) {
+  if (!Array.isArray(resultsSource) || !resultsSource.length) {
     return new Map();
   }
 
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return new Map();
+  const map = new Map();
+  for (const item of resultsSource) {
+    if (!item || typeof item.id_imagen === "undefined") {
+      continue;
     }
 
-    const map = new Map();
-    for (const item of parsed) {
-      if (!item || typeof item.id_imagen === "undefined") {
+    const caseKey = String(item.case_key ?? buildCaseKey(item) ?? "");
+    if (!caseKey) {
+      continue;
+    }
+
+    map.set(caseKey, {
+      id_imagen: String(item.id_imagen),
+      id_modelo_oculto: String(item.id_modelo_oculto ?? item.id_modelo ?? ""),
+      veredicto: String(item.veredicto ?? ""),
+      comentario_medico: String(item.comentario_medico ?? ""),
+      case_key: caseKey,
+    });
+  }
+
+  return map;
+}
+
+function readStoredDrafts(draftSource = []) {
+  if (!Array.isArray(draftSource) || !draftSource.length) {
+    return new Map();
+  }
+
+  const map = new Map();
+  for (const entry of draftSource) {
+    if (!entry) {
+      continue;
+    }
+
+    let caseKey = "";
+    let comment = "";
+    if (Array.isArray(entry)) {
+      if (entry.length < 2) {
         continue;
       }
-
-      map.set(String(item.id_imagen), {
-        id_imagen: String(item.id_imagen),
-        id_modelo: String(item.id_modelo ?? ""),
-        veredicto: String(item.veredicto ?? ""),
-        comentario_medico: String(item.comentario_medico ?? ""),
-      });
+      caseKey = String(entry[0] ?? "").trim();
+      comment = String(entry[1] ?? "").trim();
+    } else if (typeof entry === "object") {
+      caseKey = String(entry.case_key ?? entry.caseKey ?? "").trim();
+      comment = String(entry.comment ?? entry.comentario_medico ?? "").trim();
     }
 
-    return map;
-  } catch (error) {
-    console.warn("No se pudieron leer resultados guardados. Se inicializara un estado limpio.", error);
-    return new Map();
+    if (!caseKey || !comment) {
+      continue;
+    }
+
+    map.set(caseKey, comment);
   }
+
+  return map;
+}
+
+function resetRuntimeState() {
+  state.cases = [];
+  state.currentIndex = 0;
+  state.resultsByImageId = new Map();
+  state.draftCommentsByImageId = new Map();
+  state.activeDatasetId = "";
+  state.activeDatasetLabel = "";
 }
 
 function persistProgress() {
-  const orderedResults = buildOrderedResults();
-  localStorage.setItem(STORAGE_RESULTS_KEY, JSON.stringify(orderedResults));
-  localStorage.setItem(STORAGE_INDEX_KEY, String(state.currentIndex));
+  persistActiveDatasetState();
+}
+
+function persistActiveDatasetState() {
+  if (!state.activeDatasetId) {
+    return;
+  }
+
+  const library = readCasesLibrary();
+  const dataset = library.datasets.find((item) => item.id === state.activeDatasetId);
+  if (!dataset) {
+    return;
+  }
+
+  dataset.cases = state.cases.map((item) => ({ ...item }));
+  dataset.currentIndex = state.currentIndex;
+  dataset.results = buildOrderedResults();
+  dataset.draftComments = Array.from(state.draftCommentsByImageId.entries()).map(([caseKey, comment]) => ({ case_key: caseKey, comment }));
+  dataset.label = state.activeDatasetLabel || dataset.label;
+
+  library.activeDatasetId = state.activeDatasetId;
+  library.datasets = library.datasets.map((item) => (item.id === dataset.id ? dataset : item));
+  state.datasetLibrary = library.datasets;
+  saveCasesLibrary(library);
+  renderDatasetSelector();
 }
 
 function recordVote(vote) {
@@ -201,15 +606,17 @@ function recordVote(vote) {
     return;
   }
 
+  const caseKey = buildCaseKey(currentCase);
   const result = {
     id_imagen: currentCase.id_imagen,
-    id_modelo: currentCase.id_modelo,
+    id_modelo_oculto: String(currentCase.id_modelo_oculto ?? ""),
     veredicto: vote,
     comentario_medico: dom.commentBox.value.trim(),
+    case_key: caseKey,
   };
 
-  state.resultsByImageId.set(currentCase.id_imagen, result);
-  state.draftCommentsByImageId.delete(currentCase.id_imagen);
+  state.resultsByImageId.set(caseKey, result);
+  state.draftCommentsByImageId.delete(caseKey);
 
   state.currentIndex += 1;
   dom.commentBox.value = "";
@@ -224,6 +631,7 @@ function goToPreviousCase() {
 
   syncCurrentCommentDraft();
   state.currentIndex -= 1;
+  persistProgress();
   render();
 }
 
@@ -238,6 +646,7 @@ function goToNextCase() {
   } else {
     state.currentIndex += 1;
   }
+  persistProgress();
   render();
 }
 
@@ -247,19 +656,21 @@ function syncCurrentCommentDraft() {
     return;
   }
 
+  const caseKey = buildCaseKey(currentCase);
+
   const draft = dom.commentBox.value.trim();
-  const saved = state.resultsByImageId.get(currentCase.id_imagen);
+  const saved = state.resultsByImageId.get(caseKey);
   if (saved) {
     saved.comentario_medico = draft;
-    state.resultsByImageId.set(currentCase.id_imagen, saved);
+    state.resultsByImageId.set(caseKey, saved);
     persistProgress();
     return;
   }
 
   if (draft) {
-    state.draftCommentsByImageId.set(currentCase.id_imagen, draft);
+    state.draftCommentsByImageId.set(caseKey, draft);
   } else {
-    state.draftCommentsByImageId.delete(currentCase.id_imagen);
+    state.draftCommentsByImageId.delete(caseKey);
   }
 }
 
@@ -296,10 +707,14 @@ function showCurrentCase() {
   updateProgress(state.currentIndex + 1, state.cases.length);
 
   dom.trueClass.textContent = String(currentCase.ground_truth_class ?? "No especificado");
+  if (dom.aiPredictedClass) {
+    dom.aiPredictedClass.textContent = String(currentCase.ai_predicted_class ?? "No especificado");
+  }
   dom.aiExplanation.textContent = String(currentCase.clinical_justification ?? "Sin justificacion.");
 
-  const existing = state.resultsByImageId.get(currentCase.id_imagen);
-  const draftComment = state.draftCommentsByImageId.get(currentCase.id_imagen) ?? "";
+  const caseKey = buildCaseKey(currentCase);
+  const existing = state.resultsByImageId.get(caseKey);
+  const draftComment = state.draftCommentsByImageId.get(caseKey) ?? "";
   dom.commentBox.value = existing ? existing.comentario_medico : draftComment;
 
   if (existing?.veredicto === "Match") {
@@ -344,10 +759,10 @@ function showCompletion() {
 }
 
 function handleMissingDatasetAssets(imagePath) {
-  clearAllRuntimeData();
-  showLocalLoader();
+  dom.caseImage.classList.remove("is-ready");
+  dom.caseImage.removeAttribute("src");
   setStatus(
-    `La data actual parece incompleta o borrada (imagen no encontrada: ${String(imagePath ?? "")}). Carga un cases.json nuevo.`,
+    `La imagen del case activo no se pudo cargar (${String(imagePath ?? "")}). Usa el selector inferior para cambiar a otro case o importa el archivo correcto.`,
     true
   );
 }
@@ -446,8 +861,9 @@ function renderGallery() {
 }
 
 function getCaseGalleryState(item) {
-  const saved = state.resultsByImageId.get(item.id_imagen);
-  const draftComment = state.draftCommentsByImageId.get(item.id_imagen) ?? "";
+  const caseKey = buildCaseKey(item);
+  const saved = state.resultsByImageId.get(caseKey);
+  const draftComment = state.draftCommentsByImageId.get(caseKey) ?? "";
   const hasComment = Boolean((saved?.comentario_medico || draftComment || "").trim());
 
   if (saved?.veredicto === "Match") {
@@ -515,6 +931,7 @@ function jumpToCase(index) {
   syncCurrentCommentDraft();
   state.currentIndex = index;
   closeGallery();
+  persistProgress();
   render();
 }
 
@@ -529,17 +946,18 @@ function buildOrderedResults() {
   const list = [];
 
   for (const item of state.cases) {
-    const saved = state.resultsByImageId.get(item.id_imagen);
+    const caseKey = buildCaseKey(item);
+    const saved = state.resultsByImageId.get(caseKey);
     if (!saved) {
       continue;
     }
 
     list.push({
       id_imagen: saved.id_imagen,
-      tipo_polipo: item.ground_truth_class,
-      id_modelo: saved.id_modelo,
+      id_modelo_oculto: saved.id_modelo_oculto,
       veredicto: saved.veredicto,
       comentario_medico: saved.comentario_medico,
+      case_key: caseKey,
     });
   }
 
@@ -553,15 +971,14 @@ function exportCsv() {
     return;
   }
 
-  const header = ["id_imagen", "tipo_polipo", "id_modelo", "veredicto", "comentario_medico"];
+  const header = ["id_imagen", "id_modelo_oculto", "veredicto", "comentario_medico"];
   const lines = [header.join(",")];
 
   for (const row of rows) {
     lines.push(
       [
         toCsvCell(row.id_imagen),
-        toCsvCell(row.tipo_polipo),
-        toCsvCell(row.id_modelo),
+        toCsvCell(row.id_modelo_oculto),
         toCsvCell(row.veredicto),
         toCsvCell(row.comentario_medico),
       ].join(",")
@@ -642,10 +1059,11 @@ function clearAllRuntimeData() {
 }
 
 function moveToInitialLoaderState() {
-  clearAllRuntimeData();
+  resetRuntimeState();
   closeGallery();
   closeDataManager();
   showLocalLoader();
+  renderDatasetSelector();
   updateProgress(0, 0);
   updateActionAvailability();
 }
@@ -657,6 +1075,9 @@ function updateActionAvailability() {
   dom.btnPrev.disabled = !state.cases.length || state.currentIndex <= 0;
   dom.btnNext.disabled = !state.cases.length || state.currentIndex >= state.cases.length;
   dom.btnOpenGallery.disabled = !state.cases.length;
+  if (dom.datasetSelector) {
+    dom.datasetSelector.disabled = !state.datasetLibrary.length;
+  }
 
   const hasRows = buildOrderedResults().length > 0;
   dom.btnExportQuick.disabled = !hasRows;
@@ -701,28 +1122,52 @@ async function onCasesFileSelected(event) {
   }
 }
 
-function clearEvaluationProgress() {
-  state.resultsByImageId = new Map();
-  state.draftCommentsByImageId = new Map();
-  state.currentIndex = 0;
-  localStorage.removeItem(STORAGE_RESULTS_KEY);
-  localStorage.removeItem(STORAGE_INDEX_KEY);
-}
-
 function applyImportedCases(casesList, fileName = "") {
-  state.cases = casesList;
-  saveCasesCache(state.cases);
-  clearEvaluationProgress();
+  const library = readCasesLibrary();
+  const dataset = createDatasetRecord(casesList, fileName || "cases.json");
+  library.datasets.push(dataset);
+  library.activeDatasetId = dataset.id;
+  saveCasesLibrary(library);
+
+  state.datasetLibrary = library.datasets;
+  loadDatasetIntoState(dataset);
+  renderDatasetSelector();
   hideLocalLoader();
   closeDataManager();
   render();
+
   const nameHint = fileName ? ` (${fileName})` : "";
-  setStatus(`Data cargada correctamente${nameHint}. Progreso reiniciado para este dataset.`);
+  setStatus(`Data cargada correctamente${nameHint}. Se añadió a la lista de cases guardados.`);
 }
 
 function resetCurrentDataFromZero() {
-  moveToInitialLoaderState();
-  setStatus("Estado local borrado desde cero. Carga un nuevo cases.json para continuar.");
+  deleteActiveDataset();
+}
+
+function readCachedCases() {
+  return readCasesLibrary().datasets.flatMap((dataset) => dataset.cases);
+}
+
+function saveCasesCache(casesList) {
+  const library = readCasesLibrary();
+  const dataset = createDatasetRecord(casesList, "cases.json");
+  library.datasets = [dataset];
+  library.activeDatasetId = dataset.id;
+  saveCasesLibrary(library);
+}
+
+function clearAllRuntimeData() {
+  state.cases = [];
+  state.currentIndex = 0;
+  state.resultsByImageId = new Map();
+  state.draftCommentsByImageId = new Map();
+  state.activeDatasetId = "";
+  state.activeDatasetLabel = "";
+
+  localStorage.removeItem(STORAGE_CASES_CACHE_KEY);
+  localStorage.removeItem(STORAGE_CASES_CACHE_LEGACY_KEY);
+  localStorage.removeItem(STORAGE_RESULTS_KEY);
+  localStorage.removeItem(STORAGE_INDEX_KEY);
 }
 
 function normalizeCase(rawCase) {
@@ -731,10 +1176,11 @@ function normalizeCase(rawCase) {
   }
 
   const idImagen = String(rawCase.id_imagen ?? rawCase.id ?? "").trim();
-  const imagePath = String(rawCase.image_path ?? rawCase.image_file ?? "").trim();
+  const imagePath = normalizeCaseImagePath(String(rawCase.image_path ?? rawCase.image_file ?? "").trim());
   const gtClass = String(rawCase.ground_truth_class ?? rawCase.true_class ?? "").trim();
-  const justification = String(rawCase.clinical_justification ?? rawCase.ai_explanation ?? "").trim();
-  const idModelo = String(rawCase.id_modelo ?? "").trim();
+  const aiPredictedClass = String(rawCase.ai_predicted_class ?? rawCase.predicted_class ?? rawCase.final_diagnosis_class ?? "").trim();
+  const justification = String(rawCase.clinical_justification ?? rawCase.ai_explanation ?? rawCase.diagnostic_rationale ?? "").trim();
+  const idModeloOculto = String(rawCase.id_modelo_oculto ?? rawCase.id_modelo ?? "").trim();
 
   if (!idImagen || !imagePath) {
     return null;
@@ -744,7 +1190,39 @@ function normalizeCase(rawCase) {
     id_imagen: idImagen,
     image_path: imagePath,
     ground_truth_class: gtClass,
-    id_modelo: idModelo,
+    ai_predicted_class: aiPredictedClass,
+    id_modelo_oculto: idModeloOculto,
     clinical_justification: justification,
   };
+}
+
+function normalizeCaseImagePath(imagePath) {
+  const cleaned = String(imagePath ?? "").trim().replaceAll("\\", "/");
+  if (!cleaned) {
+    return "";
+  }
+
+  if (cleaned.startsWith("assets/images/")) {
+    return cleaned.replace("assets/images/", "images/");
+  }
+
+  if (cleaned.startsWith("data/images/")) {
+    return cleaned.replace("data/images/", "images/");
+  }
+
+  return cleaned;
+}
+
+function buildCaseKey(item) {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  const idImagen = String(item.id_imagen ?? "").trim();
+  const modelId = String(item.id_modelo_oculto ?? item.id_modelo ?? "").trim();
+  if (!idImagen || !modelId) {
+    return "";
+  }
+
+  return `${idImagen}::${modelId}`;
 }

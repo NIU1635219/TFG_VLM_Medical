@@ -162,15 +162,31 @@ Dependencias declaradas en `pyproject.toml`.
 │   ├── 03_ground_truth_bboxes.ipynb    # Orquestación del extractor de BBoxes GT y sanity check visual sobre máscaras.
 │   ├── 04_export_clinical_eval_app.ipynb # Exportación de la app de evaluación clínica.
 │   ├── 05_polyp_classification_classic.ipynb # Benchmark clásico de clasificación de pólipos.
-│   └── 06_polyp_segmentation_prediction.ipynb # Benchmark de segmentación y predicción de máscaras.
+│   ├── 06_polyp_segmentation_prediction.ipynb # Benchmark de segmentación y predicción de máscaras.
+│   └── 07_dual_validation_apps.ipynb   # Exportación de datos para las apps duales de validación.
+├── clinical_eval_app/                  # App web estatica para validacion clinica local.
+│   ├── README.md                       # Contrato de entrada, persistencia local y uso de la interfaz.
+│   ├── app.js                          # Lógica del frontend, selector de datasets y export CSV.
+│   ├── index.html                      # Estructura de la UI de evaluación.
+│   ├── style.css                       # Estilos visuales y soporte claro/oscuro.
+│   └── data/                           # Bundles exportados por ejecución y datasets guardados.
+│       ├── App_Asistida/
+│       ├── App_Autonoma/
+│       └── ...
+├── docs/
+│   ├── INSTRUCCIONES_TUTOR.md          # Guía de uso para tutorías y ejecución controlada.
+│   └── limitaciones_tecnicas_vlm.md    # Limitaciones técnicas y observaciones del stack VLM.
 ├── src/
 │   ├── inference/
 │   │   ├── schemas.py                  # Esquemas Pydantic base y variantes WithReasoning.
 │   │   └── vlm_runner.py               # Carga VLM, inferencia multimodal, compatibilidad SDK y telemetría.
 │   ├── preprocessing/
 │   │   ├── preprocess.py               # CLI de recorte de bordes negros y copia de CSV.
-│   │   └── extract_gt_bboxes.py        # CLI para extraer BBoxes GT desde máscaras y exportar CSV normalizado (escala 1000).
-│   │   ├── polyp_benchmark_utils.py     # Helpers compartidos para splits, rutas y carga de imágenes/máscaras.
+│   │   ├── extract_gt_bboxes.py        # CLI para extraer BBoxes GT desde máscaras y exportar CSV normalizado (escala 1000).
+│   │   ├── export_clinical_eval_data.py # Exportación de datos para la app de evaluación clínica.
+│   │   ├── mask_generation.py         # Generación de máscaras auxiliares para el flujo de pólipos.
+│   │   ├── prepare_dual_validation.py # Exportador de datos para validación dual y bundle local.
+│   │   ├── polyp_benchmark_utils.py    # Helpers compartidos para splits, rutas y carga de imágenes/máscaras.
 │   │   ├── polyp_classification_benchmark_utils.py # Benchmark clásico de clasificación de pólipos.
 │   │   └── polyp_segmentation_benchmark_utils.py   # Benchmark por píxel para segmentación de pólipos.
 │   ├── scripts/
@@ -236,14 +252,24 @@ Dependencias declaradas en `pyproject.toml`.
     ├── test_app_config.py              # Contratos de configuración estática y registro de modelos.
     ├── test_batch_runner.py            # Exportado incremental y persistencia por imagen.
     ├── test_experiment_ab_text.py      # Detección de variantes y selección estratificada de muestras AD.
+    ├── test_grounding_live_heatmap.py   # Render del heatmap live de grounding y leyenda.
+    ├── test_grounding_report_iou_metrics.py # Agregaciones IoU del reporte de grounding.
+    ├── test_grounding_report_proximity_metrics.py # Agregaciones Proximity del reporte de grounding.
+    ├── test_grounding_runner_core.py    # Completitud, resume y agregación del runner de grounding.
     ├── test_inference_script.py        # Smoke test, keywords esperadas y validación por etiquetas.
     ├── test_inspect_lmstudio_response.py # Inspector de respuesta, autodetección y resumen visual.
     ├── test_lms_download_manager.py    # Descargas de modelos y manejo de estados.
     ├── test_lms_menu_helpers.py        # Helpers de menús LM Studio.
     ├── test_lms_models.py              # Wrappers del SDK/CLI y utilidades de modelos.
+    ├── test_manifest_iterations.py     # Manifests compactos, snapshots por variante y limpieza de JSONL vinculados.
+    ├── test_markdown_report.py         # Generación y validación de reportes Markdown.
+    ├── test_metrics.py                 # Cálculo de métricas base y agregaciones de evaluación.
     ├── test_menu_kit.py                # Tablas, AppContext y primitives de UI.
     ├── test_poc_bbox.py                # Tests unitarios de descarga, reporter y flujo principal de la PoC BBox.
+    ├── test_prepare_dual_validation.py # Exportación y bundle para la validación dual.
     ├── test_preprocess.py              # Preprocesado de imágenes endoscópicas.
+    ├── test_progress_bar.py            # Clamp de progreso y casos límite de barra.
+    ├── test_proximity_metrics.py       # Funciones base de proximidad geométrica.
     ├── test_schemas.py                 # Esquemas Pydantic, reasoning y registro público.
     ├── test_setup_diagnostics.py       # Diagnóstico y smart-fix del entorno.
     ├── test_setup_env_menu.py          # Integración general de setup_env.
@@ -264,6 +290,9 @@ Dependencias declaradas en `pyproject.toml`.
 - `notebooks/04_export_clinical_eval_app.ipynb`: exportación de la app de evaluación clínica.
 - `notebooks/05_polyp_classification_classic.ipynb`: benchmark clásico de clasificación de pólipos.
 - `notebooks/06_polyp_segmentation_prediction.ipynb`: benchmark de segmentación de pólipos y predicción de máscaras.
+- `notebooks/07_dual_validation_apps.ipynb`: exportación de datos para las apps duales de validación.
+
+La aplicación [clinical_eval_app/](clinical_eval_app/) exporta casos clínicos para evaluación local sin backend. El exportador genera paquetes con `cases.json`, `cases_export_debug.csv` e imágenes, y la interfaz permite mantener varios datasets guardados en `localStorage`, cambiar el case activo desde un desplegable y borrar solo el dataset actual desde el gestor de datos.
 
 Incluye:
 

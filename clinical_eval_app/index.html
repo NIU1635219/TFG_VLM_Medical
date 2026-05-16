@@ -42,13 +42,18 @@
 
         <section class="detail-panel">
           <div class="badge-row">
-            <span class="badge-label">Diagnostico Real:</span>
+            <span class="badge-label">Diagnóstico real:</span>
             <strong id="trueClass" class="badge-value">-</strong>
             <span id="currentVoteBadge" class="vote-state-badge hidden">-</span>
           </div>
 
-          <article class="explanation-card">
-            <h2>Justificacion de la IA</h2>
+          <article class="diagnosis-card diagnosis-card--prediction">
+            <span class="badge-label">Diagnóstico predicho:</span>
+            <strong id="aiPredictedClass" class="badge-value">-</strong>
+          </article>
+
+          <article class="diagnosis-card diagnosis-card--explanation">
+            <h2>Justificación de la IA</h2>
             <p id="aiExplanation"></p>
           </article>
 
@@ -78,9 +83,15 @@
             <button id="btnExportQuick" class="export-btn export-quick" type="button">
               💾 Exportar CSV (Progreso)
             </button>
-            <button id="btnOpenDataManager" class="export-btn data-manager-launch" type="button" title="Abrir gestor de data">
-              📁 Gestor de Data
-            </button>
+            <div class="dataset-row">
+              <div class="dataset-controls">
+                <label class="comment-label" for="datasetSelector">Caso activo</label>
+                <select id="datasetSelector" class="dataset-select" aria-label="Seleccionar case activo"></select>
+              </div>
+              <button id="btnOpenDataManager" class="export-btn data-manager-launch" type="button" title="Abrir gestor de data">
+                📁 Gestor de Data
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -95,7 +106,7 @@
         <div class="loader-highlights" aria-label="Resumen de pasos">
           <div class="loader-highlight-card">
             <h3>1) Prepara tu data</h3>
-            <p>Usa un JSON tipo lista con campos: <strong>id_imagen</strong>, <strong>image_path</strong>, <strong>ground_truth_class</strong>, <strong>id_modelo</strong>, <strong>clinical_justification</strong>.</p>
+            <p>Usa un JSON tipo lista con campos: <strong>id_imagen</strong>, <strong>image_path</strong>, <strong>ground_truth_class</strong>, <strong>ai_predicted_class</strong>, <strong>id_modelo_oculto</strong>, <strong>clinical_justification</strong>.</p>
           </div>
           <div class="loader-highlight-card">
             <h3>2) Importa y evalua</h3>
@@ -166,17 +177,17 @@
             <div class="data-instructions">
               <h3>Instrucciones rapidas</h3>
               <ol class="loader-steps compact">
-                <li>Verifica que cada caso tenga: <strong>id_imagen</strong>, <strong>image_path</strong>, <strong>ground_truth_class</strong>, <strong>id_modelo</strong>, <strong>clinical_justification</strong>.</li>
-                <li>Carga el archivo con <strong>Importar data</strong>. La app reinicia el progreso para evitar mezclar resultados.</li>
-                <li>Si necesitas limpiar todo el estado local, usa <strong>Borrar estado local</strong>.</li>
+                <li>Verifica que cada caso tenga: <strong>id_imagen</strong>, <strong>image_path</strong>, <strong>ground_truth_class</strong>, <strong>ai_predicted_class</strong>, <strong>id_modelo_oculto</strong>, <strong>clinical_justification</strong>.</li>
+                <li>Importa un nuevo <strong>cases.json</strong>. El case se agrega a la lista y queda disponible en el selector inferior.</li>
+                <li>Si quieres quitar solo el case activo, usa <strong>Borrar case actual</strong>.</li>
               </ol>
             </div>
 
             <div class="data-manager-actions" role="group" aria-label="Acciones del gestor de data">
               <label class="comment-label" for="casesFileInputManager">Importar data (cases.json)</label>
               <input id="casesFileInputManager" type="file" accept=".json,application/json" title="Importar archivo cases.json" />
-              <button id="btnResetCurrentData" class="export-btn data-action-btn" type="button">
-                🗑️ Borrar estado local (desde cero)
+              <button id="btnResetCurrentData" class="export-btn data-action-btn danger" type="button">
+                🗑️ Borrar case actual
               </button>
             </div>
           </div>

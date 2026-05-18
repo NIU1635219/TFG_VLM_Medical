@@ -250,6 +250,13 @@ def _resolve_source_image_path(project_root: Path, image_path_raw: Any) -> Path:
     return image_path
 
 
+def _path_as_posix_relative(path: Path, base_dir: Path) -> str:
+    try:
+        return path.relative_to(base_dir).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def _load_run_records(paths: DualValidationPaths) -> dict[str, dict[str, dict[str, Any]]]:
     return {
         "qwen_a": build_record_lookup(read_jsonl_records(paths.results_jsonl_qwen_a)),
@@ -443,6 +450,8 @@ def _build_case_payloads(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     output_app_dir = paths.output_app_a_dir if bundle_scenario == "A" else paths.output_app_f_dir
     output_images_dir = paths.output_app_a_images_dir if bundle_scenario == "A" else paths.output_app_f_images_dir
+    app_root_dir = paths.output_dist_dir.parent
+    dataset_root = _path_as_posix_relative(output_app_dir, app_root_dir)
 
     output_images_dir.mkdir(parents=True, exist_ok=True)
 
@@ -475,7 +484,8 @@ def _build_case_payloads(
             payload = cast(dict[str, Any], model_scenario_payload[bundle_scenario])
             case = {
                 "id_imagen": image_id,
-                "image_path": output_image_path.resolve().as_uri(),
+                "dataset_root": dataset_root,
+                "image_path": (Path("images") / output_image_name).as_posix(),
                 "ground_truth_class": row["ground_truth_cls"],
                 "ai_predicted_class": payload["ai_predicted_class"],
                 "clinical_justification": payload["clinical_justification"],

@@ -732,13 +732,13 @@ function showCurrentCase() {
   }
 
   dom.caseImage.classList.remove("is-ready");
-  dom.caseImage.src = String(currentCase.image_path ?? "");
+  dom.caseImage.src = resolveCaseImagePath(currentCase);
   dom.caseImage.alt = `Imagen clinica del caso ${currentCase.id_imagen}`;
   dom.caseImage.onload = () => {
     dom.caseImage.classList.add("is-ready");
   };
   dom.caseImage.onerror = () => {
-    handleMissingDatasetAssets(currentCase.image_path);
+    handleMissingDatasetAssets(resolveCaseImagePath(currentCase));
   };
 
   updateActionAvailability();
@@ -846,7 +846,7 @@ function renderGallery() {
     btn.addEventListener("click", () => jumpToCase(index));
 
     btn.innerHTML = `
-      <img class="gallery-thumb" src="${escapeHtml(item.image_path)}" alt="Miniatura caso ${index + 1}" loading="lazy" />
+      <img class="gallery-thumb" src="${escapeHtml(resolveCaseImagePath(item))}" alt="Miniatura caso ${index + 1}" loading="lazy" />
       <div class="gallery-meta">
         <div class="gallery-title">Caso ${index + 1}: ${escapeHtml(item.id_imagen)}</div>
         <div class="gallery-flags">
@@ -1177,6 +1177,7 @@ function normalizeCase(rawCase) {
 
   const idImagen = String(rawCase.id_imagen ?? rawCase.id ?? "").trim();
   const imagePath = normalizeCaseImagePath(String(rawCase.image_path ?? rawCase.image_file ?? "").trim());
+  const datasetRoot = normalizeCaseImagePath(String(rawCase.dataset_root ?? rawCase.image_root ?? rawCase.dataset_path ?? "").trim());
   const gtClass = String(rawCase.ground_truth_class ?? rawCase.true_class ?? "").trim();
   const aiPredictedClass = String(rawCase.ai_predicted_class ?? rawCase.predicted_class ?? rawCase.final_diagnosis_class ?? "").trim();
   const justification = String(rawCase.clinical_justification ?? rawCase.ai_explanation ?? rawCase.diagnostic_rationale ?? "").trim();
@@ -1189,6 +1190,7 @@ function normalizeCase(rawCase) {
   return {
     id_imagen: idImagen,
     image_path: imagePath,
+    dataset_root: datasetRoot,
     ground_truth_class: gtClass,
     ai_predicted_class: aiPredictedClass,
     id_modelo_oculto: idModeloOculto,
@@ -1211,6 +1213,32 @@ function normalizeCaseImagePath(imagePath) {
   }
 
   return cleaned;
+}
+
+function resolveCaseImagePath(caseItem) {
+  if (!caseItem || typeof caseItem !== "object") {
+    return "";
+  }
+
+  const imagePath = normalizeCaseImagePath(String(caseItem.image_path ?? caseItem.image_file ?? "").trim());
+  if (!imagePath) {
+    return "";
+  }
+
+  if (/^[a-z]+:/i.test(imagePath) || imagePath.startsWith("//")) {
+    return imagePath;
+  }
+
+  const datasetRoot = normalizeCaseImagePath(String(caseItem.dataset_root ?? caseItem.image_root ?? caseItem.dataset_path ?? "").trim());
+  if (!datasetRoot) {
+    return imagePath;
+  }
+
+  if (imagePath.startsWith(`${datasetRoot}/`)) {
+    return imagePath;
+  }
+
+  return normalizeCaseImagePath(`${datasetRoot}/${imagePath}`);
 }
 
 function buildCaseKey(item) {

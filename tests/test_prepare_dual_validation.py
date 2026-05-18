@@ -147,8 +147,14 @@ def test_dual_validation_exports_shared_cases_for_both_bundles(tmp_path: Path, m
     assert {case["id_imagen"] for case in cases_a} == {"img_1", "img_2"}
     assert {case["id_imagen"] for case in cases_f} == {"img_1", "img_2"}
     assert {case["id_modelo_oculto"] for case in cases_a} == {"qwen3_5-9b@q8_0", "google/gemma-4-e4b@q8_0"}
-    assert all(case["image_path"].startswith("file:///") for case in cases_a)
-    assert all(case["image_path"].startswith("file:///") for case in cases_f)
+
+    expected_root_a = export_result.output_app_a_cases_json.parent.relative_to(tmp_path).as_posix()
+    expected_root_f = export_result.output_app_f_cases_json.parent.relative_to(tmp_path).as_posix()
+
+    assert all(case["image_path"].startswith("images/") for case in cases_a)
+    assert all(case["image_path"].startswith("images/") for case in cases_f)
+    assert {case["dataset_root"] for case in cases_a} == {expected_root_a}
+    assert {case["dataset_root"] for case in cases_f} == {expected_root_f}
 
     cases_a_by_key = {(case["id_imagen"], case["id_modelo_oculto"]): case for case in cases_a}
     cases_f_by_key = {(case["id_imagen"], case["id_modelo_oculto"]): case for case in cases_f}

@@ -16,6 +16,8 @@ Permitir que evaluadores medicos revisen casos en local, registren veredictos y 
 
 Tambien puedes trabajar con datasets alternativos (por ejemplo exportados por escenario) cargandolos manualmente desde el Gestor de Data. La app los conserva en una biblioteca local y te deja cambiar el case activo desde el selector inferior.
 
+Importante: `image_path` debe ser relativo a la carpeta donde vive cada `cases.json`. En los exportes nuevos el contrato es `dataset_root` + `images/<archivo>` y la app reconstruye la ruta completa a partir de esa raiz local.
+
 ## Esquema de entrada (cases.json)
 
 Cada caso debe seguir este formato:
@@ -36,7 +38,9 @@ Cada caso debe seguir este formato:
 Notas:
 
 - id_modelo_oculto no se muestra en la UI (doble ciego), pero se usa en el CSV exportado.
-- image_path puede ser una URI `file:///...` generada por el export o una ruta compatible relativa. El export oficial ya la genera en formato `file:///...` para que la app pueda abrir las imagenes sin copiar el frontend.
+- image_path debe apuntar a la imagen desde la raiz del bundle donde esta el `cases.json`.
+- Si el export incluye `dataset_root`, la app usa esa raiz para resolver la imagen de forma local sin exponer rutas absolutas del sistema.
+- En los bundles exportados, lo normal es que `image_path` tenga la forma `images/<archivo>`.
 
 ## Flujo principal
 
@@ -117,8 +121,8 @@ Nombre de descarga:
 
 ## Uso rapido
 
-1. Coloca imagenes en images/ o usa las rutas `file:///...` generadas por el export.
-2. Genera o edita cases.json con el esquema correcto.
-3. Abre index.html en el navegador.
+1. Coloca `cases.json` e `images/` en la misma raiz de exportacion, o importa un bundle ya generado.
+2. Genera o edita `cases.json` con `image_path` relativo a esa raiz.
+3. Abre `index.html` en el navegador.
 4. Importa datasets nuevos desde el Gestor de Data y usa el selector de caso activo para cambiar entre ellos.
 5. Evalua casos y exporta CSV cuando quieras.
